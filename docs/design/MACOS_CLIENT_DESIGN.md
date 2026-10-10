@@ -161,6 +161,10 @@ The source is now public. New official artifacts and the signed appcast belong i
 
 Acceptance must separately record signed anonymous downloads, automatic check/download, real bundle replacement and relaunch, installed identity and connection recovery. A locked console or denied capture remains a visual acceptance limit, even when the unattended installation path succeeds. iPhone remains on its store-owned path and the CLI on its existing updater; this Mac-only feature does not change either client.
 
+Delivery verification (2026-10-10): [Mac 0.3.61 (65)](https://github.com/corral-dev/corral-apple/releases/tag/mac-v0.3.61) provides a signed appcast, update ZIP and notarized/stapled DMG. Anonymous feed and artifact reads match the prepared signed bytes. The former artifact repository serves its final signed bridge feed and is archived. The official Sparkle CLI from the pinned 2.10.0 source updated a separate signed 0.3.60 (64) bundle through that legacy feed to build 65. The downloaded application was installed and relaunched with its existing pairing, ready local transport and attached data; nested signatures and stapled tickets validate.
+
+The [official CLI's deferred-install options](https://sparkle-project.org/documentation/sparkle-cli/) also passed: another old bundle remained at build 64 after downloading and extracting its signed update while the watched client stayed running. Quitting that client completed replacement to build 65, and the installed client reconnected after relaunch. Complete Mac Debug analysis and universal Release archive/export pass; 362 portable tests pass with no updater-owned compiler diagnostic. The console was locked, so native menu clicks and window screenshots remain unverified. The hourly interval and automatic check/download defaults were read from the installed application; a timed one-hour observation was not performed. This machine has Gatekeeper assessments disabled; validated notarization tickets do not establish enforcement on another machine.
+
 ## Phases and acceptance
 
 1. **Shared code restructure**: no visible iOS change; portable tests plus an the paired iPhone smoke run.
