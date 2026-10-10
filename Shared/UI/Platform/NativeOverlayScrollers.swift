@@ -1,8 +1,7 @@
-import SwiftUI
-
 #if os(macOS)
 import AppKit
 #endif
+import SwiftUI
 
 extension View {
     /// Apply inside scroll content or a List/Form row, where the native
