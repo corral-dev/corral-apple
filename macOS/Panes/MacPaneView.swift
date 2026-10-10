@@ -145,6 +145,9 @@ struct MacPaneView: View {
             await readMark
         }
         .onAppear { metadataStore?.markReadLocally(key: session.key) }
+        .onChange(of: lifetime?.isPresented) { _, presented in
+            if presented == true { metadataStore?.markReadLocally(key: session.key) }
+        }
         .onDisappear {
             guard lifetime == nil else { return }
             workspace.paneFrames[session.key] = nil

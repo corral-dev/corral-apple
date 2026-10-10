@@ -50,7 +50,8 @@ private struct SplitFixture: View {
 
 @main struct SidebarResizeProbe {
     @MainActor static func main() throws {
-        NSApplication.shared.setActivationPolicy(.prohibited)
+        let inspecting = CommandLine.arguments.contains("--inspect")
+        NSApplication.shared.setActivationPolicy(inspecting ? .accessory : .prohibited)
         checkMeasurementLifetime()
         var results: [[String: Any]] = []
         let environment = ProcessInfo.processInfo.environment
@@ -114,9 +115,14 @@ private struct SplitFixture: View {
         let host = NSHostingView(rootView: SplitFixture(owners: (0..<panes).map { _ in NSObject() },
                                                       messages: messages, workspace: MacWorkspace(), baseline: baseline))
         split.addArrangedSubview(host)
-        let window = NSWindow(contentRect: split.frame, styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        let window = NSWindow(contentRect: split.frame, styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = split
+        let inspecting = CommandLine.arguments.contains("--inspect")
+        if inspecting {
+            window.title = "Corral sidebar resize verification"
+            window.orderFront(nil)
+        }
         defer { window.close() }
         split.setPosition(260, ofDividerAt: 0)
         pump(host, seconds: 1)
@@ -141,6 +147,14 @@ private struct SplitFixture: View {
             let elapsed = start.duration(to: .now).components
             timings.append(Double(elapsed.seconds) * 1000 + Double(elapsed.attoseconds) / 1e15)
             cpuTimings.append(cpuMilliseconds() - cpuStart)
+            if inspecting, [0, 15, 29, 44, 59].contains(iteration) {
+                window.displayIfNeeded()
+                if let directory = ProcessInfo.processInfo.environment["CORRAL_RESIZE_INSPECTION_DIR"] {
+                    let data = try! JSONSerialization.data(withJSONObject: ["frame": iteration, "sidebarWidth": split.arrangedSubviews[0].frame.width])
+                    try! data.write(to: URL(fileURLWithPath: directory).appendingPathComponent("frame.json"), options: .atomic)
+                }
+                RunLoop.main.run(until: Date().addingTimeInterval(3))
+            }
         }
         pump(host, seconds: 0.2)
         let texts = descendants(host).compactMap { $0 as? NSTextView }.filter { !$0.visibleRect.isEmpty }
@@ -152,7 +166,7 @@ private struct SplitFixture: View {
         }
         let sorted = timings.sorted()
         let sortedCPU = cpuTimings.sorted()
-        return ["layout": baseline ? "baseline" : "current", "messages": count, "panes": panes, "steps": timings.count,
+        return ["layout": baseline ? "baseline" : "current", "inspection": inspecting, "messages": count, "panes": panes, "steps": timings.count,
                 "medianMs": sorted[sorted.count / 2], "p95Ms": sorted[Int(Double(sorted.count - 1) * 0.95)],
                 "maxMs": sorted.last ?? 0, "totalMs": timings.reduce(0, +),
                 "medianCPUMs": sortedCPU[sortedCPU.count / 2], "totalCPUMs": cpuTimings.reduce(0, +)]

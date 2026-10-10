@@ -296,11 +296,11 @@ struct MacSidebar: View {
                 .foregroundStyle(Palette.accent)
         }
         .interfaceFrame(height: MacSidebarMetrics.rowHeight)
-        .listRowInsets(.vertical, 0)
         .listRowSeparator(.visible, edges: .bottom)
         .listRowSeparatorTint(Color(nsColor: .separatorColor).opacity(0.5), edges: .bottom)
         .badge(active.count)
         .background(NativeSidebarSelection())
+        .listRowInsets(.vertical, 0)
     }
 
     @ViewBuilder
@@ -540,8 +540,13 @@ struct MacSidebar: View {
         func descendants(_ view: NSView) -> [NSView] {
             view.subviews.flatMap { [$0] + descendants($0) }
         }
-        guard let root = NSApp.windows.first(where: { $0.title == "Corral" })?.contentView,
+        guard let window = NSApp.windows.first(where: { $0.title == "Corral" }),
+              let root = window.contentView,
               let outline = descendants(root).compactMap({ $0 as? NSOutlineView }).first else { return }
+        if ProcessInfo.processInfo.arguments.contains("-CorralInspectAllSpaces") {
+            window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+            window.orderBack(nil)
+        }
         let rows: [[String: Any]] = (0..<min(outline.numberOfRows, 30)).map { row in
             ["row": row, "height": outline.rect(ofRow: row).height,
              "y": outline.rect(ofRow: row).minY,

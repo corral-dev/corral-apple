@@ -57,7 +57,8 @@ extension EnvironmentValues {
 }
 
 /// Reuse complete native chat surfaces rather than rebuilding a SwiftUI/TextKit
-/// tree for each sidebar selection. Dormant surfaces have no window or RPC watch.
+/// tree for each sidebar selection. Dormant surfaces stay mounted but hidden;
+/// presentation suspension stops their RPC watch and retires their responder.
 @MainActor
 final class MacPaneSurfaceCache {
     static let maxDormant = 4
@@ -89,9 +90,10 @@ final class MacPaneSurfaceCache {
         serial &+= 1
         entry.recency = serial
         entry.lease = entry.lifetime.present()
+        entry.view.isHidden = false
     }
 
-    func suspend(_ entry: Entry, key: String, lease: Int) {
+    func suspend(_ entry: Entry, key: String, lease: Int, keepingMounted: Bool = false) {
         guard entry.lease == lease else { return }
         // NSWindow does not own its first responder. Retire it while the whole
         // native surface is alive, before its text/field editor can leave.
@@ -100,12 +102,18 @@ final class MacPaneSurfaceCache {
             window.makeFirstResponder(nil)
         }
         entry.lifetime.suspend(lease: lease)
+        entry.view.isHidden = true
+        if keepingMounted { return }
         entry.view.removeFromSuperview()
-        if (!entry.keepDormant || !entry.lifetime.canRetain), entries[key] === entry {
-            entries[key] = nil
-            entry.view.rootView = AnyView(EmptyView())
-        }
-        trim()
+        if entries[key] === entry { entries[key] = nil }
+        entry.view.rootView = AnyView(EmptyView())
+    }
+
+    func retainedKeys(visible: [String], previous: [String], eligible: (String) -> Bool) -> [String] {
+        let dormant = previous.filter {
+            !visible.contains($0) && eligible($0) && entries[$0]?.lifetime.canRetain != false
+        }.prefix(Self.maxDormant)
+        return visible + dormant
     }
 
     func reset() {
@@ -114,15 +122,6 @@ final class MacPaneSurfaceCache {
             suspend(entry, key: key, lease: entry.lease)
         }
         entries.removeAll()
-    }
-
-    private func trim() {
-        let dormant = entries.filter { !$0.value.lifetime.isPresented }
-            .sorted { $0.value.recency > $1.value.recency }
-        for (key, entry) in dormant.dropFirst(Self.maxDormant) {
-            entries[key] = nil
-            entry.view.rootView = AnyView(EmptyView())
-        }
     }
 
     #if DEBUG
@@ -153,6 +152,7 @@ struct MacPaneSurface: NSViewRepresentable {
     let metadataStore: SessionListStore?
     var allowsClose = true
     var autoFocusComposer = false
+    var isPresented = true
 
     final class Coordinator {
         let cache: MacPaneSurfaceCache
@@ -169,6 +169,7 @@ struct MacPaneSurface: NSViewRepresentable {
 
     final class Mount: NSView {
         weak var workspace: MacWorkspace?
+        weak var lifetime: MacPaneLifetime?
         var key = ""
 
         override func layout() {
@@ -176,7 +177,7 @@ struct MacPaneSurface: NSViewRepresentable {
             // A separate NSHostingView has its own SwiftUI global coordinate
             // space. Publish the native window coordinates for pane focus.
             DispatchQueue.main.async { [weak self] in
-                guard let self, let content = self.window?.contentView,
+                guard let self, self.lifetime?.isPresented == true, let content = self.window?.contentView,
                       let workspace = self.workspace else { return }
                 let native = self.convert(self.bounds, to: content)
                 let frame = CGRect(x: native.minX,
@@ -195,18 +196,19 @@ struct MacPaneSurface: NSViewRepresentable {
         let mount = Mount()
         mount.workspace = workspace
         mount.key = session.key
+        mount.lifetime = context.coordinator.entry.lifetime
         let entry = context.coordinator.entry
-        context.coordinator.cache.present(entry)
-        context.coordinator.lease = entry.lease
         entry.view.removeFromSuperview()
         mount.addSubview(entry.view)
         entry.view.frame = mount.bounds
-        update(entry)
+        update(context.coordinator)
         return mount
     }
 
     func updateNSView(_ mount: NSView, context: Context) {
-        update(context.coordinator.entry)
+        update(context.coordinator)
+        if !isPresented { workspace.paneFrames[session.key] = nil }
+        mount.needsLayout = true
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSView, context: Context) -> CGSize? {
@@ -221,7 +223,14 @@ struct MacPaneSurface: NSViewRepresentable {
         coordinator.cache.suspend(coordinator.entry, key: coordinator.key, lease: coordinator.lease)
     }
 
-    private func update(_ entry: MacPaneSurfaceCache.Entry) {
+    private func update(_ coordinator: Coordinator) {
+        let entry = coordinator.entry
+        if isPresented, !entry.lifetime.isPresented {
+            coordinator.cache.present(entry)
+            coordinator.lease = entry.lease
+        } else if !isPresented, entry.lifetime.isPresented {
+            coordinator.cache.suspend(entry, key: coordinator.key, lease: coordinator.lease, keepingMounted: true)
+        }
         // Terminals are never kept offscreen: disposal retires their sizing vote.
         entry.keepDormant = workspace.mode(for: session.key) == .chat
         entry.view.rootView = AnyView(
@@ -240,6 +249,8 @@ struct MacPaneSurface: NSViewRepresentable {
                 .environment(\.font, font)
                 .environment(\.controlSize, controlSize)
                 .environment(\.dynamicTypeSize, dynamicTypeSize)
+                .disabled(!isPresented)
+                .accessibilityHidden(!isPresented)
         )
     }
 }

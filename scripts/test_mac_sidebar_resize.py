@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--output", required=True)
 parser.add_argument("--baseline-ref", help="Compare an existing source revision in the same process")
+parser.add_argument("--inspect", action="store_true", help="Show paced native split frames for window capture; timings include capture holds")
 args = parser.parse_args()
 sources = [
     "Shared/UI/Design/InterfaceScale.swift", "Shared/UI/Design/Typography.swift",
@@ -38,4 +39,4 @@ with tempfile.TemporaryDirectory(prefix="corral-sidebar-resize-") as directory:
     subprocess.run(["swiftc", "-O", "-swift-version", "6", "-default-isolation", "MainActor",
                     "-parse-as-library", *[str(ROOT / source) for source in sources],
                     str(extracted), *additional, "-o", str(executable)], check=True)
-    subprocess.run([str(executable), args.output], check=True)
+    subprocess.run([str(executable), args.output, *(["--inspect"] if args.inspect else [])], check=True)

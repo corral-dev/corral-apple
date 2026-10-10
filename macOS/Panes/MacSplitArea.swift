@@ -18,23 +18,8 @@ struct MacSplitArea: View {
         let keys = workspace.drawnPaneKeys.filter {
             ProjectShell.isShellKey($0) || feed.listStore.session(for: $0) != nil
         }
-        EqualPanes {
-            ForEach(keys, id: \.self) { key in
-                Group {
-                    if ProjectShell.isShellKey(key) {
-                        MacShellPane(shellKey: key)
-                    } else if let session = feed.listStore.session(for: key) {
-                        MacPaneSurface(
-                            session: session,
-                            metadataStore: feed.listStore,
-                            autoFocusComposer: autoFocusKey == key
-                        )
-                    }
-                }
-                .modifier(PaneEntrance(key: key, direction: workspace.pendingEntrances[key]))
-                .containerValue(\.macPaneKey, key)
-            }
-        }
+        MacRetainedPanes(keys: keys, feed: feed, autoFocusKey: autoFocusKey)
+            .id(workspace.hostID)
         .environment(\.macVisiblePaneKeys, keys.filter { workspace.leavingPanes[$0] == nil })
         .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.leading } action: { sidebarInset = $0 }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { workspace.splitWidth = $0 }
@@ -42,13 +27,100 @@ struct MacSplitArea: View {
         .preference(key: WindowMinimumWidthKey.self, value: Self.requiredWidth(panes: keys.count, sidebar: sidebarInset))
     }
 
-    static let paneMinimum: CGFloat = 220
+    nonisolated static let paneMinimum: CGFloat = 220
 
     /// The window must hold the sidebar plus every pane at its minimum; a
     /// narrower window would push the split out of both window edges.
     static func requiredWidth(panes: Int, sidebar: CGFloat) -> CGFloat {
         guard panes > 0 else { return 0 }
         return sidebar + CGFloat(panes) * paneMinimum + CGFloat(panes - 1)
+    }
+}
+
+/// Keep recent panes in the same SwiftUI/native hierarchy. An invisible slot
+/// retains its last size; collapsing it would discard its lazy text rows.
+private struct MacRetainedPanes: View {
+    @Environment(MacWorkspace.self) private var workspace
+    let keys: [String]
+    let feed: HostSessionFeed
+    var allowsClose = true
+    var autoFocusKey: String?
+    @State private var recent: [String] = []
+
+    var body: some View {
+        let roster = workspace.paneSurfaces.retainedKeys(visible: keys, previous: recent) {
+            !ProjectShell.isShellKey($0) && feed.listStore.session(for: $0) != nil
+                && workspace.mode(for: $0) == .chat
+        }
+        MacRetainedPaneLayout(visibleKeys: keys) {
+            ForEach(roster, id: \.self) { key in
+                let visible = keys.contains(key)
+                HStack(spacing: 0) {
+                    Divider().frame(width: keys.firstIndex(of: key).map { $0 > 0 ? 1 : 0 } ?? 0)
+                    Group {
+                        if ProjectShell.isShellKey(key) {
+                            MacShellPane(shellKey: key)
+                        } else if let session = feed.listStore.session(for: key) {
+                            MacPaneSurface(session: session, metadataStore: feed.listStore,
+                                           allowsClose: allowsClose, autoFocusComposer: autoFocusKey == key,
+                                           isPresented: visible)
+                        }
+                    }
+                    .modifier(PaneEntrance(key: key, direction: workspace.pendingEntrances[key]))
+                }
+                .modifier(PaneSlot(shift: workspace.paneShifts[key] ?? 0,
+                                   leaving: workspace.leavingPanes[key] != nil))
+                .opacity(visible ? 1 : 0)
+                .allowsHitTesting(visible)
+                .accessibilityHidden(!visible)
+                .layoutValue(key: MacRetainedPaneKey.self, value: key)
+            }
+        }
+        .onChange(of: keys, initial: true) { _, _ in recent = roster }
+    }
+}
+
+nonisolated private struct MacRetainedPaneKey: LayoutValueKey {
+    static let defaultValue = ""
+}
+
+/// Delegate visible placement to the existing equal-slot layout. Hidden
+/// children remain at their last proposal without contributing to its width.
+private struct MacRetainedPaneLayout: Layout {
+    let visibleKeys: [String]
+    struct Cache { var sizes: [String: CGSize] = [:] }
+    func makeCache(subviews: Subviews) -> Cache { Cache() }
+    private var equal: EqualPaneLayout { EqualPaneLayout(minimumWidth: MacSplitArea.paneMinimum) }
+
+    private func visibleIndices(_ subviews: Subviews) -> [Int] {
+        visibleKeys.compactMap { key in subviews.indices.first { subviews[$0][MacRetainedPaneKey.self] == key } }
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
+        var empty: Void = ()
+        return equal.sizeThatFits(proposal: proposal, subviews: subviews[visibleIndices(subviews)], cache: &empty)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
+        let indices = visibleIndices(subviews)
+        var empty: Void = ()
+        equal.placeSubviews(in: bounds, proposal: proposal, subviews: subviews[indices], cache: &empty)
+        let count = indices.count
+        if count > 0 {
+            let paneWidth = max(0, (bounds.width - CGFloat(count - 1)) / CGFloat(count))
+            for (slot, index) in indices.enumerated() {
+                cache.sizes[subviews[index][MacRetainedPaneKey.self]] = CGSize(
+                    width: paneWidth + (slot > 0 ? 1 : 0), height: bounds.height)
+            }
+        }
+        let liveKeys = Set(subviews.map { $0[MacRetainedPaneKey.self] })
+        cache.sizes = cache.sizes.filter { liveKeys.contains($0.key) }
+        for index in subviews.indices where !indices.contains(index) {
+            let key = subviews[index][MacRetainedPaneKey.self]
+            let size = cache.sizes[key] ?? bounds.size
+            subviews[index].place(at: bounds.origin, anchor: .topLeading,
+                                 proposal: ProposedViewSize(size))
+        }
     }
 }
 
@@ -108,14 +180,9 @@ struct MacActiveBoard: View {
                 ContentUnavailableView("mac.board.empty", systemImage: "rectangle.split.2x2")
                     .interfaceFrame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                EqualPanes {
-                    ForEach(shown) { session in
-                        MacPaneSurface(session: session, metadataStore: feed.listStore, allowsClose: false)
-                            .modifier(PaneEntrance(key: session.key, direction: workspace.pendingEntrances[session.key]))
-                    }
-                }
+                MacRetainedPanes(keys: shown.map(\.key), feed: feed, allowsClose: false)
+                    .id(workspace.hostID)
                 .environment(\.macVisiblePaneKeys, shown.map(\.key))
-                .id(shown.map(\.key))
                 .clipped()
                 .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.leading } action: { sidebarInset = $0 }
                 .preference(

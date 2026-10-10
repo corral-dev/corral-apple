@@ -46,16 +46,16 @@ struct Probe {
         a.lifetime.bind(store)
         cache.present(a)
         let oldLease = a.lease
-        cache.suspend(a, key: "a", lease: oldLease)
+        cache.suspend(a, key: "a", lease: oldLease, keepingMounted: true)
         await a.lifetime.waitForSuspension()
         precondition(store.stops == 1)
         precondition(cache.entry(for: "a") === a)
         cache.present(a)
-        cache.suspend(a, key: "a", lease: oldLease)
+        cache.suspend(a, key: "a", lease: oldLease, keepingMounted: true)
         precondition(a.lifetime.isPresented, "old representable must not suspend a new mount")
 
         store.pause = true
-        cache.suspend(a, key: "a", lease: a.lease)
+        cache.suspend(a, key: "a", lease: a.lease, keepingMounted: true)
         for _ in 0..<100 where store.stopContinuation == nil { await Task.yield() }
         precondition(store.stopContinuation != nil)
         cache.present(a)
@@ -68,11 +68,18 @@ struct Probe {
         precondition(finished)
         store.pause = false
 
+        var recent = ["a"]
         for index in 0..<12 {
             let key = "dormant-\(index)"
             let entry = cache.entry(for: key)
             cache.present(entry)
-            cache.suspend(entry, key: key, lease: entry.lease)
+            cache.suspend(entry, key: key, lease: entry.lease, keepingMounted: true)
+            let roster = cache.retainedKeys(visible: ["a"], previous: [key] + recent) { _ in true }
+            for retired in recent where !roster.contains(retired) {
+                let retiring = cache.entry(for: retired)
+                cache.suspend(retiring, key: retired, lease: retiring.lease)
+            }
+            recent = roster
         }
         precondition(cache.dormantCount == MacPaneSurfaceCache.maxDormant)
         precondition(cache.entry(for: "a") === a, "visible entries cannot be evicted")
@@ -87,6 +94,7 @@ struct Probe {
         bigStore.messages = [Message(text: String(repeating: "x", count: 2 * 1024 * 1024 + 1))]
         big.lifetime.bind(bigStore)
         cache.present(big)
+        precondition(!cache.retainedKeys(visible: [], previous: ["big"]) { _ in true }.contains("big"))
         cache.suspend(big, key: "big", lease: big.lease)
         precondition(cache.entry(for: "big") !== big)
 
@@ -101,9 +109,9 @@ struct Probe {
         let responder = NSTextView()
         focus.view.addSubview(responder)
         window.makeFirstResponder(responder)
-        cache.suspend(focus, key: "focus", lease: focus.lease)
+        cache.suspend(focus, key: "focus", lease: focus.lease, keepingMounted: true)
         precondition(window.firstResponder !== responder)
-        precondition(focus.view.window == nil)
+        precondition(focus.view.window === window && focus.view.isHidden)
         cache.reset()
         await a.lifetime.waitForSuspension()
         precondition(!a.lifetime.isPresented)
