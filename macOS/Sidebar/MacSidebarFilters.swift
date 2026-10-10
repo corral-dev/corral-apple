@@ -107,21 +107,19 @@ struct MacSidebarFilters: View {
     }
 }
 
-/// Same native capsule interaction as the iPhone; Mac selection uses the
-/// native prominent style so the currently applied choices are unambiguous.
+/// Match the iPhone's quiet native capsules. Text contrast also preserves
+/// the selection distinction when macOS mutes an inactive window's tint.
 private struct MacQuickFilterButton<Content: View>: View {
     let selected: Bool
     @ViewBuilder let content: () -> Content
     let action: () -> Void
 
     var body: some View {
-        Group {
-            if selected { button.buttonStyle(.borderedProminent) }
-            else { button.buttonStyle(.bordered) }
-        }
+        button
+        .buttonStyle(.bordered)
         .buttonBorderShape(.capsule)
         .controlSize(.small)
-        .tint(Palette.accent)
+        .tint(selected ? Palette.accent : Color.secondary)
         .interfaceFrame(height: MacSidebarMetrics.rowHeight)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
@@ -129,7 +127,8 @@ private struct MacQuickFilterButton<Content: View>: View {
     private var button: some View {
         Button(action: action) {
             HStack(spacing: Space.xs) { content() }
-                .interfaceFont(.callout.weight(.semibold))
+                .interfaceFont(.callout.weight(selected ? .semibold : .medium))
+                .foregroundStyle(selected ? Color.primary : Color.secondary)
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
         }
