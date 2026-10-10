@@ -1,0 +1,28 @@
+#!/usr/bin/env python3
+"""Compile actual Mac lifecycle owners against a controllable transport.
+
+No app or user-data fixtures are launched. The Xcode build and real-host
+acceptance remain separate checks; these regressions force late completions.
+"""
+from pathlib import Path
+import subprocess
+import tempfile
+
+ROOT = Path(__file__).resolve().parents[1]
+SOURCES = [
+    'Shared/Core/Models/RemoteDecoding.swift',
+    'Shared/Core/Models/DesktopLayoutModels.swift',
+    'macOS/Search/MacFulltextSearchStore.swift',
+    'Shared/UI/Chat/ChatScrollRequest.swift',
+    'macOS/Workspace/MacWorkspace.swift',
+    'macOS/Design/MacMotion.swift',
+    'Shared/Core/Terminal/RemoteTerminalStream.swift',
+    'Shared/Core/Terminal/ProjectShellStore.swift',
+    'scripts/mac-lifecycle/Probe.swift',
+]
+with tempfile.TemporaryDirectory(prefix='corral-mac-lifecycle-') as directory:
+    executable = str(Path(directory) / 'probe')
+    subprocess.run(['swiftc', '-swift-version', '6', '-default-isolation', 'MainActor',
+                    '-parse-as-library', *[str(ROOT / path) for path in SOURCES],
+                    '-o', executable], check=True)
+    subprocess.run([executable], check=True)

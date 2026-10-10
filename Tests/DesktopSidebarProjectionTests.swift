@@ -1,0 +1,156 @@
+import XCTest
+@testable import Corral
+
+@MainActor
+final class DesktopSidebarProjectionTests: XCTestCase {
+    private let calendar: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        return calendar
+    }()
+
+    /// Sunday 2026-10-04 15:00 +08:00.
+    private var now: Date { Date(timeIntervalSince1970: 1_791_097_200) }
+
+    private func session(_ key: String, hoursAgo: Double, live: Bool = false, title: String = "", cwd: String = "/p") -> SessionSummary {
+        SessionSummary(
+            key: key, runtime: "claude", title: title.isEmpty ? key : title, cwd: cwd,
+            mtime: now.timeIntervalSince1970 - hoursAgo * 3600, live: live
+        )
+    }
+
+    func testGroupNeedsTwoVisibleMembersElseMembersStandAlone() {
+        let group = DesktopGroup(id: "g", name: "Group Apple", members: ["a", "b"])
+        let layout = DesktopLayout(revision: 1, groups: [group], pinnedSessions: [:])
+        let sessions = [session("a", hoursAgo: 1, title: "alpha"), session("b", hoursAgo: 2, title: "beta")]
+        var order = DesktopSidebarProjection.StableOrder()
+        let both = DesktopSidebarProjection.sections(
+            sessions: sessions, layout: layout, filter: "", order: &order, now: now, calendar: calendar
+        )
+        XCTAssertEqual(both.flatMap(\.items).map(\.id), ["group:g"])
+
+        var filteredOrder = DesktopSidebarProjection.StableOrder()
+        let filtered = DesktopSidebarProjection.sections(
+            sessions: sessions, layout: layout, filter: "alpha", order: &filteredOrder, now: now, calendar: calendar
+        )
+        XCTAssertEqual(filtered.flatMap(\.items).map(\.id), ["session:a"])
+    }
+
+    func testEachSessionAppearsOnceWithRepeatedInputAndOverlappingGroups() {
+        // A layout briefly listing a session in two groups, or a repeated
+        // session record, must never yield two rows with one identity.
+        let layout = DesktopLayout(revision: 1, groups: [
+            DesktopGroup(id: "g1", name: "Group Apple", members: ["a", "b"]),
+            DesktopGroup(id: "g2", name: "Group Pear", members: ["b", "c", "d"]),
+            DesktopGroup(id: "g3", name: "Group Fig", members: ["e", "e"]),
+        ], pinnedSessions: [:])
+        let sessions = ["a", "b", "c", "d", "e", "f", "f"].map { session($0, hoursAgo: 1) }
+        var order = DesktopSidebarProjection.StableOrder()
+        let result = DesktopSidebarProjection.sections(
+            sessions: sessions, layout: layout, filter: "", order: &order, now: now, calendar: calendar
+        )
+        var keys: [String] = []
+        for item in result.flatMap(\.items) {
+            switch item {
+            case .session(let session): keys.append(session.key)
+            case .group(_, let members): keys.append(contentsOf: members.map(\.key))
+            }
+        }
+        XCTAssertEqual(keys.sorted(), ["a", "b", "c", "d", "e", "f"])
+        XCTAssertEqual(result.flatMap(\.items).map(\.id), ["group:g1", "group:g2", "session:e", "session:f"])
+    }
+
+    func testFilterMatchesOnlyUserGivenSplitName() {
+        let sessions = [session("a", hoursAgo: 1), session("b", hoursAgo: 1), session("c", hoursAgo: 1)]
+        let named = DesktopLayout(revision: 1, groups: [DesktopGroup(id: "g", name: "Release check", named: true, members: ["a", "b"])], pinnedSessions: [:])
+        var order = DesktopSidebarProjection.StableOrder()
+        let result = DesktopSidebarProjection.sections(
+            sessions: sessions, layout: named, filter: "release", order: &order, now: now, calendar: calendar
+        )
+        XCTAssertEqual(result.flatMap(\.items).map(\.id), ["group:g"])
+
+        // The hidden internal fruit identity never matches.
+        let unnamed = DesktopLayout(revision: 1, groups: [DesktopGroup(id: "g", name: "Group Cherry", members: ["a", "b"])], pinnedSessions: [:])
+        var unnamedOrder = DesktopSidebarProjection.StableOrder()
+        let hidden = DesktopSidebarProjection.sections(
+            sessions: sessions, layout: unnamed, filter: "cherry", order: &unnamedOrder, now: now, calendar: calendar
+        )
+        XCTAssertTrue(hidden.flatMap(\.items).isEmpty)
+    }
+
+    func testSplitDisplayNameJoinsMemberTitlesUnlessNamed() {
+        let members = [session("a", hoursAgo: 1, title: "Fix the  login\nrace"), session("b", hoursAgo: 1, title: "Export reports")]
+        let unnamed = DesktopGroup(id: "g", name: "Group Orange 13", members: ["a", "b"])
+        XCTAssertEqual(DesktopSidebarProjection.displayName(unnamed, members: members), "Fix the login race + Export reports")
+        let pending = [session("p", hoursAgo: 1, title: "..."), session("b", hoursAgo: 1, title: "Export reports")]
+        XCTAssertEqual(DesktopSidebarProjection.displayName(unnamed, members: pending), "Export reports")
+        let named = DesktopGroup(id: "g", name: "Release check", named: true, members: ["a", "b"])
+        XCTAssertEqual(DesktopSidebarProjection.displayName(named, members: members), "Release check")
+    }
+
+    func testGroupDecodesNamedFlagAndDefaultsToUnnamed() throws {
+        let json = #"{"revision":3,"groups":[{"id":"g1","name":"Release check","named":true,"members":["a","b"]},{"id":"g2","name":"Group Kiwi","members":["c","d"]}],"pinned_sessions":{}}"#
+        let layout = try JSONDecoder().decode(DesktopLayout.self, from: Data(json.utf8))
+        XCTAssertEqual(layout.groups.map(\.named), [true, false])
+    }
+
+    func testPinnedBlockFirstNewestPinFirst() {
+        let layout = DesktopLayout(revision: 1, groups: [], pinnedSessions: ["old": 10, "new": 20])
+        var order = DesktopSidebarProjection.StableOrder()
+        let result = DesktopSidebarProjection.sections(
+            sessions: [session("old", hoursAgo: 1), session("new", hoursAgo: 50), session("plain", hoursAgo: 1)],
+            layout: layout, filter: "", order: &order, now: now, calendar: calendar
+        )
+        XCTAssertEqual(result.first?.kind, .pinned)
+        XCTAssertEqual(result.first?.items.map(\.id), ["session:new", "session:old"])
+        XCTAssertEqual(result.last?.items.map(\.id), ["session:plain"])
+    }
+
+    func testLocalCalendarBuckets() {
+        var order = DesktopSidebarProjection.StableOrder()
+        let result = DesktopSidebarProjection.sections(
+            sessions: [
+                session("today", hoursAgo: 2),
+                session("yesterday", hoursAgo: 20),
+                session("friday", hoursAgo: 50),
+                session("old", hoursAgo: 24 * 30),
+                session("live-old", hoursAgo: 24 * 30, live: true),
+            ],
+            layout: .empty, filter: "", order: &order, now: now, calendar: calendar
+        )
+        XCTAssertEqual(result.map(\.id), ["today", "yesterday", "weekday-6", "older"])
+        XCTAssertEqual(Set(result[0].items.map(\.id)), ["session:today", "session:live-old"])
+    }
+
+    func testStableOrderKeepsShownRowsAndPutsNewcomersOnTop() {
+        var order = DesktopSidebarProjection.StableOrder()
+        var sessions = [session("a", hoursAgo: 1), session("b", hoursAgo: 2)]
+        _ = DesktopSidebarProjection.sections(sessions: sessions, layout: .empty, filter: "", order: &order, now: now, calendar: calendar)
+        // b becomes newest by mtime; a new session c appears.
+        sessions = [session("a", hoursAgo: 1), session("b", hoursAgo: 0.1), session("c", hoursAgo: 3)]
+        let result = DesktopSidebarProjection.sections(sessions: sessions, layout: .empty, filter: "", order: &order, now: now, calendar: calendar)
+        XCTAssertEqual(result.first?.items.map(\.id), ["session:c", "session:a", "session:b"])
+    }
+
+    func testGroupArrivingAfterFirstRenderKeepsItsMembersPlace() {
+        var order = DesktopSidebarProjection.StableOrder()
+        let sessions = [session("live", hoursAgo: 0.1), session("a", hoursAgo: 4), session("b", hoursAgo: 5)]
+        _ = DesktopSidebarProjection.sections(sessions: sessions, layout: .empty, filter: "", order: &order, now: now, calendar: calendar)
+        let layout = DesktopLayout(revision: 2, groups: [DesktopGroup(id: "g", name: "Group Pear", members: ["a", "b"])], pinnedSessions: [:])
+        let result = DesktopSidebarProjection.sections(sessions: sessions, layout: layout, filter: "", order: &order, now: now, calendar: calendar)
+        XCTAssertEqual(result.first?.items.map(\.id), ["session:live", "group:g"])
+    }
+
+    func testActiveSessionsAreHostedWithMarkerWaitingFirst() {
+        func s(_ key: String, marker: String, hosted: Bool) -> SessionSummary {
+            SessionSummary(key: key, runtime: "codex", mtime: 1, hosted: hosted, marker: marker)
+        }
+        let result = DesktopSidebarProjection.activeSessions([
+            s("work", marker: "working", hosted: true),
+            s("wait", marker: "waiting", hosted: true),
+            s("idle", marker: "", hosted: true),
+            s("elsewhere", marker: "waiting", hosted: false),
+        ])
+        XCTAssertEqual(result.map(\.key), ["wait", "work"])
+    }
+}

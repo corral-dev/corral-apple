@@ -1,0 +1,29 @@
+.build/
+.build-*/
+.derivedData/
+.derivedData-*
+.derivedData-iphone-max/
+.derivedData-test/
+.derivedData-composer/
+DerivedData/
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+*.xcuserstate
+.DS_Store
+tmp/
+.codebase-memory/
+
+# local imagegen drafts
+design/explorations/
+
+
+# Python verification caches
+__pycache__/
+*.pyc
+
+# Temporary links from the pre-2026-10-05 folder names; remove once no task uses the old paths.
+/Corral
+/CorralMac
+/CorralNSE
+/CorralTests

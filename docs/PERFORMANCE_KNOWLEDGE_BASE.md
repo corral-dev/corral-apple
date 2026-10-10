@@ -1,0 +1,233 @@
+# Corral iOS 实时链路性能知识库
+
+> 覆盖手机端会话列表首屏、实时消息、终端画面、重连与换网后的延迟/闪空。误修风险：把高频事件放大成重复远程请求或整屏空白，或把列表慢误修成滚动分页。
+
+## §0 目录索引
+
+- [会话列表首屏](#会话列表首屏)
+- [对话尾部缓存](#对话尾部缓存重开--换网--离线)
+- [高频事件处理](#高频事件处理)
+- [Main-thread budget](#main-thread-budget-2026-10-05)
+- [Identity and asynchronous result safety](#identity-and-asynchronous-result-safety)
+- [连接层审查清单](#连接层审查清单)
+- [Compiler diagnostics](#compiler-diagnostics-2026-10-07)
+- [验收](#验收)
+- [离线能力表](#离线能力表全局-offline-first--ios-基线-b9)
+- [跨规范备注](#跨规范备注展示元数据--基线豁免)
+
+## 会话列表首屏
+
+- 列表页必须以该开发机上次成功窗口为界面数据源：进页先画出来，再订阅/刷新。没有快照才转圈。刷新失败且本地有行时保留画面。
+- 向开发机带上次版本；回包声明未变则不得把会话数组当成空表覆盖。版本对不上才整窗替换并回写快照。
+- 搜索走开发机按关键词查询（可命中窗口外的闲置会话）；不要为了找旧会话在首屏把整表拉下来，也不要在没有新证据时加滚动分页。搜索命中只更新当前筛选画面，**禁止写回该开发机落盘的列表窗口**。
+- 切开发机必须换该机快照，禁止把上一台的行留在这一台。
+- 用户随口说的滚动分页、再砍字段、完整离线队列不是待办；列表体感慢先对「进页是否空等网络」，对不上就不要堆。
+
+## 对话尾部缓存（重开 / 换网 / 离线）
+
+- 对话详情必须以「该开发机公钥身份 + 规范会话 key」为键的最近成功尾部为界面数据源：再进同一会话先画缓存，再订阅/合并网络更新。禁止先清空再等网络。
+- 预算约 50 个最近看过的会话、合计约 100 MiB，按最近访问淘汰；取消配对必须清掉该机全部尾部与未决本地发送身份。
+- 缓存是可丢弃的近期上下文，不是完整离线历史，也不是离线命令队列。断线时输入框里的文字保留为草稿；停止/删除等操作不得偷偷排队稍后执行。
+- 发送侧在开发机 hello 宣告 `command_receipts` 时使用稳定 `command_id`：本地先落 pending 气泡，再发一次；重连后用 `command.status` 核对未决身份。回执为 `unknown` 时标成需人工确认，**禁止自动重发**。未宣告该能力时保持旧行为，不得假装有持久送达保证。
+- 契约见 `https://github.com/corral-dev/corral/blob/main/docs/design/MOBILE_REMOTE_DATA_PLANE_DESIGN.md` §7.2 / §7.6。
+
+## Identity and asynchronous result safety
+
+- A connection belongs to the host captured when that connection was created. Selecting another host must not relabel the active connection; only a successful connection to that host may update its identity. Returning from an obsolete connect, pairing, foreground probe, or local upgrade must not change the current connection presentation.
+- Reusing a list store for another host resets the previous host's records, redirects, search membership, version and revision before loading the new host's snapshot. An uncached host must never show or persist the previous host's sessions.
+- A tool-detail request is bound to its message sequence, history generation and current tool summary. Resolve the message again after the asynchronous call; prepended or evicted history can invalidate an array index. Reject a response from an obsolete generation, stopped view, or changed tool summary. Duplicate tool identities in a response must not crash the app.
+- A known replacement history generation invalidates the previous official messages and cursor, even when the replacement tail is empty or mistakenly marked as replay. Preserve unresolved local sends, but do not display old official history as current. An empty response without a changed generation still retains usable cached context.
+- Two outgoing messages with different command identities remain two messages even if their text is identical. Only the same command identity may reuse a local bubble; text equality is a legacy presentation fallback, never a receipt identity.
+- A stopped conversation view rejects late events, prompt refreshes and question submissions; a replaced question request never updates the submission state.
+- A notification open is owned solely by PushRegistrar's `PendingNotificationOpen` (`Shared/Core/Network/NotificationReply.swift`): the paired host+session identity survives connection waits with no duplicate state. No message is synthesized from the tap.
+
+### Native Mac lifecycle requirements (2026-10-05)
+
+- Switching hosts resets the Mac workspace's layout revision, panes, focus, board, expanded prompts and runtime catalog. Persisted panes and view modes belong to a host, not just a session key. Late layout, runtime and action responses from a replaced host/client must not alter the current workspace.
+- A terminal pane reattaches on a recovered connection, discards stale stream sequence state and waits for a fresh snapshot. Stopping a pane invalidates outstanding attach, resize and resync work; an attach that succeeds after stop must release its host subscription and sizing vote without detaching a newer attachment.
+- A terminal sizing vote becomes acknowledged only after a successful host response. Transient failures retry the latest desired grid; stale or cancelled responses never acknowledge a newer fit.
+- Full-text search binds successes, failures and loading cleanup to the current request and client. Editing or clearing the query, changing client or dismissing search invalidates older work immediately, including an identical query entered again. A recovered connection reruns the current query; transient read-only failures retry within a bounded budget.
+
+These rules follow Swift's actor reentrancy: state can change across `await`, and cancellation is cooperative. See [Swift concurrency](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/concurrency/) and [Apple Task cancellation](https://developer.apple.com/documentation/swift/task/cancel()). Deterministic regressions cover host switching, delayed detail replies, replaced history and repeated text; physical-device interaction is a separate acceptance layer.
+
+## 高频事件处理
+
+- 会话实时消息先合并进本地列表，再以短暂合并窗口刷新服务端的提问选项；禁止每收到一条消息就额外发一次提问选项请求。服务端会批量推送增量，逐条再请求会与输入、画面更新争抢同一条连接。
+- 合并消息时按稳定序号去重后统一排序，禁止对服务端一批消息逐条插入并逐条排序。序号重复必须后到覆盖先到，禁止用「键必须唯一」的建表方式——重复键会直接闪退。本地负序号气泡按发出时的最新正式序号锚定插入（`localAfterSeq`），禁止「全部正式在前、全部本地在后」——助手正式回复先到时会把用户刚发的话甩到末尾；退出重进只剩正式消息时顺序又正常，正是这一症状。
+- 对话气泡 Markdown 必须走有上限与缓存的解析（`ChatMarkdown`）：完整语法（含标题/列表/表格）仍在有界同步路径上完成，并缓存结果；禁止在 `body` 里对任意长度正文反复同步 `AttributedString(markdown:)`，也禁止为「更全语法」引入第三方库却仍无上限。超长正文改纯文本；否则场景刷新会卡满主线程，触发 `0x8BADF00D` watchdog 杀进程。
+- 终端画布的默认背景只画一次；默认空白格不创建文本布局或背景填充。带背景、反色、下划线或真实字符的格子仍须完整绘制，不能以性能名义丢失终端语义。
+
+## Main-thread budget (2026-10-05)
+
+Every frame is ~8 ms at 120 Hz. Work that scales with payload size must not run on the main actor; the main actor only applies already-decoded values.
+
+- **Approachable concurrency moves "background" code onto the caller.** The project sets `SWIFT_APPROACHABLE_CONCURRENCY` (SE-0461 `NonisolatedNonsendingByDefault`): a plain `nonisolated async` function runs on the caller's actor. Anything that must leave the main actor is marked `@concurrent` — the frame pump (`PlaneIO.pump`: receive, decrypt, inflate, JSON parse) and typed RPC decoding (`RemoteJSONDecoder.decodeOffMain`, used by `RemoteClient.call(_:params:as:)`). Before 2026-10-05 the pump's "not on the main actor" comment was false. The SPM package does not enable this feature, so SPM tests cannot catch a regression; build the Xcode targets.
+- Wire models decoded off the main actor are declared `nonisolated` (otherwise their `Decodable` conformance is main-actor isolated and cannot cross executors). New response types follow the same rule.
+- Flexible decoding helpers short-circuit an absent or null key to the default instead of cascading four failed `try?` decodes; the cascade was the dominant decode cost.
+- The conversation tail cache encodes and writes on a serial background queue, coalescing bursts per session; `load` sees the newest pending snapshot first, and host removal cancels pending writes before deleting files.
+- Measured on real host payloads (Apple-silicon Mac, release build; iPhone is slower): an 80-message history page cost ~6 ms of main-thread decode, the 80-row list ~3.4 ms, a 400-message cached tail ~8 ms to load and ~3.7 ms to save per event batch. Reproduce with real `session.watch` pages before claiming a regression or a win.
+- Other bounded main-thread work: list rows and the prompts list reuse cached `DateFormatter`s (building one per row cost ~50 µs; 80 rows 3.9 ms → 0.08 ms); full-list `sessions` pushes decode off the main actor in `HostSessionFeed` and re-check host/client ownership afterwards; the iPhone selectable bubble caches its converted `NSAttributedString` and per-width measurement like the Mac one and queues a scroll-mode update only when the mode changes; `ChatMarkdown.prewarm()` pays the first-parse setup (~15 ms, plus ~15 ms for the first block quote) on a background thread at launch.
+
+### CPU and memory sampling (2026-10-05)
+
+Method: Release builds with `SWIFT_ACTIVE_COMPILATION_CONDITIONS=DEBUG` (keeps the inspection launch arguments), opened with `-CorralInspectConversation` on a fixed session, `sample <pid>` for the call tree, `ps -o time=` deltas for CPU, `footprint` for memory, alternating baseline/current runs under `/tmp/corral-mac-acceptance.lock`. Measure idle CPU in a window **without** `sample` attached — sampling at 1 ms adds ~13% CPU to the target. Discard runs whose call tree has no `ConversationStore` work: they never loaded (a back-to-back relaunch can land before the host releases the previous connection).
+
+- Main-thread off-loading: with the conversation open, main-thread busy time over the first 30 s fell from 2.79 / 2.38 s to 2.28 / 1.90 s (~19%); total process CPU was unchanged (~3.7 s) because the work moved, not vanished; footprint unchanged (~69 MB). Idle afterwards ~0.25% CPU.
+- **An endless SwiftUI animation costs the whole window every frame.** With one session showing Working, the eased TimelineView dots kept the Mac client at ~31% CPU (repeatable); `symbolEffect(.variableColor)` measured ~29%; an un-eased 2.5 Hz step ~2.6%; Core Animation keyframes ~2.7% with the approved ease and lift. Rule and components: UI knowledge base, Working dots cost rule.
+- **Sustained high CPU with no app frames on the main thread is a layout loop.** A call tree dominated by `NSHostingView.layout` / `_layoutSubtreeWithOldSize` / `CA::Transaction::commit` with almost no Corral symbols means AppKit re-lays out the window every display cycle. Below AppKit's pass limit it shows as 45–90% CPU; at the limit it aborts in `_postWindowNeedsUpdateConstraints` (see [Mac layout loop](troubleshooting/2026-10-05-mac-layout-loop.md)).
+- iPhone could not be profiled: Instruments lists the iOS 27.2 iPhone as offline because this Xcode cannot mount its developer disk image (see the Xcode/iOS 27 install troubleshooting record). Shared-code wins are measured on the Mac; the iPhone keeps only real-use verification until Xcode supports the phone's OS.
+
+### List working-set and persistence requirements (2026-10-07)
+
+- Shared native list metadata belongs to the current host window, current search results and currently opened details. Replacing a window/search or closing a detail releases records no longer owned by any of these surfaces; keep migration aliases only while their canonical identity remains owned. Do not accumulate every previously searched session for the lifetime of the client.
+- List-cache serialization and atomic writes run on a serial utility queue, coalescing event bursts per host. Save-then-load returns the latest accepted snapshot, including while a write is in flight. Unpairing cancels pending work and deletes after older writes finish, so a late write cannot resurrect the host cache. These are disposable list snapshots, never user content or a command queue.
+- Profile the installed Mac separately from inspection processes. CPU deltas must be measured without an attached sampler; physical footprint and retained metadata ownership are distinct from RSS. Concurrent inspection clients can exceed the paired-device channel budget and cause reconnect churn; do not attribute that churn to idle production CPU.
+
+#### Verification (2026-10-07)
+
+- Installed Mac 0.3.28 (32): physical footprint 165 MiB, prior peak 250 MiB while a conversation was displayed. A second sample after switching to an active terminal measured 257 MiB and a separate unsampled 20-second CPU window measured 23.8%; the call tree included SwiftTerm drawing and live history/cache work. These are different workloads, not an idle leak or a before/after improvement claim. Several other acceptance clients were running; no foreign client was terminated for profiling.
+- A later live-terminal footprint breakdown was 263 MiB: 166 MiB Malloc Small and 60 MiB IOSurface. `leaks` reported 10,304 bytes in 322 AppKit `_NSMenuIntelligentAssistantConfiguration` objects; that small report does not explain the working set. Terminal buffer lines accounted for about 380 KiB, so reducing scrollback would not target the measured memory owner. Reachable framework/view allocations need a fixed-workload allocation trace before further changes.
+- Release-optimized standalone runs used the actual local 80-row cached list, original list store/cache from `72aad6c`, and current source. Three 200-update bursts: original synchronous persistence 167.6–171.3 ms; new main-actor enqueue 2.29–2.31 ms and total through explicit disk flush 3.51–3.55 ms. The final persisted version was checked in every run. This isolates burst coalescing, not whole-app CPU or steady single-event cost.
+- A 1,000-search working-set probe (unique 8 KiB titles) retained 1,000 historical hit records before and only the latest hit afterwards. Current host rows and opened out-of-window details remain retained; closing an unowned detail releases its metadata. Regression tests also check save/read ordering and cancellation of a queued write during unpairing.
+- Two paired optimized-process runs of that search/cache probe measured peak physical footprint of 17.06–17.09 MB before and 4.60–4.74 MB after (`/usr/bin/time -l`). These are isolated probe footprints, not whole-client memory reductions. Concurrent builds made wall-clock timings in these additional runs unsuitable for the quiet burst comparison above.
+- Portable full suite: 344 tests passed again after integrated conversation-time and terminal changes. Mac lifecycle and connection model probes passed. No TUI change: its Python list/cache implementation does not use these native stores. Both Apple clients share the fixes and require updated installations; phone CPU/footprint still needs a same-workload device measurement before claiming a percentage.
+
+#### Installed acceptance (2026-10-07)
+
+Mac 0.3.30 (34) and iPhone 1.0.122 (132) were built from committed `2fc7a32`; universal Mac and generic iPhone Release builds passed using the stable Xcode's installed Metal toolchain. Both were installed and their versions read back. The Mac's real 80-row host list rendered, control/data channels were ready with no reconnects in the observed window, and the on-disk list snapshot continued updating. With no detail selected, footprint was 65 MiB and unsampled 20-second mean CPU 0.50%; this is a different workload from the pre-install conversation/terminal samples, not an aggregate reduction claim. AppShelf upload succeeded as release 214 after retrying the documented broken SOCKS route with the direct uploader. The installed phone was opened through the existing launch route into the real host list; its screenshot showed Connected · Local and current session previews. The physical phone's CPU/footprint was not profiled. TUI has a separate Python list/cache path and needs no change for these two native defects.
+
+Final whole-workspace integration was committed as `f347740`: Mac 0.3.31 (35) and iPhone 1.0.123 (133). Universal Mac and generic iPhone Release builds passed with the stable Xcode selected per build, without changing the machine's selected Xcode. Both signed artifacts were installed and versions read back. Captures of the installed Mac window and physical phone showed the real, updating session list and Connected · Local; the Mac had no detail selected. Final portable verification passed 344 tests plus lifecycle, connection-model, diagnostic and localization checks. Phone delivery independently confirmed installation/launch and AppShelf release 215. [Mac release](https://github.com/corral-dev/corral-apple/releases/tag/mac-v0.3.31) and [iPhone release](https://github.com/corral-dev/corral-apple/releases/tag/v1.0.123) use the same committed source. Multiple concurrent inspection clients caused channel-limit reconnects during final acceptance, so no new idle CPU comparison was inferred from that run.
+
+## Connection recovery requirements (2026-10-05)
+
+Approved after the connection-design review. Applies to the shared iPhone/Mac connection layer; the local TUI has no client transport.
+
+- A transport handshake is not application readiness. Publish Connected only after an authenticated host hello confirms the pairing; a revoked pairing reports a recoverable pairing error, never a false green state. Reconnect readiness and subscription restoration obey the same boundary.
+- Transient initial connection/hello failures recover automatically with bounded, jittered backoff. Invalid identity or revoked pairing stops automatic retries; preserve pairing records and cached content.
+- Discover matching host addresses concurrently with connection attempts, never as a blocking preflight. Failed races refresh discovery. Bound each race, rotate through remaining candidates, and retain fresh candidates rather than permanently truncating the set to three.
+- Network changes and foreground/wake events first validate an existing usable control connection. A healthy path stays open. Failed paths re-race LAN and the configured relay; no network-type gate and no shared relay default. Suppressed startup changes are checked after connection confirmation.
+- A missing data plane retries with a capped low-frequency delay for as long as its confirmed control plane remains available; foreground/wake accelerates that recovery. Only acknowledged data bindings route history/terminal requests to that plane.
+- iPhone and Mac use the same foreground recovery entry. Changing the direct-connection preference updates the current client's next attempts immediately.
+
+Use Apple [NWPathMonitor](https://developer.apple.com/documentation/network/nwpathmonitor/) as a change observer and [URLSessionWebSocketTask](https://developer.apple.com/documentation/foundation/urlsessionwebsockettask) for the existing transport. Connectivity is established by real requests, not interface labels. Verify source regressions with controlled fault injection and the real encrypted host path separately from physical Wi-Fi/cellular and sleep/wake acceptance.
+
+### Connection recovery verification (2026-10-05)
+
+- Shared encrypted-WebSocket regression suite: 319 tests passed. Dedicated recovery cases cover confirmed readiness, revoked pairing, host identity, stale-address discovery, initial failure recovery, coalesced healthy checks, candidate rotation, bounded data retry and warm path validation. `scripts/test_connection_model.py` verifies presentation and captured host/access ownership through the actual AppModel.
+- Mac real-host inspection (`-CorralInspectConnectionRecovery`, Debug only) passed confirmed control/data readiness, healthy socket preservation, separate control/data fault recovery, list restoration, forced relay connection and return to the preferred route. Relay `sessions.watch` returned the full 859-row table; one nonempty history was read for each of Claude Code, Codex, OpenCode, Cursor and Pi. The inspection closes only its own sockets and sends no agent input.
+- Mac universal Release and iPhone Release builds passed. The connection acceptance builds are Mac 0.3.10 (14) and iPhone 1.0.109 (119). Both were installed from commit `9d5ebde`; the installed Mac and phone diagnostics confirmed ready control/data channels and live subscriptions, and the phone screenshot showed the restored conversation. The subsequent integrated delivery includes the concurrent native draft-image preview: Mac 0.3.11 (15) and iPhone 1.0.110 (120). Window screenshot capture was rejected by macOS screen capture access; physical Wi-Fi/cellular changes and sleep/wake have not been exercised. An actual foreground/recovery request is verified separately from those physical transitions.
+- The foreground/wake entry uses public [SwiftUI scene phase](https://developer.apple.com/documentation/swiftui/scenephase/active) and [NSWorkspace wake notification](https://developer.apple.com/documentation/appkit/nsworkspace/didwakenotification); wake notifications are registered on the workspace's own notification center.
+
+## 连接层审查清单
+
+- 发出请求前必须先登记响应接收者；反过来会让低延迟响应先到、被接收循环当作无主响应丢弃，随后用户等到超时。发送失败时必须撤销该登记并立即唤醒等待者。
+- WebSocket 探活 `sendPing` 的完成回调在断线竞态下可能触发不止一次；桥进 `CheckedContinuation` 时必须一次性门闩，禁止直接二次 `resume`（会断言闪退）。见故障排查「探活 double-resume」。
+- 局域网与中继继续并发抢答；每次重连与网络切换必须重新选路，不能复用上次的具体地址。第二条数据面连接用同一套抢答，禁止复用第一条胜出的具体地址。
+- **Deterministic handshake-test ordering**: `HandshakeArbiter.launch` returns a discardable task handle so a test can await completion after that attempt's `offer`/`fail` call. Production callers ignore it; locking and cancellation remain unchanged. A nil handle means the arbiter was already settled and no attempt was registered. Register both attempts before releasing the first, then await its handle in the second. A fixed sleep cannot establish completion order under full-suite scheduling load.
+- **抢答超时不得变成长连接寿命**：`ConnectCandidate.timeout`（局域网 2 秒 / 中继 8 秒）只给握手竞速用。已建立的 `URLSession` 禁止把 `timeoutIntervalForResource` / `timeoutIntervalForRequest` 设成这个值，否则空闲对话几秒到几分钟后会在手机仍显示「已连接」时悄悄死掉。长连接配置：资源超时无限、请求超时 7 天，探活约 15 秒 ping 一次，约 45 秒无收包判定该平面失败。
+- **连上验收**：装上/启动、局域网 TCP `ESTABLISHED`、把 Connecting 改成 Failed，都不算连上。必须状态条已连接，且 `corral remote status` 当前在线 ≥ 1。2026-09-13 构建 55 未过这条时用户裁定停手，禁止再加超时/闸门补丁（见远程知识库该踩坑）。
+- 手机必须主动探活（WebSocket ping 或应用层心跳），并记录最近一次收到开发机数据的时间；超过约 45 秒无收包即判定断线并重连。回到前台时若已超过空闲阈值，禁止因为状态仍是 ready 就直接 return。
+- 数据面断开必须持续自动重新绑定（延迟封顶，回前台加速）；绑定失败要能被观测到，不能 `try?` 吞掉。控制面断开才算设备离线。
+- 重连成功后，列表、对话、终端各自重新登记服务端订阅，但保留已有界面内容直到新快照有效，避免闪空。
+- 对话重连必须带上已应用到的最后序号和历史代次。开发机回包声明只补缺口时，把新消息合并进现有列表，禁止整表替换；空的补缺口回包表示没有新内容，不是清空。序号对不上或历史代次变了才重新取当前尾部；尾部为空且本地已有内容时不得闪空。终端画面仍只保留最新帧，不按序号回放。
+- 新客户端在控制面握手成功后，若 hello 带回绑定令牌，再开第二条 WebSocket 承载历史页和终端帧。旧客户端或旧开发机没有该令牌时必须仍能只用一条连接。收包的解密、解压和 JSON 解码不得堵在界面刷新路径上。
+- 数据面断开时控制面保持，允许重新绑定；控制面断开才算设备离线。
+
+iOS **1.0.14**（构建号 15）对应提问选项按题分组、过期问卷从输入条上方收掉。前一版 **1.0.13**（构建号 14）是长连接保活、发送立刻出气泡、助手「正在处理」。开发机侧 CLI **0.24.157**。真机装上后须点一次：两道选择题是两组而不是一排 8 个按钮；对话继续后旧问卷消失。
+
+## 验收
+
+1. 用一段连续的助手输出确认：消息仍按序出现，提问选项最终正确，且不会为每条消息再触发一次远程请求。
+2. ~~打开包含大量空白的终端画面……~~（终端入口暂下线，见 `UI_DESIGN_KNOWLEDGE_BASE.md` / `ProductFeatures.terminalPaneEnabled`；重新上线后再验默认空格与带样式空白格。）
+3. 切换 Wi-Fi 与蜂窝或从后台回到前台，确认会话与对话恢复更新，且界面不先清空再回填（终端重新上线后一并核对画面）。
+4. 第二次打开同一台已配对开发机的列表：应立刻看到上次的行，随后静默对齐；版本未变时列表不得闪空。覆盖安装后启动常停在上次打开的对话：对话中间转圈是详情路径，不能据此判定列表快照失败；须从对话退回列表，离开再进一次。
+5. 在列表里搜一次再退出搜索：落盘窗口仍应是未搜索时的当前页，不能变成搜到的那批行。
+6. 第二次打开刚看过的同一会话：应立刻看到上次已同步的窗口（含本轮翻过的更早页，在单会话约 400 条预算内），不得先空白再回填，也不得仅因离开再进就再次出现 Load earlier 去重拉已有页；断网时仍能看见缓存内容，输入保留为草稿。只有本地尚未持有的更早内容才需要联网 Load earlier。
+
+## 离线能力表（全局 Offline-First / iOS 基线 B9）
+
+本产品是「手机遥控开发机上的实时助手」，不是本地笔记。**禁止**做离线命令队列去假装主机执行成功；也**不能**整条豁免 B9——已有可读缓存与本地草稿语义。
+
+| 能力 | 没网时 | 说明 |
+|------|--------|------|
+| 看最近会话列表快照 | 离线可读 | 按开发机身份落盘的上次成功窗口；不是全库 |
+| 看刚看过的对话尾部 | 离线可读 | 约 50 会话 / 100 MiB 可丢弃缓存；不是完整历史 |
+| 输入框草稿 | 本地草稿 | 契约：断线保留；实现须按会话+开发机落盘（见缺口） |
+| 发送进开发机会话 | 必须在线 | 有回执能力时本地先出 pending 气泡；不明结果禁止自动重发 |
+| 助手实时回复 / 工具结果 | 必须在线 | 主机执行，手机只展示 |
+| 新建 / 停止 / 删除 / 置顶 | 必须在线 | 失败须可见；**禁止**本地假成功或稍后偷偷执行 |
+| 远端搜索、拉更早历史 | 已缓存页可读；未缓存页须在线 | 落盘保留本会话已同步的正式消息（含 Load earlier），单会话最多约 400 条，超出从最旧裁切并重算游标。再进同一会话：同代次且与尾部无缝衔接时零往返复用更早页；只有本地还没有的更早内容才打开发机。短会话 `has_more=false` 不出现按钮。2026-10-06 起往上读到窗口顶附近自动拉下一页（见 UI 知识库「Earlier history loads by itself」）；约 400 条上限只约束落盘缓存，**禁止**裁打开中的对话——旧实现裁内存，超过约 400 条后刚拉到的更早一页立刻被丢掉，手点像没反应、自动加载会无限重拉 |
+| 配对、推送登记、中继握手 | 必须在线 | — |
+
+工作集：当前配对开发机的列表窗口 + 最近打开过的对话尾部 + 未决发送身份 + 草稿。离线可用单元：一份完整列表快照行、一条已缓存的对话尾部；残缺时宁可标明不可用，也不要空表伪装「没有会话」。
+
+### 实现与验收（2026-09-10 已修）
+
+1. **删除会话**：仅远端确认后移除本地行；失败保留行并显示错误（fail-closed）。
+2. **停止 / 置顶**：失败写入列表区可见错误，不再吞掉。
+3. **取消配对**：同步清除对话尾部、未决发送、列表快照、聊天草稿。
+4. **草稿**：文字按开发机+会话落盘；发送成功清除；附图仍仅内存（可丢弃暂存）。
+5. **通知**：冷启动不申请；配对成功或连接开发机、以及设置页「开启通知」时按需申请；拒绝后可跳系统设置，回前台重检。
+
+能力表以本节为准；评审 Offline-First 时读本节，勿要求离线命令队列。
+
+## 跨规范备注（展示元数据 / 基线豁免）
+
+- 助手配色与关注状态色属**客户端拥有的固定集合**（与 CLI 契约对齐，改色须发版），**刻意不**走服务端下发展示元数据；禁止评审时误判为缺目录。权威对照见 `UI_DESIGN_KNOWLEDGE_BASE.md`「两端状态语义唯一来源」。
+- 基线条款若产品不适用，须在 `apple/AGENTS.md` 显式登记原因（禁止静默跳过）。截至 2026-09-10 仍待登记或待补：分层图标 / 快捷指令 / iPad 多尺寸 / 进行中任务是否做实时活动（通知按需已修）。
+
+<!-- 该文档整理/压缩于 2026-09-29；2026-09-10 终端暂下线，验收第 2/3 条同步标注；2026-09-10 Slice B 对话尾部缓存；2026-09-10 离线能力表；同日修删会话/通知/草稿缺口；同日落地「已翻更早页跨次复用 + 截断重算游标」（约 400 条/会话） -->
+
+## Global search interaction requirements (2026-10-06)
+
+- Entering a nonempty full-text query immediately shows a native progress indicator, including the debounce interval. No-results appears only after the current query completes. Clearing, dismissing or changing hosts invalidates pending work.
+- Return opens the highlighted result; arrow navigation only changes selection. Opening a match outside the cached session window first resolves its summary through `session.get`, remembers it without replacing the persisted list window, and then opens the pane. Lookup failure stays in the search panel and is retryable; dismissal or a host/client change prevents late navigation.
+- Repeated Return/click during a lookup is coalesced. Cached summaries open without a remote lookup. Debouncing avoids intermediate searches; equal trimmed queries reuse completed results within the same panel/client. Search rendering remains bounded by the existing top-40 response.
+- Native full-text latency (owner requirement, 2026-10-07): show completed results within 500 ms on an indexed local host, measured from the settled query through the published native result. Use a 50 ms cancellable input debounce rather than the previous 280 ms; retain immediate progress, query/client cancellation and response ownership. A real-window measurement after the host preparation fix was 557 ms with only 26 ms inside `search.fulltext`, so the input delay materially consumes this budget. The intermediate 100 ms wait produced settled-window results in 217 ms (`搜索`), 369–395 ms (`timeout`) and 504 ms (`的`) during concurrent builds; the final 50 ms wait leaves more time for broad-query native rendering. Host preparation, persistence, freshness and first-ever cold-cache limits are owned by [CLI search performance](https://github.com/corral-dev/corral/blob/main/docs/PERFORMANCE_KNOWLEDGE_BASE.md#全文搜索索引). The existing public [`Task.sleep(for:tolerance:clock:)`](https://developer.apple.com/documentation/swift/task/sleep%28for%3Atolerance%3Aclock%3A%29) inside SwiftUI `.task(id:)` provides the cancellable wait; no control or layout replacement is needed.
+- Cross-end scope: iPhone has server-assisted list filtering, not the Mac full-text panel; its rows already carry summaries. TUI full-text selection opens from the complete local session catalog and already reports initial indexing progress.
+
+Timing acceptance uses `-CorralInspectSearch` and the existing search result publication report. Set Debug-only `CORRAL_INSPECTION_SEARCH_DELAY` (seconds) to open the panel after app startup settles; this waits before opening the panel and is excluded from the query timer. A zero/missing delay keeps the original immediate-launch inspection for startup stress. Separate startup/whole-machine load from a query entered into an already-running app; report both honestly. Run exactly one Corral GUI and restore the installed Release afterwards.
+
+Final search acceptance (2026-10-07): with the 50 ms debounce, one real Mac window at a time and the real encrypted local host, settled-window publication took 486 ms for `搜索`, 385 ms for `的` and 375 ms for `timeout` (40 displayed matches each). These three samples meet the 500 ms goal; they are not a percentile or a guarantee under CPU saturation or public-relay latency. The actual native results/highlights and Connected · Local were inspected in a window capture. The 349 portable client tests and native lifecycle/search cancellation/opening probe passed. The host's complete suite covered 2,318 tests with two skips and successful isolated retries. TUI was exercised with the real catalog; iPhone has list filtering rather than this full-text panel, and its existing search endpoint returned successfully. No raw-history parser change was needed: this fix belongs to Corral's product cache/background ownership and Mac input timing. Keep first-ever preparation and provider-version cache invalidation separate from warm interactive latency.
+
+Verified cause: the full-text response carries keys and snippets, while `MacSplitArea` renders only keys with a resolved `SessionSummary`. Passing an uncached search key straight to `open` therefore produces no pane. Search now resolves via the existing direct-summary API and registers the opened summary through `rememberOpened` + `applySessionEvent`, keeping list-window membership intact. Selection changes no longer double as open actions; native row buttons and Return share one guarded open path.
+
+Acceptance: 335 portable tests and the actual Mac lifecycle-owner probe pass, including immediate debounce feedback, equal-trimmed-query reuse, cached/uncached opens, late host-switch responses, dismissal and lookup failure. A real-host Debug search for a historical term returned seven matches in 1.22 s including the 280 ms debounce; opening an uncached match resolved and selected its pane in 32.7 ms, and a window capture showed its conversation. These are one-run measurements, not a cold-index benchmark or a performance percentile. Physical Return/arrow-key input was not driven; inspection invokes the same Return handler. iPhone has no full-text panel; TUI catalog membership and indexing feedback already cover the matching path.
+
+Final verification and delivery: the TUI full-text modal's 15 existing behavior tests passed, including Return revealing older/collapsed sessions, arrow navigation and highlighted-row identity. Mac loading and result states were captured in a real window; the loading capture uses a Debug-only controlled delay to make that transient state inspectable, excluded from timing evidence. Mac 0.3.26 (30), tag `mac-v0.3.26`, source `e47186d`, was built as a universal Release, Developer ID signed with a secure timestamp and installed in `/Applications/Corral.app`. Active diagnostics read back 0.3.26 / 30, local transport ready and data plane attached. [Release](https://github.com/corral-dev/corral-apple/releases/tag/mac-v0.3.26) created; signed-ZIP upload launched as a detached, receipt-writing job (`/tmp/corral-search-0326/upload-job.json`), with asset completion not checked during the local-install acceptance. Physical keyboard/pointer interaction remains unexercised; installed UI is checked separately from the same-source Debug search scenario.
+
+## Compiler diagnostics (2026-10-07)
+
+The Agent Activity verification exposed existing Swift 6 diagnostics in the portable suite. Main-actor stores must be initialized and cleaned up by XCTest's asynchronous `@MainActor` setup/teardown overrides, not synchronous nonisolated overrides. Keep the same fixture isolation and cleanup. Apple documents this execution contract in [test setup and teardown](https://developer.apple.com/documentation/xctest/set-up-and-tear-down-state-in-your-tests).
+
+Bounded C buffers returned by address-formatting APIs must be decoded only through their first null terminator. The array `String(cString:)` overload is deprecated in the installed SDK; explicit UTF-8 decoding preserves the IPv4 strings. Explicitly discard the unused shell-close RPC response. Remove unnecessary `try` markers from nonthrowing session-dictionary helpers. Portable test source membership must account for every file: activity-state tests belong to the UI-only Xcode path; notification-ledger tests belong to the portable Core suite.
+
+The Xcode App Intents metadata tool reports `Metadata extraction skipped. No AppIntents.framework dependency found.` for the app targets. Corral currently declares no App Intents and does not link that framework, so there is no intended metadata to extract. Retain this tooling diagnostic without adding a framework only to silence it; the remaining limit is that no Siri/Shortcuts metadata is produced. Reassess when App Intents are introduced. Full build/test diagnostic results are recorded after verification.
+
+### New Session delivery diagnostic review
+
+Full, task-owned Release build directories were used with Xcode 27.2 for universal macOS and generic-device iOS; complete output was inspected rather than a final-line success summary. The redesigned New Session sources introduced no compiler diagnostic. Existing diagnostics below are assessed separately; successful builds do not mean warning-free builds.
+
+- `SessionWorkspaceView` and `MacSessionRow` use deprecated `Text + Text`: replace concatenation with `Text` interpolation while preserving the styled fragments and exact spacing. This follows Apple's [Text interpolation](https://developer.apple.com/documentation/swiftui/text).
+- `PaneEntrance` reads the immutable `MacMotion.pageOffset` in the sendable visual-effect closure: capture its value on the main actor before the closure, preserving the 24-point motion. Do not weaken isolation or add unchecked conformance.
+- `ChatMarkdown` font assignments (body, bold, italic, inline code, table header, heading and code block) report `NSFont`'s unavailable `Sendable` conformance in macOS. Retained: this is the existing typed attributed-string API; all font values are immutable, and [Apple's Font Handling](https://developer.apple.com/library/archive/documentation/TextFonts/Conceptual/CocoaTextArchitecture/FontHandling/FontHandling.html) explicitly permits multithreaded use. Prewarming discards its locally styled result; displayed/cache values originate in the view path. Risk: compiler-enforced sendability remains unavailable. Follow-up: migrate the native attribute boundary with Markdown rendering tests, rather than assert an unchecked conformance.
+- `ChatMarkdown` paragraph-style assignments (heading, unordered/ordered lists, code, quote and ordinary paragraph; iOS warns for the four shared branches) report `NSParagraphStyle`'s unavailable conformance. Retained: each style is built locally and is not mutated after assignment; the warm-up result is discarded and no concurrent style writer was found. [Apple's threading guidance](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/Multithreading/ThreadSafetySummary/ThreadSafetySummary.html) requires synchronization for mutable objects. Remaining risk: these values originate as mutable subclasses, so future mutations/worker-cache sharing would invalidate this assessment. Follow-up: freeze style objects and move the native styling boundary under explicit ownership, with paragraph-layout and concurrency coverage.
+- `CaptureSessionRunner.start/stop` report capture of non-Sendable `AVCaptureSession` and the related AVFoundation preconcurrency suggestion. Retained: both operations already use the same private serial queue; initial configuration finishes in `viewDidLoad` before `viewWillAppear` starts the session. No overlapping configuration/start/stop path was found. Risk: ownership relies on this lifecycle convention, with an existing unchecked wrapper; follow-up: move session configuration and lifecycle into one queue/actor-owned capture component. Do not add a preconcurrency import just to hide this diagnostic.
+- `ShellTerminalView.traitCollectionDidChange` is deprecated since iOS 17. Retained: the supported override still calls `super` and updates the terminal theme and keyboard appearance. No lost theme update was found. Follow-up: use trait registration and verify light/dark on a physical device; automatic callback coverage is a remaining compatibility risk.
+- xcodebuild's multiple matching macOS destinations warning arises from selecting the same host with both architectures. Release deliberately builds both `arm64` and `x86_64` with `ONLY_ACTIVE_ARCH=NO`; the first host selection does not narrow the binary. Retain with the universal binary readback; follow-up: use an explicit host destination when changing the build recipe.
+- The App Intents tool diagnostic is assessed above. Address-buffer and portable-test diagnostics are being corrected in the same full workspace; the final logs, not this prose, determine whether they remain.
+
+`MainThreadStallProbe` is a Debug-only, lock-protected thread sampler. Default MainActor isolation conflicts with its intentional background-thread reads of `running` and `start` and writes to `stalls`. Make the sampler type explicitly nonisolated ([Swift isolation rules](https://github.com/swiftlang/swift-evolution/blob/main/proposals/0466-control-default-actor-isolation.md)); keep the existing lock around every shared access and do not add an unchecked conformance. Release excludes this sampler.
+
+Final New Session delivery evidence: committed source `2617d8c`, Xcode 27.2, universal Mac Release and generic iOS Release built successfully from an immutable export of the complete workspace. Full logs were retained under `~/.config/corral/development/new-session-20261007/`. The C-buffer deprecations, four Text-concatenation diagnostic locations and the sendable visual-effect constant diagnostic are absent. The 354-test portable run and native lifecycle/client-diagnostic checks pass; that portable log contains no compiler warnings. Remaining Release diagnostics are the individually assessed native Markdown attributes, AVFoundation captures/import suggestion, legacy terminal trait callback and build tooling entries above. Final Debug coverage is limited to the New Session acceptance build; this is not an assertion that every current Debug target is warning-free.
+
+Agent Activity closure coverage: fresh Mac Debug and universal Release builds of source `5982259` and the generic-device iPhone Release of `2617d8c` were inspected through their complete retained logs. The activity, tool-card and scroll-view production sources match across those delivery commits. Portable Core has 354 passing tests with no compiler warnings after the fixture/API corrections; lifecycle and localization checks also pass. The Debug thread-sampler isolation diagnostic is resolved. The remaining Mac diagnostics are the seven font and six paragraph-style assignments assessed above plus the App Intents tool message; iPhone retains the four paragraph-style sites, two serial capture-queue sites and related import suggestion, the trait-change deprecation, and its App Intents tool messages. No warning suppression or new unchecked conformance was added. Physical phone appearance, native pointer operation and VoiceOver are outside this round's acceptance.
+
+
+### Creation reliability release diagnostics (2026-10-09)
+
+Complete logs cover 362 portable tests, fresh generic-device iOS Release, native Mac Release and universal Mac archive/export of `6965329`. The creation coordinator, pending-operation store, receipt polling and affected session views introduce no compiler warnings. The native Markdown, serial camera capture, legacy terminal trait and no-AppIntents diagnostics retain the individual assessments above.
+
+- DMG creation reports hdiutil's deprecated create/volume-name/format route. The tool created and signed the image, and Apple's notarization service accepted that exact DMG. Retain this existing packaging warning for this artifact; risk is future tool removal. Follow-up: evaluate the indicated diskutil image route with mount/install and notarization checks. Do not switch the packaging tool during a transient network failure.
+
+Neither retained tooling warning explains the CloudKit TLS failure recorded in the Mac distribution section. No compiler-warning suppression, unchecked conformance or validation bypass was added. Physical phone/window interaction remains outside current acceptance because the phone is unavailable and the Mac console is locked.

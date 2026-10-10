@@ -1,0 +1,20 @@
+import Foundation
+import Observation
+
+/// Device-local policy; every registration reports the current values to the host.
+@MainActor @Observable
+final class CompletionNotificationPreferences {
+    static let shared = CompletionNotificationPreferences()
+    static let completedKey = "corral.notifyCompleted"
+    static let abortedKey = "corral.notifyAborted"
+    var completed: Bool { didSet { defaults.set(completed, forKey: Self.completedKey) } }
+    var aborted: Bool { didSet { defaults.set(aborted, forKey: Self.abortedKey) } }
+    var registrationError: String?
+    @ObservationIgnored private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        completed = defaults.object(forKey: Self.completedKey) as? Bool ?? true
+        aborted = defaults.object(forKey: Self.abortedKey) as? Bool ?? true
+    }
+}

@@ -1,0 +1,171 @@
+import SwiftUI
+
+/// Desktop session row: exactly two lines at every content state.
+/// Line 1 is the assistant glyph, title, status dot and compact time; line 2
+/// is the project (omitted when the enclosing group already names it) and the
+/// preview. See docs/design/MACOS_CLIENT_DESIGN.md, sidebar density redesign.
+struct MacSessionRow: View {
+    @Environment(\.interfaceScale) private var interfaceScale
+    @Environment(\.sidebarRowSize) private var rowSize
+    let session: SessionSummary
+    /// Project name already shown by the enclosing group row, if any.
+    var groupProject: String?
+
+    var body: some View {
+        HStack(alignment: .top, spacing: Space.xs * interfaceScale) {
+            RuntimeGlyph(runtimeID: session.runtime, size: MacSidebarMetrics.glyph(rowSize))
+                .interfaceFrame(height: MacSidebarMetrics.titleLineHeight, alignment: .center)
+
+            VStack(alignment: .leading, spacing: MacSidebarMetrics.lineSpacing * interfaceScale) {
+                HStack(spacing: Space.xs * interfaceScale) {
+                    Text(SessionPresentation.displayTitle(for: session))
+                        .interfaceFont(.body)
+                        .fontWeight(needsPerson ? .semibold : nil)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Spacer(minLength: Space.xs * interfaceScale)
+                    statusDot
+                    TimelineView(.periodic(from: .now, by: 60)) { context in
+                        Text(verbatim: MacSidebarMetrics.compactTime(for: session, now: context.date))
+                            .interfaceFont(.subheadline.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    .fixedSize()
+                }
+                .interfaceFrame(height: MacSidebarMetrics.titleLineHeight)
+
+                secondaryLine
+                    .interfaceFont(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+        }
+        .interfacePadding(.vertical, MacSidebarMetrics.rowPadding)
+        .help(Text(verbatim: tooltip))
+        .accessibilityElement(children: .combine)
+    }
+
+    /// Waiting for an answer or unread: the title is semibold, the Mail
+    /// convention (design: Visual guidance pass); the trailing dot stays.
+    private var needsPerson: Bool {
+        switch SessionPresentation.statusMarker(for: session) {
+        case .waiting?, .unread?: true
+        default: false
+        }
+    }
+
+    /// Project then preview; a blank string keeps the line when both are empty.
+    private var secondaryLine: Text {
+        let preview = SessionPresentation.preview(for: session)
+        let project = visibleProject
+        switch (project, preview.isEmpty) {
+        case (nil, true): return Text(verbatim: " ")
+        case (nil, false): return Text(preview)
+        case (let project?, true): return project
+        case (let project?, false): return Text("\(project)  \(Text(preview).foregroundStyle(.tertiary))")
+        }
+    }
+
+    private var visibleProject: Text? {
+        let name = SessionPresentation.projectName(from: session)
+        if let groupProject, groupProject == name { return nil }
+        switch name {
+        case "~": return Text("sessions.project.home").fontWeight(.medium)
+        case "": return Text("sessions.project.unknown").fontWeight(.medium)
+        default: return Text(verbatim: name).fontWeight(.medium)
+        }
+    }
+
+    @ViewBuilder
+    private var statusDot: some View {
+        if let marker = SessionPresentation.statusMarker(for: session) {
+            Circle()
+                .fill(MacSidebarMetrics.color(for: marker))
+                .interfaceFrame(width: 7, height: 7)
+                .accessibilityLabel(Text(MacSidebarMetrics.label(for: marker)))
+        }
+    }
+
+    private var tooltip: String {
+        let preview = String(SessionPresentation.preview(for: session).prefix(280))
+        return [
+            SessionPresentation.displayTitle(for: session),
+            SessionPresentation.fullWorkspacePath(from: session),
+            preview,
+        ]
+        .filter { !$0.isEmpty }
+        .joined(separator: "\n")
+    }
+}
+
+/// Official assistant artwork as a bare sidebar glyph, without the phone's tile.
+struct RuntimeGlyph: View {
+    @Environment(\.interfaceScale) private var interfaceScale
+    let runtimeID: String?
+    let size: CGFloat
+
+    var body: some View {
+        Group {
+            if let name = Palette.runtimeLogoName(runtimeID) {
+                Image(name)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+            } else {
+                Image(systemName: Palette.runtimeSymbol(runtimeID))
+                    .resizable()
+                    .scaledToFit()
+                    .foregroundStyle(Palette.runtime(runtimeID))
+            }
+        }
+        .interfaceFrame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+}
+
+/// Sidebar sizing and the shared status-dot vocabulary.
+enum MacSidebarMetrics {
+    /// Line height of the body-sized title line; the glyph centers on it.
+    static let titleLineHeight: CGFloat = 17
+    /// Vertical rhythm (design: Vertical rhythm, owner request 2026-10-08).
+    static let lineSpacing: CGFloat = 2
+    static let rowPadding: CGFloat = 4
+
+    /// Follows the system sidebar icon size (General → Sidebar icon size).
+    static func glyph(_ rowSize: SidebarRowSize) -> CGFloat {
+        switch rowSize {
+        case .small: 14
+        case .large: 18
+        default: 16
+        }
+    }
+
+    /// Clock time today, short date before; the day section names the day.
+    static func compactTime(for session: SessionSummary, now: Date) -> String {
+        guard session.mtime > 0 else { return session.time }
+        let date = Date(timeIntervalSince1970: session.mtime)
+        if Calendar.current.isDate(date, inSameDayAs: now) {
+            return date.formatted(date: .omitted, time: .shortened)
+        }
+        return date.formatted(.dateTime.month(.defaultDigits).day())
+    }
+
+    static func color(for marker: SessionPresentation.StatusMarker) -> Color {
+        switch marker {
+        case .waiting: Palette.attentionWaiting
+        case .working, .recent: Palette.attentionWorking
+        case .unread: Palette.attentionUnread
+        }
+    }
+
+    static func label(for marker: SessionPresentation.StatusMarker) -> LocalizedStringKey {
+        switch marker {
+        case .waiting: "sessions.attention.waiting"
+        case .working: "sessions.attention.working"
+        case .unread: "sessions.attention.unread"
+        case .recent: "sessions.live"
+        }
+    }
+}
