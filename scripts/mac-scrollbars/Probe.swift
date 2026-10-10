@@ -114,12 +114,15 @@ struct Probe {
         precondition(markers.allSatisfy { $0.hitTest(.zero) == nil && $0.frame.size == .zero })
         scroll.contentView.scroll(to: NSPoint(x: 0, y: 60))
         scroll.reflectScrolledClipView(scroll.contentView)
+        pump()
+        host.layoutSubtreeIfNeeded()
+        pump()
         let offset = scroll.contentView.bounds.origin
         scroll.scrollerStyle = .legacy
         NotificationCenter.default.post(name: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil)
         pump()
         precondition(scroll.scrollerStyle == .overlay && scroll.hasVerticalScroller)
-        precondition(abs(scroll.contentView.bounds.origin.y - offset.y) < 1)
+        precondition(abs(scroll.contentView.bounds.origin.y - offset.y) < 1, "Reading offset changed: \(offset) -> \(scroll.contentView.bounds.origin)")
         precondition(scroll.verticalScroller?.action != nil && scroll.verticalScroller?.target != nil)
         precondition(scroll.contentView.frame.width >= scroll.bounds.width - 1)
         print("PASS \(label): public ownership, native scroller, no reserved column, transparent zero-size marker, preference recovery and reading offset")
