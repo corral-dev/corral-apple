@@ -52,6 +52,7 @@ struct MacPromptsCard: View {
                             row(prompt).id(prompt.id)
                         }
                     }
+                    .nativeOverlayScrollers()
                     .interfacePadding(Self.rowInset)
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listHeight = $0 }
                 }

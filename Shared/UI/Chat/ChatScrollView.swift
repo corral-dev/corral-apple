@@ -238,6 +238,7 @@ private struct NativeChatScrollView<Header: View, Content: View>: View {
             }
             .scrollTargetLayout()
             .chatReadableColumn()
+            .nativeOverlayScrollers()
             .environment(\.chatViewportHeight, containerHeight)
             .opacity(isJumpFaded ? 0 : 1)
         }

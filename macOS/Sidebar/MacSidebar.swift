@@ -179,12 +179,12 @@ struct MacSidebar: View {
         let active = DesktopSidebarProjection.activeSessions(sessions)
         return List(selection: selectionBinding) {
             if filter.isEmpty {
-                activeRow(active).tag(SidebarTag.board)
+                activeRow(active).nativeOverlayScrollers().tag(SidebarTag.board)
             }
             ForEach(sections) { section in
                 Section(isExpanded: expansion(for: section)) {
                     ForEach(section.items) { item in
-                        itemView(item)
+                        itemView(item).nativeOverlayScrollers()
                     }
                 } header: {
                     Text(verbatim: title(for: section))

@@ -216,6 +216,7 @@ struct NewSessionSheet: View {
             )) {
                 ForEach(visibleProjects) { project in
                     NewSessionProjectRow(project: project)
+                        .nativeOverlayScrollers()
                         .tag(project.path)
                         .id(project.path)
                         // Rounded highlights alone separate the rows.

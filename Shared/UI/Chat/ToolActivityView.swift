@@ -108,6 +108,7 @@ struct ToolActivityView: View {
                             .interfacePadding(.vertical, Space.md)
                     }
                 }
+                .nativeOverlayScrollers()
                 .interfacePadding(.horizontal, Space.base)
             }
             .scrollBounceBehavior(.basedOnSize)
