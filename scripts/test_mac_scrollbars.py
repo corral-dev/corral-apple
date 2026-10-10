@@ -10,6 +10,7 @@ with tempfile.TemporaryDirectory(prefix="corral-mac-scrollbars-") as directory:
     subprocess.run([
         "swiftc", "-swift-version", "6", "-default-isolation", "MainActor", "-parse-as-library",
         str(ROOT / "Shared/UI/Platform/NativeOverlayScrollers.swift"),
+        str(ROOT / "macOS/Sidebar/NativeSidebarSelection.swift"),
         str(ROOT / "scripts/mac-scrollbars/Probe.swift"), "-o", executable,
     ], check=True)
     subprocess.run([executable], check=True)

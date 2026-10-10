@@ -4,8 +4,8 @@ import AppKit
 import SwiftUI
 
 extension View {
-    /// Apply inside scroll content or a List/Form row, where the native
-    /// enclosingScrollView is public and unambiguous.
+    /// Apply inside ScrollView content. Native List/Form containers own their
+    /// scrolling layout and must not receive this override.
     func nativeOverlayScrollers() -> some View {
         #if os(macOS)
         background {
@@ -74,6 +74,7 @@ final class NativeOverlayScrollerView: NSView {
 private final class NativeOverlayScrollerOwner: NSObject {
     private static var associationKey: UInt8 = 0
     private weak var scroll: NSScrollView?
+    private var updateScheduled = false
 
     static func attach(to scroll: NSScrollView) {
         let owner: NativeOverlayScrollerOwner
@@ -83,7 +84,7 @@ private final class NativeOverlayScrollerOwner: NSObject {
             owner = NativeOverlayScrollerOwner(scroll: scroll)
             objc_setAssociatedObject(scroll, &associationKey, owner, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
         }
-        owner.applyOverlayStyle()
+        owner.scheduleOverlayStyle()
     }
 
     private init(scroll: NSScrollView) {
@@ -95,14 +96,23 @@ private final class NativeOverlayScrollerOwner: NSObject {
         )
     }
 
-    private func applyOverlayStyle() {
-        if let scroll, scroll.scrollerStyle != .overlay { scroll.scrollerStyle = .overlay }
+    private func scheduleOverlayStyle() {
+        guard !updateScheduled else { return }
+        updateScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            updateScheduled = false
+            // Retiling during updateNSView or row attachment can reenter the
+            // SwiftUI graph. Change geometry only after that update completes.
+            guard let scroll, !(scroll.documentView is NSTableView) else { return }
+            if scroll.scrollerStyle != .overlay { scroll.scrollerStyle = .overlay }
+        }
     }
 
     @objc nonisolated private func preferredStyleChanged(_ notification: Notification) {
         // AppKit also updates each scroll view for this notification. Reapply
         // after its delivery, without carrying the notification across actors.
-        DispatchQueue.main.async { [weak self] in self?.applyOverlayStyle() }
+        DispatchQueue.main.async { [weak self] in self?.scheduleOverlayStyle() }
     }
 
     deinit { NotificationCenter.default.removeObserver(self) }

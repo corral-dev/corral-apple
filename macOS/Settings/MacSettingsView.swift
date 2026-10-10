@@ -38,7 +38,6 @@ private struct MacGeneralSettings: View {
                         Text(verbatim: "\(percentage)%").tag(percentage)
                     }
                 }
-                .nativeOverlayScrollers()
                 if zoom.persistenceFailed {
                     Text("mac.zoom.save_failed").foregroundStyle(.red)
                 }
@@ -101,7 +100,6 @@ private struct MacMachinesSettings: View {
             if appModel.hosts.isEmpty {
                 Text("hosts.empty.title")
                     .foregroundStyle(.secondary)
-                    .nativeOverlayScrollers()
             } else {
                 Section {
                     Picker("mac.settings.machine", selection: Binding(
@@ -112,7 +110,6 @@ private struct MacMachinesSettings: View {
                             Text(verbatim: host.displayName).tag(host.hostID)
                         }
                     }
-                    .nativeOverlayScrollers()
                 }
                 if let host = selectedHost {
                     Section("hosts.custom_name") {

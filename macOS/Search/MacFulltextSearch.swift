@@ -129,7 +129,6 @@ struct MacFulltextSearch: View {
                 List(selection: $selection) {
                     ForEach(result.matches) { match in
                         Button { openMatch(match.key) } label: { matchRow(match) }
-                            .nativeOverlayScrollers()
                             .buttonStyle(.plain)
                             .disabled(openingKey != nil)
                             .tag(match.key).id(match.key)

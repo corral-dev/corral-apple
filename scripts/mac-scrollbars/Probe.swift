@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Observation
 
 @main
 struct Probe {
@@ -10,15 +11,8 @@ struct Probe {
             LazyVStack { ForEach(0..<100) { Text("Message \($0)") } }
                 .nativeOverlayScrollers()
         }.scrollIndicators(.automatic))
-        check("native sidebar rows", List {
-            ForEach(0..<100) { Text("Session \($0)").nativeOverlayScrollers() }
-        }.listStyle(.sidebar))
-        check("native grouped settings", Form {
-            Section("Display") {
-                Text("Display size").nativeOverlayScrollers()
-                ForEach(0..<40) { Text("Setting \($0)") }
-            }
-        }.formStyle(.grouped))
+        checkDeferredConfiguration()
+        checkSidebarSelection()
 
         let unrelated = NSScrollView()
         unrelated.scrollerStyle = .legacy
@@ -37,6 +31,65 @@ struct Probe {
         pump()
         precondition(released == nil && releasedScroll == nil && unrelated.scrollerStyle == .legacy)
         print("PASS configured container and marker release without a cycle; unrelated scroll views keep their style")
+    }
+
+    @MainActor
+    static func checkDeferredConfiguration() {
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        scroll.scrollerStyle = .legacy
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 900))
+        scroll.documentView = root
+        let marker = NativeOverlayScrollerView()
+        root.addSubview(marker)
+        for _ in 0..<100 { marker.applyOverlayStyle() }
+        precondition(scroll.scrollerStyle == .legacy, "Configuration changed geometry inside attachment/update")
+        pump()
+        precondition(scroll.scrollerStyle == .overlay)
+        scroll.scrollerStyle = .legacy
+        marker.applyOverlayStyle()
+        marker.removeFromSuperview()
+        pump()
+        precondition(scroll.scrollerStyle == .overlay)
+
+        let tableScroll = NSScrollView()
+        tableScroll.scrollerStyle = .legacy
+        let table = NSTableView()
+        tableScroll.documentView = table
+        let misplaced = NativeOverlayScrollerView()
+        table.addSubview(misplaced)
+        pump()
+        precondition(tableScroll.scrollerStyle == .legacy, "Native table layout was overridden")
+        print("PASS deferred geometry, repeated updates, detachment and native table exclusion")
+    }
+
+    @MainActor
+    static func checkSidebarSelection() {
+        let state = SidebarState()
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 850, height: 550),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: SidebarFixture(state: state))
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        pump()
+        guard let table = descendants(host).compactMap({ $0 as? NSOutlineView }).first else {
+            preconditionFailure("Native sidebar outline was not mounted")
+        }
+        var selections = 0
+        for cycle in 0..<3 {
+            for row in 1..<min(table.numberOfRows, 20) {
+                table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+                RunLoop.main.run(until: Date().addingTimeInterval(0.025))
+                host.layoutSubtreeIfNeeded()
+                if state.selection != nil { selections += 1 }
+                window.setContentSize(NSSize(width: 850 + cycle * 10, height: 550))
+            }
+        }
+        precondition(selections >= 40, "Native selection did not reach the SwiftUI binding")
+        let sidebarMarkers = descendants(table).compactMap { $0 as? NativeOverlayScrollerView }
+        precondition(sidebarMarkers.isEmpty, "Sidebar still configures SwiftUI's scroll layout")
+        print("PASS \(selections) native outline selections with detail replacement and resize")
     }
 
     @MainActor
@@ -87,5 +140,39 @@ struct Probe {
     @MainActor
     static func descendants(_ view: NSView) -> [NSView] {
         view.subviews.flatMap { [$0] + descendants($0) }
+    }
+}
+
+@MainActor @Observable
+private final class SidebarState {
+    var selection: Int?
+}
+
+private struct SidebarFixture: View {
+    let state: SidebarState
+
+    var body: some View {
+        NavigationSplitView {
+            List(selection: Binding(get: { state.selection }, set: { state.selection = $0 })) {
+                Section("Sessions") {
+                    ForEach(0..<40) { index in
+                        Text("Session \(index)")
+                            .background(NativeSidebarSelection())
+                            .tag(index)
+                    }
+                }
+            }
+            .listStyle(.sidebar)
+            .navigationSplitViewColumnWidth(min: 220, ideal: 260)
+        } detail: {
+            ScrollView {
+                LazyVStack {
+                    ForEach(0..<80) { Text("Conversation \(state.selection ?? 0), message \($0)") }
+                }
+                .nativeOverlayScrollers()
+            }
+            .id(state.selection)
+        }
+        .navigationSplitViewStyle(.balanced)
     }
 }

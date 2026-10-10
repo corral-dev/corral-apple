@@ -354,6 +354,9 @@ struct MacRootView: View {
         await notifications.resolvePending(feed: current, workspace: workspace)
         #if DEBUG
         MacInspection.apply(feed: current, workspace: workspace)
+        if ProcessInfo.processInfo.arguments.contains("-CorralInspectSidebarSwitches") {
+            Task { await MacScrollbarInspection.inspectSidebarIfRequested(feed: current, workspace: workspace) }
+        }
         if ProcessInfo.processInfo.arguments.contains("-CorralInspectZoom") {
             Task { await MacZoomInspection.run(zoom: zoom, workspace: workspace, feed: current, showSettings: { openSettings() }) }
         }

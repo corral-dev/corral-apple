@@ -6,6 +6,7 @@
 
 | 现象 / 触发词 | 权威源 |
 |---|---|
+| Mac 0.3.61 selecting any sidebar session aborts in AttributeGraph; outline selection reenters hosting layout through scroll-view tiling | [Mac scroll indicators](../design/MACOS_CLIENT_DESIGN.md#mac-scroll-indicators-owner-correction-2026-10-08) (List/Form ownership and deferred ScrollView configuration; remote crash evidence is separate from local updater quits) |
 | Mac CPU 占满、窗口缩放卡死或闪退、`NSGenericException` 提示过多 Update Constraints passes | [2026-10-05-mac-layout-loop.md](2026-10-05-mac-layout-loop.md)（原生导航和检查栏的尺寸协商循环；活动点动画也有单独的空闲 CPU 修复） |
 | 构建报 `missing Metal Toolchain` / `cannot execute tool 'metal'`、刚才还能编、系统 Xcode 被切到 beta | [2026-10-07-xcode-select-beta-missing-metal.md](2026-10-07-xcode-select-beta-missing-metal.md)（按命令设 `DEVELOPER_DIR` 指向装有 Metal 组件的 Xcode，不改全局 `xcode-select`） |
 | `simctl` 安装/启动/截图卡住、同时开了多个 iOS 运行时模拟器 | [2026-08-08-simctl-hang-dual-runtime.md](2026-08-08-simctl-hang-dual-runtime.md) |
