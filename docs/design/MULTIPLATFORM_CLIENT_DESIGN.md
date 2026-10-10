@@ -1,6 +1,6 @@
 # iPad and Mac client adaptation
 
-Status: direction agreed 2026-10-01; Mac route changed to native on 2026-10-04 (step 3); prerequisites in progress, no iPad/Mac UI built yet.
+Status: native iPhone and Mac clients are available as a public source beta. The Mac target is native macOS SwiftUI; iPad-specific adaptation remains a separate work item.
 
 ## Product rule: every Apple client is a remote client
 
@@ -16,7 +16,7 @@ The native Apple client is to become Corral's headline product, ahead of its ope
 4. **Split panes**: several sessions visible and operable at once.
 5. **Free switching between chat mode and terminal (TUI) mode** for every session.
 
-Features that weaken these points need an explicit owner trade-off. Until the client ships publicly, README presentation keeps the status-only rule in [Public presentation](../https://github.com/corral-dev/corral/blob/main/docs/PUBLIC_PRESENTATION_GUIDE.md); these points become the client's README pitch once it ships. Open-source state (2026-10-05): the Apple client source lives only in the private Forgejo repository; no GitHub repository exists yet.
+Features that weaken these points need an explicit owner trade-off. Public presentation follows the [presentation guide](https://github.com/corral-dev/corral/blob/main/docs/PUBLIC_PRESENTATION_GUIDE.md). The [Apple client repository](https://github.com/corral-dev/corral-apple) now publishes a self-build beta for iPhone and Mac; public App Store and TestFlight downloads are not available.
 
 ## Route
 

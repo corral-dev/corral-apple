@@ -79,7 +79,7 @@ Distinctive capabilities the Codex/Claude apps do not have, and where each one l
 | **Your prompts** outline for long conversations | Inspector | 1 |
 | **Full-text search across all sessions** (host `search`) | Toolbar search ⌘F; results replace the sidebar sections and open at the match | 2 |
 | **Side-by-side sessions** | Open in New Window / window tabs | 2 |
-| **Completion and waiting notifications** with quick reply | System notifications, driven by the live connection and the host's completion identity ([completion design](../https://github.com/corral-dev/corral/blob/main/docs/design/AGENT_COMPLETION_NOTIFICATIONS_DESIGN.md)) | 2 |
+| **Completion and waiting notifications** with quick reply | System notifications, driven by the live connection and the host's completion identity ([completion design](https://github.com/corral-dev/corral/blob/main/docs/design/AGENT_COMPLETION_NOTIFICATIONS_DESIGN.md)) | 2 |
 | **Menu bar glance**: needs-you list and quick open | Opt-in `MenuBarExtra` (then baseline B1 login item applies) | 3 |
 | **Phone ↔ Mac continuity**: the session open on iPhone appears as a Handoff offer on the Mac and vice versa (`NSUserActivity`) | System Handoff (Dock / app switcher) | 3 |
 | **All machines in one list** | Machine switcher "All machines" | 3, needs multi-connection core |
@@ -191,7 +191,7 @@ Verification (2026-10-04, Debug build on this Mac against the real host, inspect
 
 Delivery (2026-10-04, source `da1f267`): Mac 0.1.0 (1) Release, Developer ID signed with hardened runtime, installed at `/Applications/Corral.app`; launched without arguments it reused the existing pairing, connected over LAN and showed the live list with no keychain prompt. mac-v0.1.0 carries the signed app zip (not notarized). The same source shipped iPhone 1.0.102 (112) (v1.0.102): installed on the paired iPhone with version readback, AppShelf release 196 (direct upload after the home SOCKS proxy returned exit 97). A same-source Debug install on the phone showed the shared list (live, connected) and an unchanged conversation (assistant bubbles, half-screen cap, composer card); the ordinary Release was restored and launched afterwards. The Xcode-only iPhone test target compiles; it was not run on a device or simulator.
 
-Host defect found during acceptance (fixed in CLI 0.24.254): text sent to an ended session was pasted the moment the session was woken, before the assistant accepted Enter, so it sat unsent in the composer. See the [remote knowledge base](../https://github.com/corral-dev/corral/blob/main/docs/REMOTE_KNOWLEDGE_BASE.md) troubleshooting row.
+Host defect found during acceptance (fixed in CLI 0.24.254): text sent to an ended session was pasted the moment the session was woken, before the assistant accepted Enter, so it sat unsent in the composer. See the [remote knowledge base](https://github.com/corral-dev/corral/blob/main/docs/REMOTE_KNOWLEDGE_BASE.md) troubleshooting row.
 
 Debug-only inspection launch arguments (absent from Release): `-CorralInspectConversation` (+ `CORRAL_INSPECTION_SESSION_KEY`), `-CorralInspectNewSession`, `-CorralInspectSettings`, `-CorralInspectPairing`, `-CorralInspectLight` / `-CorralInspectDark`, and the shared `-CorralInspectDelivery` disposable-session send. Put `-AppleLanguages "(zh-Hans)"` first: a flag followed by `-AppleLanguages` swallows it and macOS then treats `(zh-Hans)` as a document to open, launching without the main window.
 
@@ -205,7 +205,7 @@ Owner requirement, recorded before implementation:
 
 ### TUI features and their native Mac form
 
-Authority for TUI behavior: [Terminal UI knowledge base](../https://github.com/corral-dev/corral/blob/main/docs/TERMINAL_UI_KNOWLEDGE_BASE.md). The Mac keeps the TUI's semantics and expresses them with native controls.
+Authority for TUI behavior: [Terminal UI knowledge base](https://github.com/corral-dev/corral/blob/main/docs/TERMINAL_UI_KNOWLEDGE_BASE.md). The Mac keeps the TUI's semantics and expresses them with native controls.
 
 | TUI | Mac |
 |---|---|
