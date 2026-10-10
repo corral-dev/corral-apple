@@ -44,3 +44,7 @@ The signing relationship follows Apple's [Keychain sharing documentation](https:
 Private tags, build caches, credentials, original Git history and private business planning do not enter the public repository.
 
 Current-publication visual limit: the environment did not permit a fresh desktop window capture. Earlier unverified phone preview images are not presented as current application screenshots. Public-source and build verification must be reported separately from visual acceptance.
+
+## Publication privacy verification
+
+The fresh public history excludes private signing identifiers, maintainer service endpoints, private planning and original private Git history. A whole-tree credential scan found no secrets. Exact leak-gate fingerprints cover only individually reviewed synthetic LAN fixtures, protocol-format examples, documentation paths/anchors and shell expressions. No file-wide or credential-rule exemption was added. Recheck changed findings before extending the list.
