@@ -23,16 +23,20 @@ struct Probe {
         let unrelated = NSScrollView()
         unrelated.scrollerStyle = .legacy
         weak var released: NativeOverlayScrollerView?
+        weak var releasedScroll: NSScrollView?
         autoreleasepool {
-            let root = NSView()
+            let scroll = NSScrollView()
+            releasedScroll = scroll
+            let root = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 900))
+            scroll.documentView = root
             let marker = NativeOverlayScrollerView()
             released = marker
             root.addSubview(marker)
             marker.removeFromSuperview()
         }
         pump()
-        precondition(released == nil && unrelated.scrollerStyle == .legacy)
-        print("PASS detached marker releases; unrelated scroll views keep their style")
+        precondition(released == nil && releasedScroll == nil && unrelated.scrollerStyle == .legacy)
+        print("PASS configured container and marker release without a cycle; unrelated scroll views keep their style")
     }
 
     @MainActor
@@ -69,11 +73,11 @@ struct Probe {
 
         let detached = markers.first
         window.contentView = NSView()
-        // A detached tree must not respond to subsequent preference changes.
+        // The policy survives virtualization of the initial marker row.
         scroll.scrollerStyle = .legacy
         NotificationCenter.default.post(name: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil)
         pump()
-        precondition(scroll.scrollerStyle == .legacy)
+        precondition(scroll.scrollerStyle == .overlay)
         precondition(detached?.window == nil)
     }
 

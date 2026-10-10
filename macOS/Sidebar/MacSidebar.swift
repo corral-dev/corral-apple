@@ -36,6 +36,7 @@ struct MacSidebar: View {
             .modifier(MacZoomContent())
             .task {
                 #if DEBUG
+                await MacScrollbarInspection.runIfRequested()
                 if ProcessInfo.processInfo.arguments.contains("-CorralInspectSidebarSelection") {
                     for tick in 0..<12 {
                         try? await Task.sleep(for: .seconds(3))

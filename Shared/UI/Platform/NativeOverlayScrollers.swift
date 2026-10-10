@@ -43,18 +43,12 @@ final class NativeOverlayScrollerView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        NotificationCenter.default.removeObserver(self)
-        guard window != nil else { return }
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(preferredStyleChanged),
-            name: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil
-        )
         applyOverlayStyle()
     }
 
     func applyOverlayStyle() {
         if let scroll = enclosingScrollView {
-            if scroll.scrollerStyle != .overlay { scroll.scrollerStyle = .overlay }
+            NativeOverlayScrollerOwner.attach(to: scroll)
         } else if superview != nil {
             scheduleRetry()
         }
@@ -67,10 +61,42 @@ final class NativeOverlayScrollerView: NSView {
             guard let self else { return }
             retryScheduled = false
             // One attachment retry only; never poll a detached content view.
-            if let scroll = enclosingScrollView, scroll.scrollerStyle != .overlay {
-                scroll.scrollerStyle = .overlay
+            if let scroll = enclosingScrollView {
+                NativeOverlayScrollerOwner.attach(to: scroll)
             }
         }
+    }
+
+}
+
+/// The policy lives as long as the native container, even after its initial
+/// SwiftUI row is virtualized. One observer serves all realized row markers.
+private final class NativeOverlayScrollerOwner: NSObject {
+    private static var associationKey: UInt8 = 0
+    private weak var scroll: NSScrollView?
+
+    static func attach(to scroll: NSScrollView) {
+        let owner: NativeOverlayScrollerOwner
+        if let existing = objc_getAssociatedObject(scroll, &associationKey) as? NativeOverlayScrollerOwner {
+            owner = existing
+        } else {
+            owner = NativeOverlayScrollerOwner(scroll: scroll)
+            objc_setAssociatedObject(scroll, &associationKey, owner, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        }
+        owner.applyOverlayStyle()
+    }
+
+    private init(scroll: NSScrollView) {
+        self.scroll = scroll
+        super.init()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(preferredStyleChanged),
+            name: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil
+        )
+    }
+
+    private func applyOverlayStyle() {
+        if let scroll, scroll.scrollerStyle != .overlay { scroll.scrollerStyle = .overlay }
     }
 
     @objc nonisolated private func preferredStyleChanged(_ notification: Notification) {
