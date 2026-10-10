@@ -153,7 +153,11 @@ private struct ChatPullToLoadEarlier: ViewModifier {
                 } action: { _, distance in
                     guard load != nil, !requested else { return }
                     pull.update(distance: Double(distance))
-                    progress = pull.progress
+                    // Fast scrolling reports geometry every frame: only touch the
+                    // owner's state when the ring value actually changes, or the
+                    // whole conversation rebuilds per frame.
+                    let next = pull.progress
+                    if progress != next { progress = next }
                     pulseIfArmed()
                 }
                 .onScrollPhaseChange { oldPhase, phase, context in
@@ -170,7 +174,7 @@ private struct ChatPullToLoadEarlier: ViewModifier {
                        phase == .decelerating || phase == .idle {
                         let shouldLoad = pull.release()
                         if shouldLoad, load != nil, !requested { requested = true }
-                        progress = nil
+                        if progress != nil { progress = nil }
                     }
                 }
                 .task(id: requested) {
@@ -181,7 +185,7 @@ private struct ChatPullToLoadEarlier: ViewModifier {
                 .onDisappear {
                     pull.reset()
                     requested = false
-                    progress = nil
+                    if progress != nil { progress = nil }
                 }
         } else {
             content
@@ -229,6 +233,10 @@ private struct NativeChatScrollView<Header: View, Content: View>: View {
     @State private var jumpGeneration = 0
     /// The conversation is faded out while a far jump moves under it.
     @State private var isJumpFaded = false
+    /// Geometry fires every frame while scrolling: read acknowledgements are
+    /// throttled here (the phase change already acks the gesture start).
+    /// Without this each frame sent its own mark-read RPC.
+    @State private var lastReadAck = Date.distantPast
 
     var body: some View {
         ScrollView {
@@ -239,7 +247,6 @@ private struct NativeChatScrollView<Header: View, Content: View>: View {
             .scrollTargetLayout()
             .chatReadableColumn()
             .nativeOverlayScrollers()
-            .environment(\.chatViewportHeight, containerHeight)
             .opacity(isJumpFaded ? 0 : 1)
         }
         #if os(macOS)
@@ -276,24 +283,31 @@ private struct NativeChatScrollView<Header: View, Content: View>: View {
         .defaultScrollAnchor(sizeChangeAnchor, for: .sizeChanges)
         .defaultScrollAnchor(.top, for: .alignment)
         .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { ids in
-            topVisibleID = ChatAutoLoadEarlierPolicy.topmostTimelineID(ids)
+            let next = ChatAutoLoadEarlierPolicy.topmostTimelineID(ids)
+            if topVisibleID != next { topVisibleID = next }
         }
         .onScrollPhaseChange { _, phase, context in
             let wasUserScrolling = isUserScrolling
-            isUserScrolling = phase == .tracking || phase == .interacting || phase == .decelerating
+            let scrolling = phase == .tracking || phase == .interacting || phase == .decelerating
+            if wasUserScrolling != scrolling { isUserScrolling = scrolling }
             // Tracking is only a touch, and animating can be an automatic jump.
-            isReadingScroll = phase == .interacting || phase == .decelerating
-            if phase == .interacting { acknowledgeRead() }
-            if isUserScrolling, !wasUserScrolling {
-                userHasScrolled = true
-                autoLoadHeld = false
+            let reading = phase == .interacting || phase == .decelerating
+            if isReadingScroll != reading { isReadingScroll = reading }
+            if phase == .interacting {
+                acknowledgeRead()
+                lastReadAck = Date.now
+            }
+            if scrolling, !wasUserScrolling {
+                if !userHasScrolled { userHasScrolled = true }
+                if autoLoadHeld { autoLoadHeld = false }
             }
             // Idle alone must not clear the initial follow: at open the viewport
             // briefly reports top before the bottom anchor settles, and clearing
             // here would strand a long transcript at the oldest messages.
             // User-driven phases already cover drag + momentum end state.
-            if isUserScrolling {
-                followsLatest = isNearBottom(context.geometry)
+            if scrolling {
+                let nearBottom = isNearBottom(context.geometry)
+                if followsLatest != nearBottom { followsLatest = nearBottom }
             }
         }
         .onScrollGeometryChange(for: ChatScrollState.self) { geometry in
@@ -304,14 +318,21 @@ private struct NativeChatScrollView<Header: View, Content: View>: View {
                 distanceFromTop: max(0, geometry.contentOffset.y + geometry.contentInsets.top)
             )
         } action: { _, state in
-            containerHeight = state.containerHeight
-            contentHeight = state.contentHeight
-            distanceFromTop = state.distanceFromTop
-            // A result arriving during this drag/momentum is read on its next move.
+            // Geometry fires every display frame during a fling: only promote
+            // values that actually moved, or every frame rebuilds this view and
+            // re-drives the pull-progress owner above it.
+            if abs(containerHeight - state.containerHeight) > 0.5 { containerHeight = state.containerHeight }
+            if abs(contentHeight - state.contentHeight) > 0.5 { contentHeight = state.contentHeight }
+            if abs(distanceFromTop - state.distanceFromTop) > 0.5 { distanceFromTop = state.distanceFromTop }
+            // A result arriving during this drag/momentum is read on its next move,
+            // throttled: the gesture start already acked above.
             // The metadata store gates duplicates before any write or RPC.
-            if isReadingScroll { acknowledgeRead() }
+            if isReadingScroll, Date.now.timeIntervalSince(lastReadAck) > 1.5 {
+                lastReadAck = Date.now
+                acknowledgeRead()
+            }
             // Resizing for the keyboard is not a request to stop following.
-            if isUserScrolling { followsLatest = state.nearBottom }
+            if isUserScrolling, followsLatest != state.nearBottom { followsLatest = state.nearBottom }
             loadEarlierIfReading()
         }
         .onChange(of: onPullToLoadEarlier == nil) { _, _ in

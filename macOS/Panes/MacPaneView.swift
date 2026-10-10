@@ -9,6 +9,7 @@ struct MacPaneView: View {
     @Environment(MacWorkspace.self) private var workspace
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.macVisiblePaneKeys) private var visiblePaneKeys
+    @Environment(\.macPaneLifetime) private var lifetime
     let session: SessionSummary
     let metadataStore: SessionListStore?
     var allowsClose = true
@@ -110,7 +111,7 @@ struct MacPaneView: View {
         .onGeometryChange(for: CGRect.self) { proxy in
             proxy.frame(in: .global)
         } action: { frame in
-            workspace.paneFrames[session.key] = frame
+            if lifetime == nil { workspace.paneFrames[session.key] = frame }
         }
         .onAppear { prepareStore() }
         #if DEBUG
@@ -123,8 +124,11 @@ struct MacPaneView: View {
         // Subscribe only on a ready connection, and again whenever the app
         // replaces its client (reconnect to the machine): a store started on a
         // client that is not connected yet never recovers on its own.
-        .task(id: PaneConnectionKey(sessionKey: session.key, client: appModel.clientIdentity, ready: isReady)) {
-            guard isReady else { return }
+        .task(id: PaneConnectionKey(sessionKey: session.key, client: appModel.clientIdentity,
+                                   ready: isReady && (lifetime?.isPresented ?? true))) {
+            guard isReady, lifetime?.isPresented ?? true else { return }
+            await lifetime?.waitForSuspension()
+            guard !Task.isCancelled, lifetime?.isPresented ?? true else { return }
             if let store, store.clientIdentity != appModel.clientIdentity {
                 await store.stop()
                 self.store = nil
@@ -142,6 +146,7 @@ struct MacPaneView: View {
         }
         .onAppear { metadataStore?.markReadLocally(key: session.key) }
         .onDisappear {
+            guard lifetime == nil else { return }
             workspace.paneFrames[session.key] = nil
             let owned = store
             Task { await owned?.stop() }
@@ -187,7 +192,15 @@ struct MacPaneView: View {
 
     @discardableResult
     private func prepareStore() -> ConversationStore? {
-        if let store { return store }
+        if let store {
+            #if DEBUG
+            if MacSessionSwitchInspection.enabled {
+                MacSessionSwitchInspection.stores[session.key] = store
+                MacSessionSwitchInspection.preparationMs[session.key] = 0
+            }
+            #endif
+            return store
+        }
         #if DEBUG
         let preparationStart = ContinuousClock.now
         #endif
@@ -205,6 +218,7 @@ struct MacPaneView: View {
             }
         }
         store = created
+        lifetime?.bind(created)
         #if DEBUG
         if MacSessionSwitchInspection.enabled {
             MacSessionSwitchInspection.stores[session.key] = created

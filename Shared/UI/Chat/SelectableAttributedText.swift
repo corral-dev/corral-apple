@@ -408,6 +408,13 @@ private final class FadingTextScrollView: NSScrollView {
     }
 
     func refreshEdgeFade() {
+        // Full-height Mac rows have no clipped tail. Native layout invokes this
+        // even when apply skipped it, so avoid forcing a backing layer here.
+        guard hasVerticalScroller else {
+            if layer?.mask != nil { layer?.mask = nil }
+            reportMoreBelow(false)
+            return
+        }
         wantsLayer = true
         let visible = contentView.bounds
         let contentHeight = documentView?.frame.height ?? 0
@@ -470,6 +477,7 @@ private struct MacSelectableTextView: NSViewRepresentable {
         var source: Source?
         var converted: NSAttributedString?
         var sizes: [CGFloat: CGSize] = [:]
+        lazy var measurement = MacTextMeasurement()
         /// Keep the chosen native text network alive through representable updates.
         var textStorage: NSTextStorage?
     }
@@ -516,17 +524,18 @@ private struct MacSelectableTextView: NSViewRepresentable {
         // preceding containers even when the value is already correct.
         if textView.isEditable { textView.isEditable = false }
         if !textView.isSelectable { textView.isSelectable = true }
-        textView.drawsBackground = false
+        if textView.drawsBackground { textView.drawsBackground = false }
         if !textView.isRichText { textView.isRichText = true }
-        textView.textContainerInset = .zero
-        textView.isVerticallyResizable = true
-        textView.isHorizontallyResizable = false
-        textView.maxSize = NSSize(
+        if textView.textContainerInset != .zero { textView.textContainerInset = .zero }
+        if !textView.isVerticallyResizable { textView.isVerticallyResizable = true }
+        if textView.isHorizontallyResizable { textView.isHorizontallyResizable = false }
+        let maximumSize = NSSize(
             width: CGFloat.greatestFiniteMagnitude,
             height: container == nil ? .greatestFiniteMagnitude : MacConversationTextDocument.initialCanvasHeight
         )
-        textView.autoresizingMask = [.width]
-        textView.focusRingType = .none
+        if textView.maxSize != maximumSize { textView.maxSize = maximumSize }
+        if textView.autoresizingMask != [.width] { textView.autoresizingMask = [.width] }
+        if textView.focusRingType != .none { textView.focusRingType = .none }
         scroll.documentView = textView
         apply(to: scroll, coordinator: context.coordinator)
         return scroll
@@ -554,7 +563,8 @@ private struct MacSelectableTextView: NSViewRepresentable {
         if let cached = coordinator.sizes[width] {
             natural = cached
         } else {
-            natural = Self.naturalSize(for: ns, font: font, width: width)
+            let measurement = selectionID.flatMap { document?.measurement(for: $0) } ?? coordinator.measurement
+            natural = measurement.size(for: ns, font: font, width: width)
             if coordinator.sizes.count >= 24 { coordinator.sizes.removeAll() }
             coordinator.sizes[width] = natural
         }
@@ -605,8 +615,15 @@ private struct MacSelectableTextView: NSViewRepresentable {
         textView.selectedTextAttributes = [
             .backgroundColor: NSColor.selectedTextBackgroundColor,
         ]
-        scroll.onMoreBelowChange = onMoreBelowChange
-        scroll.refreshEdgeFade()
+        // The Mac shows full-height bubbles (no cap): there is nothing to fade
+        // and no hidden tail to report. Skipping the layer/mask work here keeps
+        // fast flings from paying per-row CoreAnimation setup per update.
+        if maxHeight != nil {
+            scroll.onMoreBelowChange = onMoreBelowChange
+            scroll.refreshEdgeFade()
+        } else if scroll.onMoreBelowChange != nil {
+            scroll.onMoreBelowChange = nil
+        }
     }
 
     /// TextKit 1 on purpose. A TextKit 2 view lays out only its viewport, and
@@ -622,22 +639,6 @@ private struct MacSelectableTextView: NSViewRepresentable {
         container.widthTracksTextView = true
         layout.addTextContainer(container)
         return NSTextView(frame: .zero, textContainer: container)
-    }
-
-    /// Same engine and container settings as `makeTextView`, detached so
-    /// measurement never touches the live view.
-    static func naturalSize(for ns: NSAttributedString, font: NSFont, width: CGFloat) -> CGSize {
-        let storage = NSTextStorage(attributedString: ns)
-        let layout = NSLayoutManager()
-        storage.addLayoutManager(layout)
-        let container = NSTextContainer(size: NSSize(width: width, height: CGFloat.greatestFiniteMagnitude))
-        container.lineFragmentPadding = 0
-        layout.addTextContainer(container)
-        layout.ensureLayout(for: container)
-        let used = layout.usedRect(for: container)
-        let lineHeight = ceil(layout.defaultLineHeight(for: font))
-        let height = ceil(max(used.height, lineHeight))
-        return CGSize(width: min(ceil(max(used.width, 1)), width), height: height)
     }
 
     private func converted(_ coordinator: Coordinator) -> NSAttributedString {

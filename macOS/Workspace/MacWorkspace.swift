@@ -59,6 +59,7 @@ final class MacWorkspace {
     private(set) var scrollRequests: [String: ChatScrollRequest] = [:]
     /// Project shells of this machine (terminal panes look their titles up here).
     let shells = ProjectShellStore()
+    let paneSurfaces = MacPaneSurfaceCache()
     /// A terminal pane whose shell runs a program, waiting for close confirmation.
     var pendingTerminalClose: ProjectShell?
 
@@ -79,6 +80,7 @@ final class MacWorkspace {
     func selectHost(_ id: String?) {
         guard hostID != id else { return }
         stopLayoutWatch()
+        paneSurfaces.reset()
         hostID = id
         layout = .empty
         paneKeys = []

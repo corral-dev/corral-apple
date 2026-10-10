@@ -49,6 +49,8 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
     private var blocks: [Block] = []
     private var byID: [Int: Block] = [:]
     private var breaks: Set<Int> = []
+    private var measurements: [Int: MacTextMeasurement] = [:]
+    private var measurementOrder: [Int] = []
 
     override init() {
         super.init()
@@ -66,6 +68,10 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
     ) {
         guard self.identity != identity || self.sources != sources || self.style != style else { return }
         let sameConversation = self.identity == identity
+        if !sameConversation {
+            measurements.removeAll()
+            measurementOrder.removeAll()
+        }
         let selection = sameConversation ? layout.firstTextView?.selectedRange() : nil
         let start = selection.flatMap { position(at: $0.location) }
         let end = selection.flatMap { position(at: NSMaxRange($0)) }
@@ -107,6 +113,8 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
         }
         blocks = next
         byID = Dictionary(uniqueKeysWithValues: next.map { ($0.source.id, $0) })
+        measurements = measurements.filter { byID[$0.key] != nil }
+        measurementOrder.removeAll { byID[$0] == nil }
         self.identity = identity
         self.sources = sources
         self.style = style
@@ -151,6 +159,20 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
 
     func text(for id: Int) -> NSAttributedString? { byID[id]?.text }
 
+    /// Lazy rows may be recreated during reflow. Reuse detached measurements
+    /// across those lifetimes, bounded to the recently visible working set.
+    func measurement(for id: Int) -> MacTextMeasurement? {
+        guard byID[id] != nil else { return nil }
+        let measurement = measurements[id] ?? MacTextMeasurement()
+        measurements[id] = measurement
+        measurementOrder.removeAll { $0 == id }
+        measurementOrder.append(id)
+        if measurementOrder.count > 32 {
+            measurements.removeValue(forKey: measurementOrder.removeFirst())
+        }
+        return measurement
+    }
+
     /// Transfer focus before a lazy row leaves the native hierarchy. Let the
     /// native text view retire its own TextKit coordination during destruction:
     /// manual container disconnection leaves a stale selection cache on macOS 27.
@@ -187,6 +209,43 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
     private func index(of position: Position) -> Int? {
         guard let block = byID[position.id] else { return nil }
         return block.range.location + min(position.offset, block.range.length)
+    }
+}
+
+/// Detached from the live selection network so measuring cannot mutate it.
+@MainActor
+final class MacTextMeasurement {
+    private let storage = NSTextStorage()
+    private let layout = NSLayoutManager()
+    private let container = NSTextContainer(size: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
+    private var source: NSAttributedString?
+    private var sizes: [CGFloat: CGSize] = [:]
+    private var widths: [CGFloat] = []
+
+    init() {
+        storage.addLayoutManager(layout)
+        container.lineFragmentPadding = 0
+        layout.addTextContainer(container)
+    }
+
+    func size(for text: NSAttributedString, font: NSFont, width: CGFloat) -> CGSize {
+        if source !== text {
+            storage.setAttributedString(text)
+            source = text
+            sizes.removeAll()
+            widths.removeAll()
+        }
+        widths.removeAll { $0 == width }
+        widths.append(width)
+        if let cached = sizes[width] { return cached }
+        if container.size.width != width { container.size.width = width }
+        layout.ensureLayout(for: container)
+        let used = layout.usedRect(for: container)
+        let result = CGSize(width: min(ceil(max(used.width, 1)), width),
+                            height: ceil(max(used.height, layout.defaultLineHeight(for: font))))
+        sizes[width] = result
+        if widths.count > 64 { sizes.removeValue(forKey: widths.removeFirst()) }
+        return result
     }
 }
 #endif

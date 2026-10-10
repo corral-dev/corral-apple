@@ -13,7 +13,9 @@ struct MacSidebar: View {
     var onPair: () -> Void
 
     @State private var filter = ""
-    @State private var olderExpanded = false
+    @State private var sectionExpansion: [String: Bool] = [:]
+    @State private var runtimeFilter: Set<SessionRuntimeFilter> = []
+    @State private var projectFilter: Set<SessionProjectFilter> = []
     @State private var orderBox = OrderBox()
     @State private var sessionToDelete: SessionSummary?
     @State private var groupToRename: DesktopGroup?
@@ -30,6 +32,12 @@ struct MacSidebar: View {
     }
 
     private var sessions: [SessionSummary] { feed.listStore.windowSessions }
+    private var filteredSessions: [SessionSummary] {
+        SessionListFiltering.apply(sessions: sessions, runtimes: runtimeFilter, projects: projectFilter)
+    }
+    private var hasActiveScope: Bool {
+        !filter.isEmpty || !runtimeFilter.isEmpty || !projectFilter.isEmpty
+    }
 
     var body: some View {
         content
@@ -37,6 +45,20 @@ struct MacSidebar: View {
             .task {
                 #if DEBUG
                 await MacScrollbarInspection.runIfRequested()
+                if ProcessInfo.processInfo.arguments.contains("-CorralInspectSidebarGeometry") {
+                    for _ in 0..<10 {
+                        try? await Task.sleep(for: .seconds(1))
+                        guard !Task.isCancelled else { return }
+                        recordSidebarGeometry()
+                    }
+                }
+                if ProcessInfo.processInfo.arguments.contains("-CorralInspectCollapsedDates") {
+                    try? await Task.sleep(for: .seconds(3))
+                    let sections = DesktopSidebarProjection.sections(
+                        sessions: filteredSessions, layout: sidebarLayout, filter: filter, order: &orderBox.order
+                    )
+                    for section in sections { expansion(for: section).wrappedValue = false }
+                }
                 if ProcessInfo.processInfo.arguments.contains("-CorralInspectSidebarSelection") {
                     for tick in 0..<12 {
                         try? await Task.sleep(for: .seconds(3))
@@ -79,6 +101,19 @@ struct MacSidebar: View {
                 #endif
             }
             .searchable(text: $filter, placement: .sidebar, prompt: Text("mac.sidebar.filter"))
+            .onChange(of: feed.host.id) { _, _ in
+                filter = ""
+                runtimeFilter.removeAll()
+                projectFilter.removeAll()
+                sectionExpansion.removeAll()
+            }
+            .safeAreaBar(edge: .top, spacing: 0) {
+                MacSidebarFilters(sessions: sessions, runtimes: $runtimeFilter, projects: $projectFilter)
+                    .id(feed.host.id)
+                    .modifier(MacZoomContent())
+                    .interfacePadding(.horizontal, Space.md)
+                    .interfacePadding(.vertical, Space.xs)
+            }
             .safeAreaBar(edge: .bottom, spacing: 0) {
                 HStack(spacing: Space.sm * interfaceScale) {
                     MachineSwitcher(onPair: onPair)
@@ -175,9 +210,9 @@ struct MacSidebar: View {
 
     private var list: some View {
         let sections = DesktopSidebarProjection.sections(
-            sessions: sessions, layout: sidebarLayout, filter: filter, order: &orderBox.order
+            sessions: filteredSessions, layout: sidebarLayout, filter: filter, order: &orderBox.order
         )
-        let active = DesktopSidebarProjection.activeSessions(sessions)
+        let active = DesktopSidebarProjection.activeSessions(filteredSessions)
         return List(selection: selectionBinding) {
             if filter.isEmpty {
                 activeRow(active).nativeOverlayScrollers().tag(SidebarTag.board)
@@ -188,11 +223,23 @@ struct MacSidebar: View {
                         itemView(item).nativeOverlayScrollers()
                     }
                 } header: {
-                    Text(verbatim: title(for: section))
+                    Button {
+                        expansion(for: section).wrappedValue.toggle()
+                    } label: {
+                        Text(verbatim: title(for: section))
+                            .interfaceFont(.body.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .interfaceFrame(height: MacSidebarMetrics.rowHeight)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         }
         .listStyle(.sidebar)
+        .environment(\.defaultMinListRowHeight, MacSidebarMetrics.rowHeight * interfaceScale)
+        .environment(\.defaultMinListHeaderHeight, MacSidebarMetrics.rowHeight * interfaceScale)
         // Keep scrolling rows legible beneath the native search and machine bars.
         .scrollEdgeEffectStyle(.hard, for: [.top, .bottom])
         #if DEBUG
@@ -222,7 +269,7 @@ struct MacSidebar: View {
                 case .session(let session): entries.append(.session(session.key))
                 case .group(let group, let members):
                     entries.append(.group(group.id, members: members.map(\.key),
-                                          expanded: !group.collapsed || !filter.isEmpty))
+                                          expanded: !group.collapsed))
                 }
             }
         }
@@ -248,6 +295,10 @@ struct MacSidebar: View {
             Image(systemName: "rectangle.split.2x2")
                 .foregroundStyle(Palette.accent)
         }
+        .interfaceFrame(height: MacSidebarMetrics.rowHeight)
+        .listRowInsets(.vertical, 0)
+        .listRowSeparator(.visible, edges: .bottom)
+        .listRowSeparatorTint(Color(nsColor: .separatorColor).opacity(0.5), edges: .bottom)
         .badge(active.count)
         .background(NativeSidebarSelection())
     }
@@ -263,16 +314,26 @@ struct MacSidebar: View {
                     sessionRow(member, groupProject: SessionPresentation.projectName(cwd: group.project))
                 }
             } label: {
-                groupLabel(group, members: members)
+                Button {
+                    groupExpansion(group).wrappedValue.toggle()
+                } label: {
+                    groupLabel(group, members: members)
+                        .interfaceFrame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                    .buttonStyle(.plain)
                     .background(NativeSidebarSelection())
-                    .tag(SidebarTag.group(group.id))
                     .contextMenu { groupMenu(group) }
             }
+            .listRowSeparator(.visible, edges: .bottom)
+            .listRowSeparatorTint(Color(nsColor: .separatorColor).opacity(0.5), edges: .bottom)
+            .listRowInsets(.vertical, 0)
         }
     }
 
     private func sessionRow(_ session: SessionSummary, groupProject: String? = nil) -> some View {
         MacSessionRow(session: session, groupProject: groupProject)
+            .listRowInsets(.vertical, 0)
             .listRowSeparator(.visible, edges: .bottom)
             .listRowSeparatorTint(Color(nsColor: .separatorColor).opacity(0.5), edges: .bottom)
             .background(NativeSidebarSelection())
@@ -312,6 +373,7 @@ struct MacSidebar: View {
         }
         .lineLimit(1)
         .interfacePadding(.vertical, MacSidebarMetrics.rowPadding)
+        .interfaceFrame(height: MacSidebarMetrics.rowHeight)
         .help(Text(verbatim: group.project))
     }
 
@@ -433,7 +495,7 @@ struct MacSidebar: View {
                 } else if tag.hasPrefix("group:") {
                     let id = String(tag.dropFirst("group:".count))
                     if let group = workspace.layout.groups.first(where: { $0.id == id }) {
-                        workspace.openGroup(group, sessions: sessions)
+                        groupExpansion(group).wrappedValue.toggle()
                     }
                 }
             }
@@ -441,13 +503,19 @@ struct MacSidebar: View {
     }
 
     private func expansion(for section: DesktopSidebarProjection.Section) -> Binding<Bool> {
-        guard case .bucket(.older) = section.kind else { return .constant(true) }
-        return Binding(get: { olderExpanded || !filter.isEmpty }, set: { olderExpanded = $0 })
+        Binding(
+            get: {
+                if let expanded = sectionExpansion[section.id] { return expanded }
+                if case .bucket(.older) = section.kind { return hasActiveScope }
+                return true
+            },
+            set: { sectionExpansion[section.id] = $0 }
+        )
     }
 
     private func groupExpansion(_ group: DesktopGroup) -> Binding<Bool> {
         Binding(
-            get: { !group.collapsed || !filter.isEmpty },
+            get: { !group.collapsed },
             set: { expanded in Task { await workspace.setCollapsed(group, collapsed: !expanded) } }
         )
     }
@@ -465,6 +533,28 @@ struct MacSidebar: View {
     private var canCreate: Bool {
         appModel.isConnected(to: feed.host) && !SessionActionsMenu.isReadonly(access: appModel.connectedAccess)
     }
+
+    #if DEBUG
+    /// Read mounted native row geometry; no pointer, key or host-data actions.
+    private func recordSidebarGeometry() {
+        func descendants(_ view: NSView) -> [NSView] {
+            view.subviews.flatMap { [$0] + descendants($0) }
+        }
+        guard let root = NSApp.windows.first(where: { $0.title == "Corral" })?.contentView,
+              let outline = descendants(root).compactMap({ $0 as? NSOutlineView }).first else { return }
+        let rows: [[String: Any]] = (0..<min(outline.numberOfRows, 30)).map { row in
+            ["row": row, "height": outline.rect(ofRow: row).height,
+             "y": outline.rect(ofRow: row).minY,
+             "level": outline.level(forRow: row)]
+        }
+        let evidence: [String: Any] = ["rows": rows, "runtimeCount": runtimeFilter.count,
+                                       "projectCount": projectFilter.count,
+                                       "matchedSessions": filteredSessions.count]
+        if let data = try? JSONSerialization.data(withJSONObject: evidence, options: .prettyPrinted) {
+            try? data.write(to: URL(fileURLWithPath: "/tmp/corral-sidebar-geometry.json"), options: .atomic)
+        }
+    }
+    #endif
 }
 
 /// Paired-machine switcher at the bottom of the sidebar: current machine over

@@ -24,7 +24,7 @@ struct MacSplitArea: View {
                     if ProjectShell.isShellKey(key) {
                         MacShellPane(shellKey: key)
                     } else if let session = feed.listStore.session(for: key) {
-                        MacPaneView(
+                        MacPaneSurface(
                             session: session,
                             metadataStore: feed.listStore,
                             autoFocusComposer: autoFocusKey == key
@@ -110,7 +110,7 @@ struct MacActiveBoard: View {
             } else {
                 EqualPanes {
                     ForEach(shown) { session in
-                        MacPaneView(session: session, metadataStore: feed.listStore, allowsClose: false)
+                        MacPaneSurface(session: session, metadataStore: feed.listStore, allowsClose: false)
                             .modifier(PaneEntrance(key: session.key, direction: workspace.pendingEntrances[session.key]))
                     }
                 }

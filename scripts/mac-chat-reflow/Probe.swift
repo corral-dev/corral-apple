@@ -36,10 +36,41 @@ private struct ReflowScreen: View {
 @main
 struct ReflowProbe {
     @MainActor static func main() {
+        if CommandLine.arguments.contains("--inspect") {
+            inspectWindow()
+            return
+        }
         NSApplication.shared.setActivationPolicy(.prohibited)
         checkConversation(count: 3)
         checkConversation(count: 120)
         print("PASS native capsule hit targets, short/long zoom and width reflow, drawn text ranges, history position and native selection")
+    }
+
+    @MainActor static func inspectWindow() {
+        NSApplication.shared.setActivationPolicy(.accessory)
+        let state = ReflowState(), owner = NSObject()
+        state.scale = CommandLine.arguments.contains("--large") ? 1.5 : 1
+        let messages = (1...3).map {
+            RichMessage(seq: $0, text: "Message \($0). 中文 text remains drawn after zoom. "
+                + String(repeating: "Native selectable conversation text. ", count: 3), role: "assistant")
+        }
+        let window = NSWindow(contentRect: NSRect(x: 80, y: 80, width: 760, height: 520),
+                              styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.title = "Corral activity and zoom verification"
+        window.appearance = NSAppearance(named: .darkAqua)
+        let host = NSHostingView(rootView: ReflowScreen(state: state, owner: owner, messages: messages)
+            .tint(Color(red: 0.27, green: 0.48, blue: 0.36))
+            .background(Color(nsColor: .windowBackgroundColor)))
+        window.contentView = host
+        window.orderFront(nil)
+        pump(host, seconds: 1)
+        if CommandLine.arguments.contains("--popover"),
+           let button = descendants(host).compactMap({ $0 as? NSButton }).first {
+            button.performClick(nil)
+        }
+        pump(host, seconds: 45)
+        window.close()
     }
 
     @MainActor static func checkConversation(count: Int) {

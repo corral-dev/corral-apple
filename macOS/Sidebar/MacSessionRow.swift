@@ -43,6 +43,7 @@ struct MacSessionRow: View {
             }
         }
         .interfacePadding(.vertical, MacSidebarMetrics.rowPadding)
+        .interfaceFrame(height: MacSidebarMetrics.rowHeight)
         .help(Text(verbatim: tooltip))
         .accessibilityElement(children: .combine)
     }
@@ -111,7 +112,6 @@ struct RuntimeGlyph: View {
             if let name = Palette.runtimeLogoName(runtimeID) {
                 Image(name)
                     .resizable()
-                    .interpolation(.high)
                     .scaledToFit()
             } else {
                 Image(systemName: Palette.runtimeSymbol(runtimeID))
@@ -132,6 +132,8 @@ enum MacSidebarMetrics {
     /// Vertical rhythm (design: Vertical rhythm, owner request 2026-10-08).
     static let lineSpacing: CGFloat = 2
     static let rowPadding: CGFloat = 4
+    /// One content height for sessions, split groups and the board entry.
+    static let rowHeight: CGFloat = 52
 
     /// Follows the system sidebar icon size (General → Sidebar icon size).
     static func glyph(_ rowSize: SidebarRowSize) -> CGFloat {

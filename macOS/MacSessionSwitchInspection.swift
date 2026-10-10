@@ -26,24 +26,38 @@ enum MacSessionSwitchInspection {
             !$0.live && !$0.hosted && $0.attention == .none
                 && workspace.layout.group(containing: $0.key) == nil
                 && workspace.mode(for: $0.key) == .chat
-        }.prefix(3))
+        }.prefix(8))
         var measurements: [[String: Any]] = []
-        for cycle in 0..<4 {
-            for (index, session) in candidates.enumerated() {
+        for count in [1, 2, 4] where candidates.count >= count * 2 {
+          for cycle in 0..<4 {
+            for index in 0..<2 {
+                let chosen = Array(candidates.dropFirst(index * count).prefix(count))
+                guard let session = chosen.first else { continue }
                 try? await Task.sleep(for: .milliseconds(300))
                 guard !Task.isCancelled else { return }
-                stores[session.key] = nil
-                preparationMs[session.key] = nil
+                for session in chosen {
+                    stores[session.key] = nil
+                    preparationMs[session.key] = nil
+                }
                 let clock = ContinuousClock()
                 let started = clock.now
                 let stall = MainThreadStallProbe()
                 stall.begin()
-                workspace.open(session.key, sessions: sessions, takeKeys: false)
+                if count == 1 {
+                    workspace.open(session.key, sessions: sessions, takeKeys: false)
+                } else {
+                    // The same split presentation mutation without writing a
+                    // temporary group into the host or the user's TUI.
+                    workspace.inspectionRestoreWorkspace(keys: chosen.map(\.key), focus: session.key, board: false)
+                }
                 let selectionMs = milliseconds(started.duration(to: clock.now))
                 var visible = false
                 for _ in 0..<2000 {
-                    if let store = stores[session.key], !store.timelineItems.isEmpty,
-                       workspace.paneFrames[session.key] != nil,
+                    if chosen.allSatisfy({ session in
+                        let store = workspace.paneSurfaces.store(for: session.key) ?? stores[session.key]
+                        return store?.timelineItems.isEmpty == false
+                            && (workspace.paneFrames[session.key] != nil || workspace.paneSurfaces.isMounted(session.key))
+                    }),
                        let content = NSApp.windows.first(where: { $0.title == "Corral" && $0.isVisible })?.contentView {
                         content.layoutSubtreeIfNeeded()
                         content.displayIfNeeded()
@@ -57,15 +71,19 @@ enum MacSessionSwitchInspection {
                 var record = stall.end()
                 record["cycle"] = cycle
                 record["sessionIndex"] = index
+                record["panes"] = count
                 record["selectionMs"] = selectionMs
                 record["displayMs"] = displayMs
                 record["preparationMs"] = preparationMs[session.key] ?? -1
-                record["messages"] = stores[session.key]?.messages.count ?? 0
+                record["messages"] = chosen.reduce(0) {
+                    $0 + ((workspace.paneSurfaces.store(for: $1.key) ?? stores[$1.key])?.messages.count ?? 0)
+                }
                 record["visible"] = visible
                 measurements.append(record)
                 save(measurements)
-                stores[session.key] = nil
+                for session in chosen { stores[session.key] = nil }
             }
+          }
         }
         workspace.inspectionRestoreWorkspace(keys: original.0, focus: original.1, board: original.2)
         save(measurements)

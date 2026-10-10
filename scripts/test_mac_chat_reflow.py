@@ -8,6 +8,7 @@ WindowServer rendering while the console is locked.
 from pathlib import Path
 import subprocess
 import tempfile
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCES = [
@@ -23,4 +24,4 @@ with tempfile.TemporaryDirectory(prefix="corral-mac-chat-reflow-") as directory:
     executable = str(Path(directory) / "probe")
     subprocess.run(["swiftc", "-swift-version", "6", "-default-isolation", "MainActor", "-parse-as-library",
                     *[str(ROOT / path) for path in SOURCES], "-o", executable], check=True)
-    subprocess.run([executable], check=True)
+    subprocess.run([executable, *sys.argv[1:]], check=True)

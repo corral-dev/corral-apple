@@ -66,6 +66,7 @@ struct RuntimeEntry: Decodable { var id: String; var isActive: Bool { true } }
     func session(for key: String) -> SessionSummary? { sessions[key] }
 }
 @MainActor final class HostSessionFeed { var listStore = SessionListStore() }
+@MainActor final class MacPaneSurfaceCache { func reset() {} }
 
 // The standalone lifecycle probe does not link the SwiftTerm view. Its
 // workspace fixtures have no laid-out terminal body; fitting is an Xcode/runtime check.

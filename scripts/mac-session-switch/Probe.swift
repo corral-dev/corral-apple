@@ -1,0 +1,113 @@
+import AppKit
+import Observation
+import SwiftUI
+
+// The fixture substitutes only transport/product inputs, not the native cache.
+@MainActor final class ConversationStore {
+    var messages: [Message] = []
+    var stops = 0
+    var stopContinuation: CheckedContinuation<Void, Never>?
+    var pause = false
+    func stop() async {
+        stops += 1
+        if pause { await withCheckedContinuation { stopContinuation = $0 } }
+    }
+}
+struct Message { var text: String? }
+enum ConversationHistoryBudget { static let maxOfficialMessagesPerSession = 400 }
+struct SessionSummary { let key: String }
+@MainActor final class SessionListStore {}
+@MainActor @Observable final class AppModel {}
+@MainActor @Observable final class MacWorkspace {
+    let paneSurfaces = MacPaneSurfaceCache()
+    var paneFrames: [String: CGRect] = [:]
+    enum PaneMode { case chat, terminal }
+    func mode(for key: String) -> PaneMode { .chat }
+}
+struct MacPaneView: View {
+    let session: SessionSummary
+    let metadataStore: SessionListStore?
+    var allowsClose = true
+    var autoFocusComposer = false
+    var body: some View { Text(session.key) }
+}
+extension EnvironmentValues {
+    @Entry var interfaceScale: CGFloat = 1
+    @Entry var macVisiblePaneKeys: [String] = []
+}
+
+@main
+struct Probe {
+    @MainActor static func main() async {
+        _ = NSApplication.shared
+        let cache = MacPaneSurfaceCache()
+        let a = cache.entry(for: "a")
+        let store = ConversationStore()
+        a.lifetime.bind(store)
+        cache.present(a)
+        let oldLease = a.lease
+        cache.suspend(a, key: "a", lease: oldLease)
+        await a.lifetime.waitForSuspension()
+        precondition(store.stops == 1)
+        precondition(cache.entry(for: "a") === a)
+        cache.present(a)
+        cache.suspend(a, key: "a", lease: oldLease)
+        precondition(a.lifetime.isPresented, "old representable must not suspend a new mount")
+
+        store.pause = true
+        cache.suspend(a, key: "a", lease: a.lease)
+        for _ in 0..<100 where store.stopContinuation == nil { await Task.yield() }
+        precondition(store.stopContinuation != nil)
+        cache.present(a)
+        var finished = false
+        let resume = Task { await a.lifetime.waitForSuspension(); finished = true }
+        await Task.yield()
+        precondition(!finished, "watch must wait for outstanding unwatch")
+        store.stopContinuation?.resume()
+        await resume.value
+        precondition(finished)
+        store.pause = false
+
+        for index in 0..<12 {
+            let key = "dormant-\(index)"
+            let entry = cache.entry(for: key)
+            cache.present(entry)
+            cache.suspend(entry, key: key, lease: entry.lease)
+        }
+        precondition(cache.dormantCount == MacPaneSurfaceCache.maxDormant)
+        precondition(cache.entry(for: "a") === a, "visible entries cannot be evicted")
+
+        let terminal = cache.entry(for: "terminal")
+        terminal.keepDormant = false
+        cache.present(terminal)
+        cache.suspend(terminal, key: "terminal", lease: terminal.lease)
+        precondition(cache.entry(for: "terminal") !== terminal)
+        let big = cache.entry(for: "big")
+        let bigStore = ConversationStore()
+        bigStore.messages = [Message(text: String(repeating: "x", count: 2 * 1024 * 1024 + 1))]
+        big.lifetime.bind(bigStore)
+        cache.present(big)
+        cache.suspend(big, key: "big", lease: big.lease)
+        precondition(cache.entry(for: "big") !== big)
+
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 300),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let focus = cache.entry(for: "focus")
+        focus.view.rootView = AnyView(TextField("Draft", text: .constant("draft")))
+        window.contentView?.addSubview(focus.view)
+        focus.view.frame = window.contentView?.bounds ?? .zero
+        cache.present(focus)
+        let responder = NSTextView()
+        focus.view.addSubview(responder)
+        window.makeFirstResponder(responder)
+        cache.suspend(focus, key: "focus", lease: focus.lease)
+        precondition(window.firstResponder !== responder)
+        precondition(focus.view.window == nil)
+        cache.reset()
+        await a.lifetime.waitForSuspension()
+        precondition(!a.lifetime.isPresented)
+        precondition(cache.entry(for: "a") !== a, "host switch must release every surface")
+        print("PASS native surfaces: reuse, stale lease, unwatch ordering, dormant bound, terminal/large release, responder retirement, host reset")
+    }
+}

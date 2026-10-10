@@ -8,6 +8,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--output", required=True)
+parser.add_argument("--baseline-ref", help="Compare an existing source revision in the same process")
 args = parser.parse_args()
 sources = [
     "Shared/UI/Design/InterfaceScale.swift", "Shared/UI/Design/Typography.swift",
@@ -26,8 +27,15 @@ with tempfile.TemporaryDirectory(prefix="corral-sidebar-resize-") as directory:
     split = (ROOT / "macOS/Panes/MacSplitArea.swift").read_text()
     extracted = Path(directory) / "Split.swift"
     extracted.write_text("import SwiftUI\n" + split[split.index("extension ContainerValues {"):])
+    additional = []
+    if args.baseline_ref:
+        before = subprocess.check_output(["git", "show", f"{args.baseline_ref}:macOS/Panes/MacSplitArea.swift"], cwd=ROOT, text=True)
+        baseline = Path(directory) / "BaselineSplit.swift"
+        baseline.write_text("import SwiftUI\n" + before[before.index("struct EqualPanes<"):]
+                            .replace("EqualPanes", "BaselineEqualPanes").replace("PaneSlot", "BaselinePaneSlot"))
+        additional = ["-D", "RESIZE_BASELINE", str(baseline)]
     executable = Path(directory) / "probe"
     subprocess.run(["swiftc", "-O", "-swift-version", "6", "-default-isolation", "MainActor",
                     "-parse-as-library", *[str(ROOT / source) for source in sources],
-                    str(extracted), "-o", str(executable)], check=True)
+                    str(extracted), *additional, "-o", str(executable)], check=True)
     subprocess.run([str(executable), args.output], check=True)

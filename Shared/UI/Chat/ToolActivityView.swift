@@ -48,6 +48,8 @@ struct ToolActivityView: View {
                 summaryCapsule(isOpen: showDetail)
             }
             .buttonStyle(.borderless)
+            // Hierarchical label styles must resolve from neutral ink, not the app accent.
+            .tint(Color(nsColor: .labelColor))
             .accessibilityHint(Text("chat.agent_activity.open_hint"))
             // Bodies start loading on hover so the popover opens at its final size.
             .onHover { hovering in
