@@ -41,6 +41,5 @@
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Corral uses the local network to connect directly to your computer without a public relay.</string>
-
 </dict>
 </plist>

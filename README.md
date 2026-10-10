@@ -24,6 +24,8 @@ The clients are a **source beta**: build with Xcode. Public App Store and TestFl
 
 ### Mac
 
+Download the [signed Mac DMG](https://github.com/corral-dev/corral-apple/releases/latest) for automatic updates. The official app checks hourly, downloads updates in the background and installs them when you quit.
+
 With Xcode and its command-line tools installed:
 
 ```bash

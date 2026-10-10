@@ -13,6 +13,10 @@ struct CorralMacApp: App {
     private static let baseMinimumWidth: CGFloat = 760
 
     init() {
+        #if CORRAL_DIRECT_DOWNLOAD
+        // Keep scheduled updates alive independently of menus and Settings.
+        _ = MacUpdater.shared
+        #endif
         // Install before launch finishes so a cold-launch notification tap is retained.
         UNUserNotificationCenter.current().delegate = MacNotifications.shared
     }

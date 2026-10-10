@@ -24,6 +24,8 @@
 
 ### Mac
 
+下载[已签名的 Mac DMG](https://github.com/corral-dev/corral-apple/releases/latest)可获得自动更新。官方客户端默认每小时检查，后台下载，并在退出时安装。
+
 安装好 Xcode 及其命令行工具后运行：
 
 ```bash

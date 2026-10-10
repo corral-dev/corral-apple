@@ -16,7 +16,7 @@
 3. **Pi 等助手未进入远程解析表**：桌面预览走扫描器，手机详情走另一张表。Pi 曾完全未登记，打开详情只能拿到空窗口。不要把空白当成「这条 Pi 没有对话」。
 4. **详情页导航值绑在会刷新的列表行上**：会话列表的实时更新会换掉正在展示的那一行；再叠上整页左右滑的分页容器，系统返回手势会被抢走。
 
-压缩只能减少线路字节。它不能替代「只传当前窗口」「按序号补增量」或「历史解析与控制请求隔离」。完整目标架构见 `https://github.com/corral-dev/corral/blob/main/docs/design/MOBILE_REMOTE_DATA_PLANE_DESIGN.md`。
+压缩只能减少线路字节。它不能替代「只传当前窗口」「按序号补增量」或「历史解析与控制请求隔离」。完整目标架构见 `../https://github.com/corral-dev/corral/blob/main/docs/design/MOBILE_REMOTE_DATA_PLANE_DESIGN.md`。
 
 ## 已落地的止血
 
