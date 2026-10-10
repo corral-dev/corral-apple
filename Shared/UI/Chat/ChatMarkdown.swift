@@ -299,14 +299,14 @@ nonisolated enum ChatMarkdown: Sendable {
     /// visibly; a heading, a bold lead-in or a line ending in a colon stays
     /// close to what it introduces; list items stay tight inside a list.
     enum MacRhythm {
-        static let lineSpacing: CGFloat = 2
-        static let paragraphSpacing: CGFloat = 8
-        static let introSpacing: CGFloat = 3
+        static let lineSpacing: CGFloat = 4
+        static let paragraphSpacing: CGFloat = 10
+        static let introSpacing: CGFloat = 5
 
         static func heading(level: Int) -> NSParagraphStyle {
             let style = NSMutableParagraphStyle()
             style.lineSpacing = lineSpacing
-            style.paragraphSpacingBefore = level <= 2 ? 8 : 6
+            style.paragraphSpacingBefore = level <= 2 ? 10 : 8
             style.paragraphSpacing = introSpacing
             return style
         }
@@ -315,7 +315,7 @@ nonisolated enum ChatMarkdown: Sendable {
             let style = NSMutableParagraphStyle()
             style.lineSpacing = lineSpacing
             if boldLead {
-                style.paragraphSpacingBefore = 6
+                style.paragraphSpacingBefore = 8
                 style.paragraphSpacing = introSpacing
             } else {
                 let last = text.trimmingCharacters(in: .whitespacesAndNewlines).last

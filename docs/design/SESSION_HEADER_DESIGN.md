@@ -22,7 +22,7 @@ The proposed reading order is title → assistant/state → conversation content
 
 Delivery evidence: Release 1.0.76 (86) built successfully, was installed on the paired iPhone with matching device version readback, and was uploaded to AppShelf. On-device visual acceptance remains unverified: launch was denied because the phone was locked, and the captured screenshot was black.
 
-**Session fork naming:** the existing same-assistant action follows the shared [Fork Session terminology contract](https://github.com/corral-dev/corral/blob/main/docs/CROSS_RUNTIME_HANDOFF_KNOWLEDGE_BASE.md#session-fork-naming-2026-10-01), including menu and accessibility wording. The wire method remains `session.copy`.
+**Session fork naming:** the existing same-assistant action follows the shared [Fork Session terminology contract](../https://github.com/corral-dev/corral/blob/main/docs/CROSS_RUNTIME_HANDOFF_KNOWLEDGE_BASE.md#session-fork-naming-2026-10-01), including menu and accessibility wording. The wire method remains `session.copy`.
 
 Fork naming delivery: 1.0.77 (87) was installed on the paired iPhone with matching version readback and uploaded to AppShelf. The later launch command succeeded, but both captured phone images were black; the menu's physical visual acceptance remains unverified. The signed build and localization checks passed.
 

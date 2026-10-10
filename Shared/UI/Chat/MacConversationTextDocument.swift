@@ -123,6 +123,11 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
         } else {
             storage.setAttributedString(combined)
         }
+        if styleChanged {
+            // Lazy rows retain their native views. Redraw them after typography
+            // reflows even when their SwiftUI wrapper keeps the same frame.
+            for block in next { block.view?.needsDisplay = true }
+        }
         if let start, let end, let lower = index(of: start), let upper = index(of: end), upper >= lower {
             layout.firstTextView?.setSelectedRange(NSRange(location: lower, length: upper - lower))
         } else {

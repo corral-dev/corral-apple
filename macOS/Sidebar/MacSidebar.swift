@@ -273,6 +273,8 @@ struct MacSidebar: View {
 
     private func sessionRow(_ session: SessionSummary, groupProject: String? = nil) -> some View {
         MacSessionRow(session: session, groupProject: groupProject)
+            .listRowSeparator(.visible, edges: .bottom)
+            .listRowSeparatorTint(Color(nsColor: .separatorColor).opacity(0.5), edges: .bottom)
             .background(NativeSidebarSelection())
             // Reclaim part of the native outline's disclosure gutter on leaves.
             // Group headers keep their own disclosure space and hit target.

@@ -511,10 +511,13 @@ private struct MacSelectableTextView: NSViewRepresentable {
         } else {
             textView = Self.makeTextView(storage: storage)
         }
-        textView.isEditable = false
-        textView.isSelectable = true
+        // These flags are shared across the conversation's native text network.
+        // Reassigning selectability while reattaching a lazy row can lay out all
+        // preceding containers even when the value is already correct.
+        if textView.isEditable { textView.isEditable = false }
+        if !textView.isSelectable { textView.isSelectable = true }
         textView.drawsBackground = false
-        textView.isRichText = true
+        if !textView.isRichText { textView.isRichText = true }
         textView.textContainerInset = .zero
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false

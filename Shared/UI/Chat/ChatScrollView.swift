@@ -334,6 +334,7 @@ private struct NativeChatScrollView<Header: View, Content: View>: View {
                 showLatest()
             }
         }
+        #if os(iOS)
         .onChange(of: contentHeight) { oldHeight, newHeight in
             // First layout after async mount: onAppear can run before the lazy
             // stack realizes, so re-pin once content measures. Also re-pin when a
@@ -355,6 +356,7 @@ private struct NativeChatScrollView<Header: View, Content: View>: View {
             guard followsLatest, latestID != nil, newHeight > 0, oldHeight != newHeight else { return }
             showLatest()
         }
+        #endif
         .onChange(of: scrollToMessageID) { _, messageID in
             guard let messageID else { return }
             scrollToMessageID = nil
@@ -431,10 +433,17 @@ private struct NativeChatScrollView<Header: View, Content: View>: View {
 
     private var sizeChangeAnchor: UnitPoint? {
         guard followsLatest else { return nil }
+        #if os(macOS)
+        // Native anchoring owns reflow; .alignment keeps short conversations at
+        // the top. Explicit scroll requests during lazy size estimation can
+        // overshoot when a zoom or window resize changes the same geometry.
+        return .bottom
+        #else
         return ChatLatestFollowPolicy.shouldScrollToEdge(
             contentHeight: contentHeight,
             containerHeight: containerHeight
         ) ? .bottom : .top
+        #endif
     }
 
     private func showLatest() {

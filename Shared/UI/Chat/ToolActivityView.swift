@@ -47,7 +47,7 @@ struct ToolActivityView: View {
             } label: {
                 summaryCapsule(isOpen: showDetail)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.borderless)
             .accessibilityHint(Text("chat.agent_activity.open_hint"))
             // Bodies start loading on hover so the popover opens at its final size.
             .onHover { hovering in
@@ -247,6 +247,7 @@ struct ToolActivityView: View {
             // The open popover's source stays visibly attached to it.
             Capsule(style: .continuous)
                 .fill(Color.primary.opacity(isOpen ? 0.08 : 0))
+                .allowsHitTesting(false)
         }
         .contentShape(Capsule(style: .continuous))
     }

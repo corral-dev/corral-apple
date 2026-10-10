@@ -182,7 +182,7 @@ struct EqualPanes<Content: View>: View {
 
     var body: some View {
         Group(subviews: content) { panes in
-            HStack(spacing: 0) {
+            EqualPaneLayout(minimumWidth: MacSplitArea.paneMinimum) {
                 ForEach(Array(panes.enumerated()), id: \.element.id) { index, pane in
                     let key = pane.containerValues.macPaneKey
                     HStack(spacing: 0) {

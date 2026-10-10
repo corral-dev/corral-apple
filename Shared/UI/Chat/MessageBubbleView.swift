@@ -50,9 +50,6 @@ struct MessageBubbleView: View {
     private var isFailedUser: Bool {
         isUser && (message.delivery == .failed || message.delivery == .needsReview)
     }
-    private var isInFlightUser: Bool {
-        isUser && (message.delivery == .pending || message.delivery == .accepted)
-    }
     private var userForeground: Color {
         Palette.userBubbleForeground
     }
@@ -64,7 +61,6 @@ struct MessageBubbleView: View {
                     Spacer(minLength: Space.xxl * interfaceScale)
                 }
                 messageBubble
-                    .opacity(isInFlightUser ? 0.7 : 1)
             }
             if isFailedUser {
                 deliveryFeedback

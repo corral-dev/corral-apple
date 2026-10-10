@@ -188,6 +188,9 @@ struct MacPaneView: View {
     @discardableResult
     private func prepareStore() -> ConversationStore? {
         if let store { return store }
+        #if DEBUG
+        let preparationStart = ContinuousClock.now
+        #endif
         let hostID = appModel.selectedHost?.hostID ?? appModel.connectedHostID ?? ""
         let created = ConversationStore(
             sessionKey: session.key,
@@ -202,6 +205,14 @@ struct MacPaneView: View {
             }
         }
         store = created
+        #if DEBUG
+        if MacSessionSwitchInspection.enabled {
+            MacSessionSwitchInspection.stores[session.key] = created
+            MacSessionSwitchInspection.preparationMs[session.key] = MacSessionSwitchInspection.milliseconds(
+                preparationStart.duration(to: .now)
+            )
+        }
+        #endif
         return created
     }
 }
