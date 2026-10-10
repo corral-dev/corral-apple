@@ -26,6 +26,9 @@ enum MacScrollbarInspection {
                 // sidebar click. No pointer or keyboard input is synthesized.
                 table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
                 try? await Task.sleep(for: .milliseconds(200))
+                guard let scroll = table.enclosingScrollView,
+                      scroll.scrollerStyle == .overlay,
+                      scroll.contentView.frame.width >= scroll.bounds.width - 1 else { return }
                 attempts += 1
                 if let key = workspace.focusedKey, !workspace.showingBoard { selected.insert(key) }
             }
@@ -36,6 +39,8 @@ enum MacScrollbarInspection {
             "attempts": attempts,
             "distinctSessions": selected.count,
             "sidebarMarkers": descendants(table).filter { $0 is NativeOverlayScrollerView }.count,
+            "sidebarOverlay": table.enclosingScrollView?.scrollerStyle == .overlay,
+            "sidebarHasReservedColumn": table.enclosingScrollView.map { $0.contentView.frame.width < $0.bounds.width - 1 } ?? true,
             "hostLayoutUnchanged": groups == workspace.layout.groups.map { "\($0.id):\($0.members.joined(separator: ","))" },
         ]
         if let data = try? JSONSerialization.data(withJSONObject: evidence, options: [.prettyPrinted, .sortedKeys]) {

@@ -11,6 +11,12 @@ struct Probe {
             LazyVStack { ForEach(0..<100) { Text("Message \($0)") } }
                 .nativeOverlayScrollers()
         }.scrollIndicators(.automatic))
+        check("sidebar list", List {
+            ForEach(0..<100) { Text("Session \($0)").nativeOverlayScrollers() }
+        }.listStyle(.sidebar))
+        check("settings form", Form {
+            ForEach(0..<100) { Text("Setting \($0)").nativeOverlayScrollers() }
+        }.formStyle(.grouped))
         checkDeferredConfiguration()
         checkSidebarSelection()
 
@@ -55,11 +61,12 @@ struct Probe {
         tableScroll.scrollerStyle = .legacy
         let table = NSTableView()
         tableScroll.documentView = table
-        let misplaced = NativeOverlayScrollerView()
-        table.addSubview(misplaced)
+        let tableMarker = NativeOverlayScrollerView()
+        table.addSubview(tableMarker)
+        precondition(tableScroll.scrollerStyle == .legacy, "Table geometry changed synchronously")
         pump()
-        precondition(tableScroll.scrollerStyle == .legacy, "Native table layout was overridden")
-        print("PASS deferred geometry, repeated updates, detachment and native table exclusion")
+        precondition(tableScroll.scrollerStyle == .overlay, "Native table lost overlay styling")
+        print("PASS deferred geometry, repeated updates, detachment and native table overlay")
     }
 
     @MainActor
@@ -76,20 +83,25 @@ struct Probe {
         guard let table = descendants(host).compactMap({ $0 as? NSOutlineView }).first else {
             preconditionFailure("Native sidebar outline was not mounted")
         }
+        guard let scroll = table.enclosingScrollView else { preconditionFailure("Missing sidebar scroll view") }
         var selections = 0
         for cycle in 0..<3 {
             for row in 1..<min(table.numberOfRows, 20) {
+                scroll.scrollerStyle = .legacy
+                NotificationCenter.default.post(name: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil)
                 table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
                 RunLoop.main.run(until: Date().addingTimeInterval(0.025))
                 host.layoutSubtreeIfNeeded()
+                precondition(scroll.scrollerStyle == .overlay, "Sidebar reverted to a coarse scrollbar")
+                precondition(scroll.contentView.frame.width >= scroll.bounds.width - 1, "Sidebar reserves a scrollbar column")
                 if state.selection != nil { selections += 1 }
                 window.setContentSize(NSSize(width: 850 + cycle * 10, height: 550))
             }
         }
         precondition(selections >= 40, "Native selection did not reach the SwiftUI binding")
         let sidebarMarkers = descendants(table).compactMap { $0 as? NativeOverlayScrollerView }
-        precondition(sidebarMarkers.isEmpty, "Sidebar still configures SwiftUI's scroll layout")
-        print("PASS \(selections) native outline selections with detail replacement and resize")
+        precondition(!sidebarMarkers.isEmpty, "Sidebar overlay configuration is missing")
+        print("PASS \(selections) native outline selections retaining overlay geometry during preference changes, detail replacement and resize")
     }
 
     @MainActor
@@ -161,6 +173,7 @@ private struct SidebarFixture: View {
                     ForEach(0..<40) { index in
                         Text("Session \(index)")
                             .background(NativeSidebarSelection())
+                              .nativeOverlayScrollers()
                             .tag(index)
                     }
                 }

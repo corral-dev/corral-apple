@@ -4,8 +4,8 @@ import AppKit
 import SwiftUI
 
 extension View {
-    /// Apply inside ScrollView content. Native List/Form containers own their
-    /// scrolling layout and must not receive this override.
+    /// Configure the enclosing native scroller after SwiftUI's current update.
+    /// Attach inside scrolling content, including realized List/Form rows.
     func nativeOverlayScrollers() -> some View {
         #if os(macOS)
         background {
@@ -104,7 +104,7 @@ private final class NativeOverlayScrollerOwner: NSObject {
             updateScheduled = false
             // Retiling during updateNSView or row attachment can reenter the
             // SwiftUI graph. Change geometry only after that update completes.
-            guard let scroll, !(scroll.documentView is NSTableView) else { return }
+            guard let scroll else { return }
             if scroll.scrollerStyle != .overlay { scroll.scrollerStyle = .overlay }
         }
     }
