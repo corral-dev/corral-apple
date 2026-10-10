@@ -48,3 +48,7 @@ Current-publication visual limit: the environment did not permit a fresh desktop
 ## Publication privacy verification
 
 The fresh public history excludes private signing identifiers, maintainer service endpoints, private planning and original private Git history. A whole-tree credential scan found no secrets. Exact leak-gate fingerprints cover only individually reviewed synthetic LAN fixtures, protocol-format examples, documentation paths/anchors and shell expressions. No file-wide or credential-rule exemption was added. Recheck changed findings before extending the list.
+
+## Generated signing configuration
+
+XcodeGen generates the iPhone and notification-extension property lists from `project.yml`. Both `info.properties` mappings must declare `CorralKeychainAccessGroup: $(AppIdentifierPrefix)$(CORRAL_KEYCHAIN_GROUP)`. Keeping that key only in a pre-generated plist loses it during regeneration; the Keychain adapter then correctly refuses to access any group. Verify both generated property lists after running XcodeGen, and compare the built values with the matching entitlements before device signing.

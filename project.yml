@@ -67,6 +67,7 @@ targets:
     info:
       path: iOS/Info.plist
       properties:
+        CorralKeychainAccessGroup: $(AppIdentifierPrefix)$(CORRAL_KEYCHAIN_GROUP)
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSBonjourServices:
@@ -127,6 +128,7 @@ targets:
     info:
       path: NotificationService/Info.plist
       properties:
+        CorralKeychainAccessGroup: $(AppIdentifierPrefix)$(CORRAL_KEYCHAIN_GROUP)
         CFBundleDisplayName: Corral
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
