@@ -160,6 +160,8 @@ struct HostSettingsView: View {
 
 struct SessionTextSizeSettingsView: View {
     @Environment(AppModel.self) private var appModel
+    @Environment(\.interfaceScale) private var interfaceScale
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         VStack(spacing: 0) {
@@ -170,14 +172,20 @@ struct SessionTextSizeSettingsView: View {
                             seq: 1,
                             role: "user",
                             text: String(localized: "settings.session_text_size.preview.user")
-                        )
+                        ),
+                        interfaceScale: interfaceScale,
+                        sessionTextScale: appModel.sessionTextSize.scale,
+                        colorScheme: colorScheme
                     )
                     MessageBubbleView(
                         message: RichMessage(
                             seq: 2,
                             role: "assistant",
                             text: String(localized: "settings.session_text_size.preview.assistant")
-                        )
+                        ),
+                        interfaceScale: interfaceScale,
+                        sessionTextScale: appModel.sessionTextSize.scale,
+                        colorScheme: colorScheme
                     )
                 }
                 .padding(Space.base)

@@ -15,12 +15,11 @@ struct NewSessionSheet: View {
     @State private var isCreating = false
     @State private var creatingComboID: String?
     #if os(macOS)
-    @State private var hoveredComboID: String?
+    @State private var showProjects = false
     #endif
     @State private var unconfirmedCreation: PendingSessionCreation?
     @State private var errorMessage: String?
     @State private var hapticScope = HapticScope()
-    @State private var projectQuery = ""
     @State private var navigationPath: [NewSessionRoute] = []
 
     var body: some View {
@@ -86,18 +85,12 @@ struct NewSessionSheet: View {
 
     private var usableRuntimes: [RuntimeEntry] { options.runtimes.filter(\.isUsable) }
 
-    private var visibleProjects: [ProjectEntry] {
-        ProjectEntry.matching(options.projects, query: projectQuery)
-    }
-
-    /// A project hidden by the search cannot be started by accident.
-    private var canStart: Bool {
-        options.canCreate && visibleProjects.contains { $0.path == options.selectedProject }
-    }
+    private var canStart: Bool { options.canCreate }
 
     #if os(macOS)
-    /// A desktop dialog: recents are a shortcut beside the main choices,
-    /// leaving the entire project catalog and the action in one viewport.
+    /// A desktop dialog in the quick filters' form: one row of assistant
+    /// capsules, one row of recent-project capsules with More for the whole
+    /// catalog, then the action. Selections are single-choice.
     private var macContent: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("session.new.title")
@@ -106,92 +99,107 @@ struct NewSessionSheet: View {
                 .interfacePadding(.top, Space.xl)
                 .interfacePadding(.bottom, Space.lg)
 
-            HStack(alignment: .top, spacing: 0) {
-                if !recentCombos.isEmpty {
-                    macRecents
-                        .interfaceFrame(width: 224)
-                    Divider()
+            VStack(alignment: .leading, spacing: Space.sm * interfaceScale) {
+                macFieldLabel("session.new.runtime")
+                MacFilterChoices {
+                    ForEach(usableRuntimes) { runtime in
+                        MacQuickFilterButton(selected: runtime.id == options.selectedRuntime) {
+                            if let logo = Palette.runtimeLogoName(runtime.id) {
+                                Image(logo)
+                                    .resizable()
+                                    .renderingMode(.original)
+                                    .scaledToFit()
+                                    .interfaceFrame(width: 16, height: 16)
+                                    .accessibilityHidden(true)
+                            }
+                            Text(verbatim: runtime.name ?? runtime.id)
+                        } action: {
+                            options.selectedRuntime = runtime.id
+                        }
+                    }
                 }
-                macChoices
-                    .interfacePadding(.horizontal, Space.xl)
+                .interfacePadding(.bottom, Space.md)
+                macFieldLabel("session.new.project")
+                HStack(spacing: Space.xs * interfaceScale) {
+                    MacFilterChoices {
+                        ForEach(quickProjects) { project in
+                            MacQuickFilterButton(selected: project.path == options.selectedProject) {
+                                Text(verbatim: project.displayName)
+                            } action: {
+                                options.selectedProject = project.path
+                            }
+                            .help(Text(verbatim: project.path))
+                        }
+                    }
+                    Button {
+                        showProjects = true
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .interfaceFont(.body.weight(.medium))
+                            .foregroundStyle(.secondary)
+                            .interfaceFrame(width: 28, height: MacSidebarMetrics.filterHeight)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(Text("sessions.filter.more"))
+                    .help(Text("sessions.filter.more"))
+                    .popover(isPresented: $showProjects) {
+                        MacNewSessionProjectPopover(projects: options.projects, selection: $options.selectedProject)
+                    }
+                }
+                .overlay(alignment: .leading) {
+                    if options.isLoading && options.projects.isEmpty { ProgressView().interfaceControlSize(.small) }
+                }
+                creationRecovery
+                if let message = errorMessage ?? options.errorMessage {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(verbatim: message)
+                            .interfaceFont(.callout)
+                            .foregroundStyle(Palette.danger)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if options.errorMessage != nil {
+                            Button("action.retry") { Task { await loadOptions() } }
+                                .disabled(options.isLoading || isCreating)
+                        }
+                    }
+                }
             }
-            .interfacePadding(.bottom, Space.lg)
+            .disabled(options.isLoading || isCreating)
+            .interfacePadding(.horizontal, Space.xl)
+            .interfacePadding(.bottom, Space.xl)
 
             Divider()
             macFooter
         }
-        .interfaceFrame(width: 820, height: 540)
+        .interfaceFrame(width: 560)
+        .focusEffectDisabled()
     }
 
-    private var macRecents: some View {
-        VStack(alignment: .leading, spacing: Space.sm * interfaceScale) {
-            Text("session.new.recent.compact")
-                .interfaceFont(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .interfacePadding(.horizontal, Space.base)
-            List {
-                ForEach(recentCombos) { combo in
-                    recentRow(combo)
-                        .listRowSeparator(.hidden)
-                }
-            }
-            .listStyle(.inset)
-            .scrollContentBackground(.hidden)
-        }
-        .interfacePadding(.horizontal, Space.sm)
+    private func macFieldLabel(_ key: LocalizedStringKey) -> some View {
+        Text(key)
+            .interfaceFont(.subheadline.weight(.semibold))
+            .foregroundStyle(.secondary)
     }
 
-    private var macChoices: some View {
-        VStack(alignment: .leading, spacing: Space.sm * interfaceScale) {
-            Text("session.new.runtime")
-                .interfaceFont(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
-            RuntimeSegmentedControl(runtimes: usableRuntimes, selection: $options.selectedRuntime)
-                .interfaceControlSize(.regular)
-                .disabled(options.isLoading || isCreating)
-                .interfacePadding(.bottom, Space.sm)
-            Text("session.new.project")
-                .interfaceFont(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
-            ProjectSearchField(text: $projectQuery, onMove: moveProject) {
-                Task { await create() }
-            }
-            .interfaceFrame(height: 28)
-            .disabled(options.isLoading || isCreating)
-            projectList
-            creationRecovery
-            if let message = errorMessage ?? options.errorMessage {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(verbatim: message)
-                        .interfaceFont(.callout)
-                        .foregroundStyle(Palette.danger)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if options.errorMessage != nil {
-                        Button("action.retry") { Task { await loadOptions() } }
-                            .disabled(options.isLoading || isCreating)
-                    }
-                }
-            }
-        }
+    /// The catalog arrives most recent first; its head is the quick set, and
+    /// a selection made through More stays visible in front of it.
+    private var quickProjects: [ProjectEntry] {
+        let named = options.projects.filter { !$0.path.isEmpty }
+        let recent = Array(named.prefix(SessionListFiltering.recentLimit))
+        guard !recent.contains(where: { $0.path == options.selectedProject }),
+              let selected = options.projects.first(where: { $0.path == options.selectedProject }) else { return recent }
+        return [selected] + recent
     }
 
     private var macFooter: some View {
         HStack(spacing: Space.md * interfaceScale) {
-            if let project = options.projects.first(where: { $0.path == options.selectedProject }), canStart {
-                RuntimeBadge(runtimeID: options.selectedRuntime, size: 28)
-                VStack(alignment: .leading, spacing: 2 * interfaceScale) {
-                    Text(verbatim: "\(options.runtimes.first { $0.id == options.selectedRuntime }?.name ?? options.selectedRuntime) · \(project.displayName)")
-                        .interfaceFont(.callout.weight(.semibold))
-                        .lineLimit(1)
-                    if !project.path.isEmpty {
-                        Text(verbatim: (project.path as NSString).abbreviatingWithTildeInPath)
-                            .interfaceFont(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                }
-                .help(project.path)
+            if let project = options.projects.first(where: { $0.path == options.selectedProject }), !project.path.isEmpty {
+                Text(verbatim: (project.path as NSString).abbreviatingWithTildeInPath)
+                    .interfaceFont(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(project.path)
             }
             Spacer(minLength: Space.md * interfaceScale)
             if isCreating { ProgressView().interfaceControlSize(.small) }
@@ -206,61 +214,6 @@ struct NewSessionSheet: View {
         .interfaceControlSize(.large)
         .interfacePadding(.horizontal, Space.xl)
         .interfacePadding(.vertical, Space.base)
-    }
-
-    private var projectList: some View {
-        ScrollViewReader { proxy in
-            List(selection: Binding<String?>(
-                get: { options.selectedProject },
-                set: { if let path = $0 { options.selectedProject = path } }
-            )) {
-                ForEach(visibleProjects) { project in
-                    NewSessionProjectRow(project: project)
-                        .nativeOverlayScrollers()
-                        .tag(project.path)
-                        .id(project.path)
-                        // Rounded highlights alone separate the rows.
-                        .listRowSeparator(.hidden)
-                }
-            }
-            // The inset style draws the selection as a rounded, inset
-            // highlight that matches the rounded group around it; the plain
-            // style's square edge-to-edge bar did not.
-            .listStyle(.inset)
-            .scrollContentBackground(.hidden)
-            // Double-click starts, like Return.
-            .contextMenu(forSelectionType: String.self, menu: { _ in }, primaryAction: { _ in
-                Task { await create() }
-            })
-            .overlay {
-                if options.isLoading {
-                    ProgressView()
-                } else if visibleProjects.isEmpty, options.isReady {
-                    ContentUnavailableView.search(text: projectQuery)
-                }
-            }
-            .interfaceFrame(maxHeight: .infinity)
-            .disabled(options.isLoading || isCreating)
-            .onChange(of: options.selectedProject) { _, path in
-                proxy.scrollTo(path, anchor: .center)
-            }
-            .onChange(of: options.isReady) { _, ready in
-                if ready { proxy.scrollTo(options.selectedProject, anchor: .center) }
-            }
-            .onChange(of: projectQuery) { _, _ in followSearch() }
-            .task {
-                await Task.yield()
-                proxy.scrollTo(options.selectedProject, anchor: .center)
-            }
-        }
-    }
-
-    private func moveProject(by delta: Int) {
-        let visible = visibleProjects
-        guard !visible.isEmpty else { return }
-        let current = visible.firstIndex { $0.path == options.selectedProject } ?? -1
-        let next = min(max(current + delta, 0), visible.count - 1)
-        options.selectedProject = visible[next].path
     }
     #else
     /// Two rows in one group, so recents, both choices and Start all fit on
@@ -296,14 +249,7 @@ struct NewSessionSheet: View {
     }
     #endif
 
-    /// When the search hides the chosen project, the first match takes over,
-    /// so Return always starts what the list highlights.
-    private func followSearch() {
-        let visible = visibleProjects
-        guard !visible.isEmpty, !visible.contains(where: { $0.path == options.selectedProject }) else { return }
-        options.selectedProject = visible[0].path
-    }
-
+    #if os(iOS)
     /// One-step start from a remembered combo. The trailing "Start" says the
     /// row acts immediately; a chevron would promise another page.
     private func recentRow(_ combo: RecentSessionCombo) -> some View {
@@ -311,28 +257,6 @@ struct NewSessionSheet: View {
             Task { await createFromCombo(combo) }
         } label: {
             HStack(spacing: Space.sm * interfaceScale) {
-                #if os(macOS)
-                RuntimeBadge(runtimeID: combo.runtimeID, size: 24)
-                VStack(alignment: .leading, spacing: 3 * interfaceScale) {
-                    Text(verbatim: combo.projectName?.isEmpty == false
-                         ? (combo.projectName ?? "")
-                         : (combo.projectPath.isEmpty ? "—" : (combo.projectPath as NSString).lastPathComponent))
-                        .interfaceFont(.callout.weight(.medium))
-                        .foregroundStyle(hoveredComboID == combo.id ? Palette.accent : .primary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Text(verbatim: combo.runtimeName ?? combo.runtimeID)
-                        .interfaceFont(.caption)
-                        .foregroundStyle(.secondary)
-                    if needsPath(combo) {
-                        Text(verbatim: (combo.projectPath as NSString).abbreviatingWithTildeInPath)
-                            .interfaceFont(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                }
-                #else
                 RuntimeBadge(runtimeID: combo.runtimeID, size: 28)
                 VStack(alignment: .leading, spacing: 2 * interfaceScale) {
                     Text(combo.title)
@@ -346,7 +270,6 @@ struct NewSessionSheet: View {
                             .truncationMode(.middle)
                     }
                 }
-                #endif
                 Spacer(minLength: Space.sm * interfaceScale)
                 if creatingComboID == combo.id {
                     ProgressView()
@@ -359,10 +282,6 @@ struct NewSessionSheet: View {
         .disabled(isCreating)
         .accessibilityLabel(Text(combo.title))
         .accessibilityHint(Text("session.new.recent.hint"))
-        #if os(macOS)
-        .onHover { hovering in hoveredComboID = hovering ? combo.id : nil }
-        .help(Text("session.new.start_in \(combo.runtimeName ?? combo.runtimeID) \(combo.projectName ?? (combo.projectPath as NSString).lastPathComponent)"))
-        #endif
         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
             Button(role: .destructive) {
                 deleteCombo(combo)
@@ -370,16 +289,6 @@ struct NewSessionSheet: View {
                 Label("action.delete", systemImage: "trash")
             }
         }
-        #if os(macOS)
-        // A mouse has no swipe; the row's context menu removes it.
-        .contextMenu {
-            Button(role: .destructive) {
-                deleteCombo(combo)
-            } label: {
-                Label("action.delete", systemImage: "trash")
-            }
-        }
-        #endif
     }
 
     /// The project name already says where; the path only tells apart two
@@ -387,6 +296,7 @@ struct NewSessionSheet: View {
     private func needsPath(_ combo: RecentSessionCombo) -> Bool {
         !combo.projectPath.isEmpty && recentCombos.contains { $0.id != combo.id && $0.title == combo.title }
     }
+    #endif
 
     private func loadOptions() async {
         recentCombos = RecentSessionComboStore.load(hostID: host.hostID)
@@ -397,25 +307,30 @@ struct NewSessionSheet: View {
             }
             return try await client.call(method)
         }
+        #if os(macOS)
+        // The usual combination is preselected, so Return starts it at once.
+        if let combo = recentCombos.first(where: { combo in
+            options.runtimes.contains { $0.id == combo.runtimeID && $0.isUsable }
+                && options.projects.contains { $0.path == combo.projectPath }
+        }) {
+            options.selectedRuntime = combo.runtimeID
+            options.selectedProject = combo.projectPath
+        }
+        #endif
         if !preferredProject.isEmpty, options.projects.contains(where: { $0.path == preferredProject }) {
             options.selectedProject = preferredProject
         }
         #if DEBUG
-        if let preset = ProcessInfo.processInfo.environment["CORRAL_INSPECTION_PROJECT_QUERY"] {
-            projectQuery = preset
-        }
         if ProcessInfo.processInfo.arguments.contains("-CorralInspectNewSessionProjects") {
+            #if os(macOS)
+            showProjects = true
+            #else
             navigationPath = [.projects]
+            #endif
         }
         if ProcessInfo.processInfo.arguments.contains("-CorralInspectCreateSession") {
             await create()
         }
-        #if os(macOS)
-        if ProcessInfo.processInfo.arguments.contains("-CorralInspectCreateRecentSession"),
-           let combo = recentCombos.first {
-            await createFromCombo(combo)
-        }
-        #endif
         #endif
     }
 
@@ -429,6 +344,7 @@ struct NewSessionSheet: View {
         )
     }
 
+    #if os(iOS)
     /// One-tap create from a remembered combo. A stale combo (assistant or
     /// project removed on the host) surfaces the host error in the sheet
     /// instead of silently creating something else.
@@ -441,6 +357,8 @@ struct NewSessionSheet: View {
             comboID: combo.id
         )
     }
+    #endif
+
 
     @ViewBuilder
     private var creationRecovery: some View {
@@ -513,12 +431,14 @@ struct NewSessionSheet: View {
         }
     }
 
+    #if os(iOS)
     /// Left-swipe delete on one recent row. State updates immediately so
     /// the row vanishes without reopening the sheet; store write follows.
     private func deleteCombo(_ combo: RecentSessionCombo) {
         recentCombos.removeAll { $0.id == combo.id }
         RecentSessionComboStore.remove(hostID: host.hostID, comboID: combo.id)
     }
+    #endif
 }
 
 /// Pages pushed inside the New Session sheet (iPhone).

@@ -138,6 +138,7 @@ struct MacPaneView: View {
         }
         .task { await MacPromptJumpInspection.run(key: session.key, workspace: workspace) { prompts } }
         .task { await MacCopyInspection.run(key: session.key, workspace: workspace) }
+        .task { await MacSelectionDragInspection.run(key: session.key, workspace: workspace) }
         #endif
         .background {
             MacPaneConnection(sessionKey: session.key, lifetime: lifetime, store: store,
@@ -309,7 +310,8 @@ struct MacPaneHeader: View {
         }
         .animation(MacMotion.state, value: showsFocusRule)
         .animation(MacMotion.state, value: isFocused)
-        .animation(MacMotion.state, value: SessionPresentation.statusMarker(for: session))
+        .animation(MacMotion.state, value: SessionPresentation.activityMarker(for: session))
+        .animation(MacMotion.state, value: SessionPresentation.hasUnread(for: session))
         .contentShape(Rectangle())
         .onTapGesture {
             workspace.focus(session.key)
@@ -321,12 +323,18 @@ struct MacPaneHeader: View {
 
     private var identity: some View {
         HStack(spacing: Space.sm * interfaceScale) {
-            if let marker = SessionPresentation.statusMarker(for: session) {
-                Circle()
-                    .fill(markerColor(marker))
-                    .interfaceFrame(width: 7, height: 7)
-                    .transition(.opacity)
-                    .accessibilityHidden(true)
+            let dots = statusDots
+            if !dots.isEmpty {
+                HStack(spacing: 4 * interfaceScale) {
+                    ForEach(dots.indices, id: \.self) { index in
+                        Circle()
+                            .fill(dots[index])
+                            .interfaceFrame(width: 7, height: 7)
+                            .transition(.opacity)
+                            .accessibilityHidden(true)
+                    }
+                }
+                .fixedSize()
             }
             // One line, sidebar language (design: Pane header redesign): bare
             // logo, title, then the project in secondary text, which gives way
@@ -467,6 +475,18 @@ struct MacPaneHeader: View {
         .fixedSize()
         .disabled(SessionActionsMenu.isReadonly(access: appModel.connectedAccess))
         .help(Text("session.actions.menu"))
+    }
+
+    /// Activity dot first, then the independent red unread overlay.
+    private var statusDots: [Color] {
+        var dots: [Color] = []
+        if let activity = SessionPresentation.activityMarker(for: session) {
+            dots.append(markerColor(activity))
+        }
+        if SessionPresentation.hasUnread(for: session) {
+            dots.append(markerColor(.unread))
+        }
+        return dots
     }
 
     private func markerColor(_ marker: SessionPresentation.StatusMarker) -> Color {

@@ -81,8 +81,6 @@ nonisolated enum WireProtocol {
     static let mLayoutPin = "layout.pin"
     static let mLayoutPinGroup = "layout.pinGroup"
     static let mLayoutCollapse = "layout.collapse"
-    /// `{group_id, name}`; an empty name restores the automatic name.
-    static let mLayoutRenameGroup = "layout.renameGroup"
     // Desktop terminal: raw pane output for a local emulator, sized like a TUI window.
     static let mTerminalAttach = "terminal.attach"
     static let mTerminalResize = "terminal.resize"

@@ -1,7 +1,4 @@
 import SwiftUI
-#if os(macOS)
-import AppKit
-#endif
 
 /// One project in the New Session pickers: the name, then the muted path that
 /// tells apart projects with similar names.
@@ -121,84 +118,77 @@ struct NewSessionProjectList: View {
 #endif
 
 #if os(macOS)
-/// Assistant choice with each official logo beside its name. SwiftUI's
-/// segmented picker shows text or image, never both (Apple DTS), so this is
-/// the AppKit segmented control itself.
-struct RuntimeSegmentedControl: NSViewRepresentable {
-    let runtimes: [RuntimeEntry]
+import AppKit
+
+/// The whole project catalog behind the New Session dialog's More button:
+/// searchable, and one click (or Return on the first match) chooses and closes.
+struct MacNewSessionProjectPopover: View {
+    @Environment(\.dismiss) private var dismiss
+    let projects: [ProjectEntry]
     @Binding var selection: String
+    @State private var query = ""
 
-    func makeCoordinator() -> Coordinator { Coordinator(selection: $selection) }
-
-    func makeNSView(context: Context) -> NSSegmentedControl {
-        let control = NSSegmentedControl()
-        control.trackingMode = .selectOne
-        control.segmentDistribution = .fillEqually
-        control.target = context.coordinator
-        control.action = #selector(Coordinator.changed(_:))
-        return control
-    }
-
-    /// Fills the row's width, never wider, so the form keeps its margins;
-    /// height stays native.
-    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSSegmentedControl, context: Context) -> CGSize? {
-        let natural = nsView.intrinsicContentSize
-        return CGSize(width: proposal.width ?? natural.width, height: natural.height)
-    }
-
-    func updateNSView(_ control: NSSegmentedControl, context: Context) {
-        let coordinator = context.coordinator
-        coordinator.selection = $selection
-        let ids = runtimes.map(\.id)
-        if coordinator.ids != ids {
-            coordinator.ids = ids
-            control.segmentCount = runtimes.count
-            for (index, runtime) in runtimes.enumerated() {
-                let name = runtime.name ?? runtime.id
-                control.setLabel(name, forSegment: index)
-                control.setImage(Self.logo(runtime.id), forSegment: index)
-                control.setImageScaling(.scaleProportionallyDown, forSegment: index)
+    var body: some View {
+        let visible = ProjectEntry.matching(projects, query: query)
+        VStack(spacing: 0) {
+            MacPopoverSearchField(text: $query, prompt: String(localized: "session.new.project.search")) {
+                if let first = visible.first { choose(first) }
+            }
+            .padding(Space.md)
+            Divider()
+            List(visible) { project in
+                Button {
+                    choose(project)
+                } label: {
+                    HStack {
+                        NewSessionProjectRow(project: project)
+                        Spacer()
+                        if project.path == selection {
+                            Image(systemName: "checkmark").accessibilityHidden(true)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(project.path == selection ? .isSelected : [])
+            }
+            .listStyle(.plain)
+            .overlay {
+                if visible.isEmpty { ContentUnavailableView.search(text: query) }
             }
         }
-        control.selectedSegment = ids.firstIndex(of: selection) ?? -1
-        control.isEnabled = context.environment.isEnabled
-    }
-
-    private static func logo(_ runtimeID: String) -> NSImage? {
-        let source = Palette.runtimeLogoName(runtimeID).flatMap { NSImage(named: $0) }
-            ?? NSImage(systemSymbolName: Palette.runtimeSymbol(runtimeID), accessibilityDescription: nil)
-        // A copy, so resizing never touches the catalog's shared image.
-        guard let image = source?.copy() as? NSImage else { return nil }
-        image.size = NSSize(width: 16, height: 16)
-        return image
-    }
-
-    final class Coordinator: NSObject {
-        var selection: Binding<String>
-        var ids: [String] = []
-
-        init(selection: Binding<String>) { self.selection = selection }
-
-        @objc func changed(_ sender: NSSegmentedControl) {
-            guard ids.indices.contains(sender.selectedSegment) else { return }
-            selection.wrappedValue = ids[sender.selectedSegment]
+        .frame(width: 360, height: 420)
+        .tint(.primary)
+        .focusEffectDisabled()
+        #if DEBUG
+        .onAppear {
+            if let preset = ProcessInfo.processInfo.environment["CORRAL_INSPECTION_PROJECT_QUERY"] {
+                query = preset
+            }
         }
+        #endif
+    }
+
+    private func choose(_ project: ProjectEntry) {
+        selection = project.path
+        dismiss()
     }
 }
 
-/// The system search field above the project list. It takes focus when the
-/// sheet opens so typing filters at once; ↑/↓ move the list selection while
-/// the caret stays here, and Return starts the session.
-struct ProjectSearchField: NSViewRepresentable {
+/// The system search field heading a popover list. A popover has no window
+/// toolbar, so `.searchable` (and a navigation title) would surface in the
+/// main window's toolbar instead. It takes focus when the popover opens.
+struct MacPopoverSearchField: NSViewRepresentable {
     @Binding var text: String
-    var onMove: (Int) -> Void
-    var onSubmit: () -> Void
+    let prompt: String
+    var onSubmit: () -> Void = {}
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
     func makeNSView(context: Context) -> NSSearchField {
         let field = FocusingSearchField()
-        field.placeholderString = String(localized: "session.new.project.search")
+        field.placeholderString = prompt
         field.delegate = context.coordinator
         return field
     }
@@ -206,13 +196,12 @@ struct ProjectSearchField: NSViewRepresentable {
     func updateNSView(_ field: NSSearchField, context: Context) {
         context.coordinator.parent = self
         if field.stringValue != text { field.stringValue = text }
-        field.isEnabled = context.environment.isEnabled
     }
 
     final class Coordinator: NSObject, NSSearchFieldDelegate {
-        var parent: ProjectSearchField
+        var parent: MacPopoverSearchField
 
-        init(parent: ProjectSearchField) { self.parent = parent }
+        init(parent: MacPopoverSearchField) { self.parent = parent }
 
         func controlTextDidChange(_ notification: Notification) {
             guard let field = notification.object as? NSSearchField else { return }
@@ -220,12 +209,8 @@ struct ProjectSearchField: NSViewRepresentable {
         }
 
         func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
-            switch selector {
-            case #selector(NSResponder.moveUp(_:)): parent.onMove(-1)
-            case #selector(NSResponder.moveDown(_:)): parent.onMove(1)
-            case #selector(NSResponder.insertNewline(_:)): parent.onSubmit()
-            default: return false
-            }
+            guard selector == #selector(NSResponder.insertNewline(_:)) else { return false }
+            parent.onSubmit()
             return true
         }
     }
@@ -237,7 +222,6 @@ struct ProjectSearchField: NSViewRepresentable {
             super.viewDidMoveToWindow()
             guard !focusedOnce, window != nil else { return }
             focusedOnce = true
-            // After the sheet picks its own first responder.
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.window?.makeFirstResponder(self)

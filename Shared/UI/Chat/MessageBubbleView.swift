@@ -35,13 +35,63 @@ enum MessageBubbleLayout {
     static func maxTextHeight(screenHeight: CGFloat = screenHeight()) -> CGFloat {
         max(screenHeight * maxHeightFraction - bubbleVerticalPadding, minTextHeight)
     }
+
+    /// Default overlong-bubble cap: live half-screen on iOS, uncapped on Mac.
+    /// ChatView passes a per-evaluation value so rotation re-evaluates capped
+    /// rows; direct constructions (tests, previews) use this live default.
+    static var defaultBubbleCap: CGFloat? {
+        #if os(macOS)
+        // Desktop-first (owner requirement 2026-10-04): messages show at full
+        // height and the conversation scrolls, as in the TUI preview.
+        return nil
+        #else
+        return maxTextHeight()
+        #endif
+    }
 }
 
-struct MessageBubbleView: View {
-    @Environment(\.interfaceScale) private var interfaceScale
+#if DEBUG
+/// Warm-switch diagnostics: do Equatable rows actually skip body evaluation
+/// when their inputs are unchanged? Reset per inspected switch.
+enum SwitchBodyCounters {
+    nonisolated(unsafe) static var bubbleBodies = 0
+    nonisolated(unsafe) static var toolBodies = 0
+    static func reset() {
+        bubbleBodies = 0
+        toolBodies = 0
+    }
+}
+#endif
+
+struct MessageBubbleView: View, Equatable {
     let message: RichMessage
     var runtimeID: String? = nil
     var onRetry: (() -> Void)? = nil
+    /// Explicit style inputs instead of environment: row equality must cover
+    /// every dynamic input, or a pruned row would keep stale zoom/theme text.
+    /// Callers pass the live values; previews/tests use the same defaults the
+    /// environment would provide.
+    var interfaceScale: CGFloat = 1
+    var sessionTextScale: CGFloat = SessionTextSize.default.scale
+    var colorScheme: ColorScheme = .light
+    /// Height cap for overlong bubbles (live screen on iOS, nil on the Mac).
+    /// Explicit so rotation re-evaluates capped rows; defaults to the live cap.
+    var bubbleTextCap: CGFloat? = MessageBubbleLayout.defaultBubbleCap
+    /// Identity of the retained text network backing this row (Mac only, nil
+    /// elsewhere). A replaced network must re-resolve even when the messages
+    /// are identical.
+    var selectionDocumentID: ObjectIdentifier? = nil
+
+    /// `onRetry` is excluded: its behavior is fully determined by `message`.
+    static func == (lhs: MessageBubbleView, rhs: MessageBubbleView) -> Bool {
+        lhs.message == rhs.message
+            && lhs.runtimeID == rhs.runtimeID
+            && lhs.interfaceScale == rhs.interfaceScale
+            && lhs.sessionTextScale == rhs.sessionTextScale
+            && lhs.colorScheme == rhs.colorScheme
+            && lhs.bubbleTextCap == rhs.bubbleTextCap
+            && lhs.selectionDocumentID == rhs.selectionDocumentID
+    }
 
     /// Capped text still has hidden lines below its fade.
     @State private var hasMoreBelow = false
@@ -55,6 +105,9 @@ struct MessageBubbleView: View {
     }
 
     var body: some View {
+        #if DEBUG
+        let _ = SwitchBodyCounters.bubbleBodies &+= 1
+        #endif
         VStack(alignment: .trailing, spacing: Space.xs * interfaceScale) {
             HStack(alignment: .bottom, spacing: Space.sm * interfaceScale) {
                 if isUser {
@@ -76,34 +129,38 @@ struct MessageBubbleView: View {
         ))
     }
 
+    /// One compact block under the bubble (owner correction 2026-10-11): it hugs the
+    /// bubble's trailing edge, but its lines read left to right like a paragraph.
+    /// Status and Retry share the first line; the cause hangs under the status.
     private var deliveryFeedback: some View {
-        VStack(alignment: .trailing, spacing: 0) {
-            HStack(spacing: Space.sm * interfaceScale) {
-                Label(message.delivery == .needsReview
-                      ? "chat.delivery.unconfirmed" : "chat.delivery.failed",
-                      systemImage: message.delivery == .needsReview
-                      ? "questionmark.circle" : "exclamationmark.circle")
-                    .interfaceFont(.caption.weight(.medium))
-                    .foregroundStyle(message.delivery == .needsReview ? Color.secondary : Palette.danger)
-                if let onRetry {
-                    Button(action: onRetry) {
-                        Text(message.delivery == .needsReview
-                             ? "chat.delivery.retry_check" : "chat.delivery.retry")
-                            .interfaceFont(.footnote.weight(.medium))
-                            .interfaceFrame(minHeight: TouchTarget.minimum)
+        let unconfirmed = message.delivery == .needsReview
+        return HStack(alignment: .firstTextBaseline, spacing: Space.xs * interfaceScale) {
+            Image(systemName: unconfirmed ? "questionmark.circle" : "exclamationmark.circle")
+                .foregroundStyle(unconfirmed ? Color.secondary : Palette.danger)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: Space.xs / 2 * interfaceScale) {
+                HStack(alignment: .firstTextBaseline, spacing: Space.sm * interfaceScale) {
+                    Text(unconfirmed ? "chat.delivery.unconfirmed" : "chat.delivery.failed")
+                        .foregroundStyle(unconfirmed ? Color.primary : Palette.danger)
+                    if let onRetry {
+                        Button(action: onRetry) {
+                            Text(unconfirmed ? "chat.delivery.retry_check" : "chat.delivery.retry")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Palette.accent)
+                        .modifier(CompactHitTarget())
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Palette.accent)
                 }
+                .interfaceFont(.footnote.weight(.semibold))
+                Text(verbatim: failureReason)
+                    .interfaceFont(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                    .multilineTextAlignment(.leading)
             }
-            Text(verbatim: failureReason)
-                .interfaceFont(.footnote)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
-                .multilineTextAlignment(.trailing)
-
         }
+        .interfaceFont(.footnote)
         .interfaceFrame(maxWidth: .infinity, alignment: .trailing)
         .interfacePadding(.leading, Space.xxl)
     }
@@ -159,17 +216,6 @@ struct MessageBubbleView: View {
             .accessibilityHidden(true)
     }
 
-    /// iOS caps long bubbles at half the screen (owner decision); the Mac does not cap.
-    private var bubbleTextCap: CGFloat? {
-        #if os(macOS)
-        // Desktop-first (owner requirement 2026-10-04): messages show at full
-        // height and the conversation scrolls, as in the TUI preview.
-        return nil
-        #else
-        return MessageBubbleLayout.maxTextHeight()
-        #endif
-    }
-
     /// User messages always sit in a bubble; assistant text is bubble-free on the Mac.
     private var hasBubble: Bool { isUser || ChatLayout.assistantUsesBubble }
 
@@ -191,5 +237,17 @@ struct MessageBubbleView: View {
             topTrailingRadius: Radius.bubble * interfaceScale,
             style: .continuous
         )
+    }
+}
+
+/// A 44-point hit area around a text-sized control without adding layout height,
+/// so the cause stays directly below the status line.
+private struct CompactHitTarget: ViewModifier {
+    func body(content: Content) -> some View {
+        let slop = Space.md
+        content
+            .interfacePadding(slop)
+            .contentShape(Rectangle())
+            .interfacePadding(-slop)
     }
 }

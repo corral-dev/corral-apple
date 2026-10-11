@@ -2,8 +2,7 @@ import AppKit
 import SwiftUI
 
 /// Main window, modelled on the desktop TUI: session sidebar on the left, the
-/// split workspace (up to four panes, a TUI session group) or the Active
-/// sessions board on the right. With no paired machine it is the pairing page.
+/// split workspace (up to four panes, a TUI session group) on the right. With no paired machine it is the pairing page.
 struct MacRootView: View {
     @Environment(\.interfaceScale) private var interfaceScale
     @Environment(MacInterfaceZoom.self) private var zoom
@@ -196,7 +195,6 @@ struct MacRootView: View {
             if let index { workspace.focusPane(at: index) }
             commands.focusPaneRequest = nil
         }
-        .onChange(of: commands.showBoardRequest) { _, _ in workspace.showBoard() }
         .onChange(of: commands.pinRequest) { _, _ in
             if let key = workspace.focusedKey { Task { await workspace.togglePin(key) } }
         }
@@ -221,10 +219,7 @@ struct MacRootView: View {
 
     @ViewBuilder
     private var detail: some View {
-        if let feed, workspace.showingBoard {
-            MacActiveBoard(feed: feed)
-                .id(feed.host.hostID)
-        } else if let feed, !workspace.drawnPaneKeys.isEmpty {
+        if let feed, !workspace.drawnPaneKeys.isEmpty {
             MacSplitArea(feed: feed, autoFocusKey: autoFocusKey)
                 .id(feed.host.hostID)
         } else {
@@ -240,12 +235,7 @@ struct MacRootView: View {
         }
     }
 
-    private var paneCount: Int {
-        guard workspace.showingBoard, let feed else { return max(workspace.paneKeys.count, 1) }
-        let active = DesktopSidebarProjection.activeSessions(feed.listStore.windowSessions)
-        let page = min(workspace.boardPage, workspace.boardPages(active: active) - 1)
-        return max(1, active.dropFirst(page * MacWorkspace.boardPageSize).prefix(MacWorkspace.boardPageSize).count)
-    }
+    private var paneCount: Int { max(workspace.paneKeys.count, 1) }
 
     @ToolbarContentBuilder
     private var detailToolbar: some ToolbarContent {
@@ -299,7 +289,7 @@ struct MacRootView: View {
     }
 
     private var needsYouCount: Int {
-        feed?.listStore.windowSessions.filter { SessionPresentation.statusMarker(for: $0) == .waiting }.count ?? 0
+        feed?.listStore.windowSessions.filter { SessionPresentation.activityMarker(for: $0) == .waiting }.count ?? 0
     }
 
     /// Full pairing to a host that runs project shells. Kept through a
@@ -476,8 +466,9 @@ struct MacRootView: View {
     /// ⌥⌘↓ / ⌥⌘↑ walk the sessions waiting for an answer.
     private func moveAttention(forward: Bool) {
         guard let feed else { return }
-        let keys = DesktopSidebarProjection.activeSessions(feed.listStore.windowSessions)
-            .filter { SessionPresentation.statusMarker(for: $0) == .waiting }
+        let keys = feed.listStore.windowSessions
+            .filter { $0.hosted && ActiveRuntimeVisibility.isListVisible($0) && SessionPresentation.activityMarker(for: $0) == .waiting }
+            .sorted { $0.mtime > $1.mtime }
             .map(\.key)
         guard !keys.isEmpty else { return }
         guard let current = workspace.focusedKey, let index = keys.firstIndex(of: current) else {
@@ -536,7 +527,7 @@ private struct FeedConnectionKey: Hashable {
 /// `-CorralInspectConversation` opens the newest session (or
 /// `CORRAL_INSPECTION_SESSION_KEY`; several keys separated by commas open a
 /// split), `-CorralInspectTerminal` switches the last of them to terminal view,
-/// `-CorralInspectBoard` shows the Active sessions board, `-CorralInspectPromptsOpen`
+/// `-CorralInspectPromptsOpen`
 /// opens every pane's prompts card. Release has none.
 enum MacInspection {
     static func apply(feed: HostSessionFeed, workspace: MacWorkspace) {
@@ -556,9 +547,6 @@ enum MacInspection {
                 if let last = keys.last { workspace.setMode(.terminal, for: last) }
             }
             workspace.focus(first)
-        }
-        if arguments.contains("-CorralInspectBoard") {
-            workspace.showBoard()
         }
         if arguments.contains("-CorralInspectPromptsOpen") {
             for key in workspace.paneKeys { workspace.promptsOpen[key] = true }

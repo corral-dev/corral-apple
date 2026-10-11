@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// Terminal view of one pane: the agent's own TUI, live from the host.
-/// A session without a hosted pane offers Return to restart it natively, the
-/// same action as Return on the TUI's ended-session preview.
+/// Opening it on a session that is not running starts the session natively;
+/// only an agent the user quit while watching offers Return to restart.
 struct MacTerminalPane: View {
     @Environment(\.interfaceScale) private var interfaceScale
     @Environment(AppModel.self) private var appModel
@@ -11,12 +11,21 @@ struct MacTerminalPane: View {
     let isFocused: Bool
 
     @State private var stream: RemoteTerminalStream?
-    @State private var isRestarting = false
+    @State private var isStarting = false
+    @State private var startAttempted = false
+    @State private var startError: String?
+    @State private var sawLive = false
 
     var body: some View {
         Group {
-            if showsRestartPrompt {
+            if let startError {
+                startFailure(startError)
+            } else if runsElsewhere {
+                runningElsewhereNote
+            } else if showsRestartPrompt {
                 restartPrompt
+            } else if isStarting {
+                waitingIndicator
             } else if let stream {
                 content(stream)
             } else {
@@ -25,9 +34,15 @@ struct MacTerminalPane: View {
         }
         .interfaceFrame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: TerminalAppearance.background))
-        #if DEBUG
-        .task(id: isReady) { await inspectRestartIfRequested() }
-        #endif
+        .task(id: isReady && needsStart) {
+            guard isReady, needsStart else { return }
+            // Unstructured: starting clears `needsStart`, which would cancel
+            // this task and drop the host's resume response.
+            Task { await start() }
+        }
+        .onChange(of: stream?.phase) { _, phase in
+            if phase == .live { sawLive = true }
+        }
         .task(id: PaneConnectionKey(sessionKey: session.key, client: appModel.clientIdentity, ready: isReady && session.hosted)) {
             guard isReady, session.hosted else { return }
             startIfNeeded()
@@ -42,13 +57,27 @@ struct MacTerminalPane: View {
         }
     }
 
+    /// Opening the view starts a session that is not running, once. A stream
+    /// that ends before it ever went live is the same opening (stale summary).
+    private var needsStart: Bool {
+        guard !startAttempted, !isStarting, startError == nil else { return false }
+        if let stream { return stream.phase == .ended && !sawLive }
+        return !session.hosted && !session.live
+    }
+
+    /// Running in another terminal window: a second process would write the
+    /// same history, so the pane never starts one on its own.
+    private var runsElsewhere: Bool {
+        stream == nil && !isStarting && session.live && !session.hosted
+    }
+
+    /// Only after the agent ended under an attempted start or while watched:
+    /// relaunching on its own would undo the user's exit. Any other stream
+    /// stays mounted (it reports its grid while attaching), whatever the
+    /// possibly stale list summary says.
     private var showsRestartPrompt: Bool {
-        guard !isRestarting else { return false }
-        // The action response and list broadcast can arrive in either order.
-        // Keep the emulator mounted while attaching so it can report its grid;
-        // a stale unhosted summary must not hide connection errors either.
-        if let stream { return stream.phase == .ended }
-        return !session.hosted
+        guard !isStarting, let stream, stream.phase == .ended else { return false }
+        return sawLive || startAttempted
     }
 
     @ViewBuilder
@@ -91,6 +120,27 @@ struct MacTerminalPane: View {
         .background(.regularMaterial, in: .rect(cornerRadius: Radius.lg * interfaceScale))
     }
 
+    private func startFailure(_ error: String) -> some View {
+        ContentUnavailableView {
+            Label("terminal.start_failed.title", systemImage: "exclamationmark.triangle")
+        } description: {
+            Text(verbatim: error)
+        } actions: {
+            Button("action.retry") {
+                self.startError = nil
+                Task { await start() }
+            }
+        }
+    }
+
+    private var runningElsewhereNote: some View {
+        ContentUnavailableView {
+            Label("terminal.running_elsewhere.title", systemImage: "macwindow.on.rectangle")
+        } description: {
+            Text("terminal.running_elsewhere.description")
+        }
+    }
+
     private var restartPrompt: some View {
         VStack(spacing: Space.md * interfaceScale) {
             Image(systemName: "terminal")
@@ -101,23 +151,33 @@ struct MacTerminalPane: View {
             Text("terminal.not_running.description")
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-            Button("terminal.restart") { Task { await restart() } }
+            Button("terminal.restart") { Task { await start() } }
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
-                .disabled(isRestarting)
+                .disabled(isStarting)
         }
         .interfacePadding(Space.xxl)
     }
 
-    private func restart() async {
-        guard !isRestarting else { return }
-        isRestarting = true
-        defer { isRestarting = false }
-        if await workspace.resume(session.key) {
-            stream?.stop()
-            stream = nil
-            startIfNeeded()
+    private func start() async {
+        guard !isStarting else { return }
+        startAttempted = true
+        isStarting = true
+        defer { isStarting = false }
+        if let error = await workspace.resumeInPane(session.key) {
+            #if DEBUG
+            debugTrace("terminal start failed: \(error)")
+            #endif
+            startError = error
+            return
         }
+        stream?.stop()
+        stream = nil
+        sawLive = false
+        startIfNeeded()
+        #if DEBUG
+        debugTrace("terminal started session; phase=\(String(describing: stream?.phase))")
+        #endif
     }
 
     private var isReady: Bool { appModel.connectionState == .connected && appModel.client != nil }
@@ -135,16 +195,6 @@ struct MacTerminalPane: View {
     }
 
     #if DEBUG
-    /// Calls the button's action on a disposable session without driving the pointer.
-    private func inspectRestartIfRequested() async {
-        guard isReady, ProcessInfo.processInfo.arguments.contains("-CorralInspectTerminalRestart"),
-              session.cwd.hasPrefix("/private/tmp/corral-restart-acceptance") else { return }
-        try? await Task.sleep(for: .seconds(3))
-        guard !Task.isCancelled, showsRestartPrompt else { return }
-        await restart()
-        debugTrace("terminal restart inspection completed; phase=\(String(describing: stream?.phase))")
-    }
-
     /// Debug-only: `-CorralInspectAppearanceFlip` switches the app to the other
     /// appearance after the terminal is live, so a capture shows the live switch
     /// and the trace log shows the host acknowledging the new colours.

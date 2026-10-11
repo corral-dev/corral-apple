@@ -332,7 +332,7 @@ struct SessionDetailView: View {
                         ChatView(
                             store: store,
                             runtimeID: session.runtime,
-                            sessionMarker: SessionPresentation.statusMarker(for: session),
+                            sessionMarker: SessionPresentation.activityMarker(for: session),
                             isConnected: isHostReady,
                             isSending: isSending || isActionBusy,
                             scrollToLatestRequest: scrollToLatestRequest,
@@ -568,7 +568,9 @@ struct SessionDetailView: View {
 #endif
 
     private func startRestart() {
+        // Restart stays serialized with sends that are still waiting in line.
         guard !isSending, !isActionBusy, isHostReady,
+              conversationStore?.queuedOutboundCount ?? 0 == 0,
               let client = appModel.client,
               client.hostCapabilities.sessionRestart else { return }
         // Acquire before scheduling the task; repeated taps cannot start a second request.

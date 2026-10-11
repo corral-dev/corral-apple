@@ -3,7 +3,8 @@ import Foundation
 /// Session-list quick-filter dimensions and the production filter path.
 ///
 /// - Runtime and project selections are sets; empty means All. Choices within
-///   a dimension form a union, and the two dimensions intersect.
+///   a dimension form a union, and the dimensions intersect. Active is an
+///   independent on/off dimension (sessions showing a status dot).
 ///   Dormant identities never surface as options; see `ActiveRuntimeVisibility`.
 /// - Project identity is the canonical working directory (`cwd` trimmed,
 ///   falling back to the display path only for older hosts that omit `cwd`).
@@ -205,16 +206,38 @@ enum SessionListFiltering {
         return next
     }
 
+    /// Active quick filter membership: exactly the sessions that show an
+    /// activity dot (waiting / working / recent). Red unread alone is not
+    /// active — it is only an explanation of unseen messages and can coexist
+    /// with an activity dot behind it — so the dot and the filter never disagree.
+    static func isActive(_ session: SessionSummary) -> Bool {
+        SessionPresentation.activityMarker(for: session) != nil
+    }
+
+    /// Visible sessions in the Active dimension. `keeping` lists sessions open
+    /// in the workspace: opening an unread one marks it read, which must not
+    /// pull it out from under the reader.
+    static func activeCount(sessions: [SessionSummary], keeping: Set<String> = []) -> Int {
+        sessions.reduce(0) { count, session in
+            let counted = ActiveRuntimeVisibility.isListVisible(session)
+                && (isActive(session) || keeping.contains(session.key))
+            return count + (counted ? 1 : 0)
+        }
+    }
+
     /// Production filter path used by the list: dormant-identity exclusion
-    /// plus the runtime/project intersection. Order-preserving; empty filters
-    /// pass everything through.
+    /// plus the Active/runtime/project intersection. Order-preserving; empty
+    /// filters pass everything through.
     static func apply(
         sessions: [SessionSummary],
         runtimes: Set<SessionRuntimeFilter>,
-        projects: Set<SessionProjectFilter>
+        projects: Set<SessionProjectFilter>,
+        activeOnly: Bool = false,
+        keeping: Set<String> = []
     ) -> [SessionSummary] {
         sessions.filter { session in
             ActiveRuntimeVisibility.isListVisible(session)
+                && (!activeOnly || isActive(session) || keeping.contains(session.key))
                 && (runtimes.isEmpty || runtimes.contains { $0.matches(session) })
                 && (projects.isEmpty || projects.contains { $0.matches(session) })
         }
@@ -225,10 +248,11 @@ enum SessionListFiltering {
     static func apply(
         to sections: [SessionListStore.Section],
         runtimes: Set<SessionRuntimeFilter>,
-        projects: Set<SessionProjectFilter>
+        projects: Set<SessionProjectFilter>,
+        activeOnly: Bool = false
     ) -> [SessionListStore.Section] {
         sections.compactMap { section in
-            let kept = apply(sessions: section.sessions, runtimes: runtimes, projects: projects)
+            let kept = apply(sessions: section.sessions, runtimes: runtimes, projects: projects, activeOnly: activeOnly)
             guard !kept.isEmpty else { return nil }
             switch section {
             case .waiting: return .waiting(kept)

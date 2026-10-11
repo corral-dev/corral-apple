@@ -22,12 +22,11 @@ enum MacZoomInspection {
         let previousPercentage = zoom.percentage
         let previousKeys = workspace.paneKeys
         let previousFocus = workspace.focusedKey
-        let previousBoard = workspace.showingBoard
         let previousModes = Dictionary(uniqueKeysWithValues: sessions.prefix(4).map { ($0.key, workspace.mode(for: $0.key)) })
         defer {
             zoom.setPercentage(previousPercentage)
             for (key, mode) in previousModes { workspace.setMode(mode, for: key) }
-            workspace.inspectionRestoreWorkspace(keys: previousKeys, focus: previousFocus, board: previousBoard)
+            workspace.inspectionRestoreWorkspace(keys: previousKeys, focus: previousFocus)
         }
         workspace.restorePanes([key])
         workspace.setMode(.chat, for: key)

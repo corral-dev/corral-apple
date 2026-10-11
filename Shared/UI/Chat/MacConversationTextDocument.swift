@@ -33,6 +33,33 @@ final class MacDirectMessageTextView: NSTextView {
     override func scrollWheel(with event: NSEvent) {
         nextResponder?.scrollWheel(with: event)
     }
+
+    /// A plain press-and-drag selects across the conversation's message
+    /// blocks. Word/paragraph clicks, modified clicks and links keep native
+    /// handling.
+    override func mouseDown(with event: NSEvent) {
+        guard event.clickCount == 1,
+              event.modifierFlags.intersection([.shift, .command, .option, .control]).isEmpty,
+              let document = layoutManager?.delegate as? MacConversationTextDocument,
+              !isLink(at: event) else {
+            super.mouseDown(with: event)
+            return
+        }
+        document.trackSelection(from: self, mouseDown: event)
+    }
+
+    private func isLink(at event: NSEvent) -> Bool {
+        guard let storage = textStorage, storage.length > 0 else { return false }
+        let point = convert(event.locationInWindow, from: nil)
+        guard let layout = layoutManager, let container = textContainer else { return false }
+        var fraction: CGFloat = 0
+        let glyph = layout.glyphIndex(for: point, in: container, fractionOfDistanceThroughGlyph: &fraction)
+        guard layout.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: container).contains(point) else {
+            return false
+        }
+        let character = layout.characterIndexForGlyph(at: glyph)
+        return character < storage.length && storage.attribute(.link, at: character, effectiveRange: nil) != nil
+    }
 }
 
 /// One native text network per conversation. Each message is a separate text
@@ -114,7 +141,7 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
             measurements.removeAll()
             measurementOrder.removeAll()
         }
-        let selection = sameConversation ? layout.firstTextView?.selectedRange() : nil
+        let selection = sameConversation ? anyTextView?.selectedRange() : nil
         let start = selection.flatMap { position(at: $0.location) }
         let end = selection.flatMap { position(at: NSMaxRange($0)) }
         let oldByID = sameConversation ? byID : [:]
@@ -178,11 +205,112 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
             // reflows even when their SwiftUI wrapper keeps the same frame.
             for block in next { block.view?.needsDisplay = true }
         }
+        // Lazy rows realize their views on demand, so the first container
+        // often has none; the selection is shared by every view in the network.
         if let start, let end, let lower = index(of: start), let upper = index(of: end), upper >= lower {
-            layout.firstTextView?.setSelectedRange(NSRange(location: lower, length: upper - lower))
+            anyTextView?.setSelectedRange(NSRange(location: lower, length: upper - lower))
         } else {
-            layout.firstTextView?.setSelectedRange(NSRange(location: 0, length: 0))
+            anyTextView?.setSelectedRange(NSRange(location: 0, length: 0))
         }
+    }
+
+    private var anyTextView: NSTextView? { blocks.lazy.compactMap(\.view).first }
+
+    /// Tracks a press-and-drag that began on `origin` until the button is
+    /// released. AppKit's own cross-container tracking only reaches a block
+    /// the window hit-tests at the pointer, so gaps, tool rows, overlays and
+    /// rows recycled during autoscroll stopped it or jumped to the start of
+    /// the conversation. Here every step resolves the pointer against the
+    /// on-screen geometry of this conversation's blocks; AppKit still draws
+    /// the selection and owns Copy.
+    func trackSelection(from origin: NSTextView, mouseDown event: NSEvent) {
+        guard let window = origin.window else { return }
+        let scrollView = origin.enclosingScrollView
+        let anchor = origin.characterIndexForInsertion(at: origin.convert(event.locationInWindow, from: nil))
+        var current = anchor
+        window.makeFirstResponder(origin)
+        func select(_ index: Int, stillSelecting: Bool) {
+            current = index
+            let range = NSRange(location: min(anchor, index), length: abs(index - anchor))
+            origin.setSelectedRange(range, affinity: index < anchor ? .upstream : .downstream,
+                                    stillSelecting: stillSelecting)
+        }
+        select(anchor, stillSelecting: true)
+        NSEvent.startPeriodicEvents(afterDelay: 0.1, withPeriod: 0.05)
+        defer { NSEvent.stopPeriodicEvents() }
+        var pointer = event.locationInWindow
+        while let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp, .periodic]) {
+            switch next.type {
+            case .leftMouseDragged:
+                pointer = next.locationInWindow
+            case .periodic:
+                // Holding still past an edge keeps scrolling, like native text.
+                guard let scrollView, Self.autoscroll(scrollView, toward: pointer) else { continue }
+            default:
+                pointer = next.locationInWindow
+                select(characterIndex(at: pointer, in: window, anchor: anchor) ?? current, stillSelecting: false)
+                return
+            }
+            if next.type == .leftMouseDragged, let scrollView { Self.autoscroll(scrollView, toward: pointer) }
+            select(characterIndex(at: pointer, in: window, anchor: anchor) ?? current, stillSelecting: true)
+        }
+    }
+
+    /// The insertion index under a window point, resolved against the
+    /// realized blocks of this conversation (top to bottom in reading order).
+    /// Inside a block it is the native glyph boundary; between blocks it is
+    /// the near edge seen from the anchor; above or below every realized block
+    /// it is the outermost realized boundary, which autoscroll then extends.
+    func characterIndex(at point: CGPoint, in window: NSWindow, anchor: Int) -> Int? {
+        let realized = blocks.compactMap { block -> (Block, NSTextView, CGRect)? in
+            guard let view = block.view, view.window === window, !view.isHiddenOrHasHiddenAncestor else { return nil }
+            return (block, view, view.convert(view.bounds, to: nil))
+        }
+        guard let last = realized.last else { return nil }
+        for (index, (block, view, frame)) in realized.enumerated() {
+            if point.y > frame.maxY {
+                guard index > 0 else { return block.range.location }
+                let previous = realized[index - 1].0
+                return anchor <= NSMaxRange(previous.range) ? NSMaxRange(previous.range) : block.range.location
+            }
+            if point.y >= frame.minY {
+                var local = view.convert(point, from: nil)
+                local.x = min(max(local.x, 0), view.bounds.width)
+                local.y = min(max(local.y, 0), max(view.bounds.height - 1, 0))
+                let character = view.characterIndexForInsertion(at: local)
+                return min(max(character, block.range.location), NSMaxRange(block.range))
+            }
+        }
+        return NSMaxRange(last.0.range)
+    }
+
+    /// Scrolls the conversation when the pointer is beyond its visible content
+    /// (content insets exclude the toolbar and composer overlap). Returns
+    /// whether it moved.
+    @discardableResult
+    static func autoscroll(_ scrollView: NSScrollView, toward point: CGPoint) -> Bool {
+        let clip = scrollView.contentView
+        let frame = scrollView.convert(scrollView.bounds, to: nil)
+        let insets = scrollView.contentInsets
+        let top = frame.maxY - insets.top, bottom = frame.minY + insets.bottom
+        let distance: CGFloat
+        if point.y > top {
+            distance = -(point.y - top)
+        } else if point.y < bottom {
+            distance = bottom - point.y
+        } else {
+            return false
+        }
+        // Proportional, bounded steps: a nudge past the edge creeps, a far
+        // pointer moves quickly but never jumps whole screens.
+        let step = (distance < 0 ? -1 : 1) * min(max(abs(distance), 4), 60)
+        var bounds = clip.bounds
+        bounds.origin.y += clip.isFlipped ? step : -step
+        let origin = clip.constrainBoundsRect(bounds).origin
+        guard abs(origin.y - clip.bounds.origin.y) > 0.25 else { return false }
+        clip.scroll(to: origin)
+        scrollView.reflectScrolledClipView(clip)
+        return true
     }
 
     func container(for id: Int) -> NSTextContainer? { byID[id]?.container }

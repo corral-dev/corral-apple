@@ -60,38 +60,15 @@ final class DesktopSidebarProjectionTests: XCTestCase {
         XCTAssertEqual(result.flatMap(\.items).map(\.id), ["group:g1", "group:g2", "session:e", "session:f"])
     }
 
-    func testFilterMatchesOnlyUserGivenSplitName() {
+    func testFilterNeverMatchesSplitIdentity() {
+        // Splits are never named: the hidden internal fruit identity never matches.
         let sessions = [session("a", hoursAgo: 1), session("b", hoursAgo: 1), session("c", hoursAgo: 1)]
-        let named = DesktopLayout(revision: 1, groups: [DesktopGroup(id: "g", name: "Release check", named: true, members: ["a", "b"])], pinnedSessions: [:])
+        let layout = DesktopLayout(revision: 1, groups: [DesktopGroup(id: "g", name: "Group Cherry", members: ["a", "b"])], pinnedSessions: [:])
         var order = DesktopSidebarProjection.StableOrder()
-        let result = DesktopSidebarProjection.sections(
-            sessions: sessions, layout: named, filter: "release", order: &order, now: now, calendar: calendar
-        )
-        XCTAssertEqual(result.flatMap(\.items).map(\.id), ["group:g"])
-
-        // The hidden internal fruit identity never matches.
-        let unnamed = DesktopLayout(revision: 1, groups: [DesktopGroup(id: "g", name: "Group Cherry", members: ["a", "b"])], pinnedSessions: [:])
-        var unnamedOrder = DesktopSidebarProjection.StableOrder()
         let hidden = DesktopSidebarProjection.sections(
-            sessions: sessions, layout: unnamed, filter: "cherry", order: &unnamedOrder, now: now, calendar: calendar
+            sessions: sessions, layout: layout, filter: "cherry", order: &order, now: now, calendar: calendar
         )
         XCTAssertTrue(hidden.flatMap(\.items).isEmpty)
-    }
-
-    func testSplitDisplayNameJoinsMemberTitlesUnlessNamed() {
-        let members = [session("a", hoursAgo: 1, title: "Fix the  login\nrace"), session("b", hoursAgo: 1, title: "Export reports")]
-        let unnamed = DesktopGroup(id: "g", name: "Group Orange 13", members: ["a", "b"])
-        XCTAssertEqual(DesktopSidebarProjection.displayName(unnamed, members: members), "Fix the login race + Export reports")
-        let pending = [session("p", hoursAgo: 1, title: "..."), session("b", hoursAgo: 1, title: "Export reports")]
-        XCTAssertEqual(DesktopSidebarProjection.displayName(unnamed, members: pending), "Export reports")
-        let named = DesktopGroup(id: "g", name: "Release check", named: true, members: ["a", "b"])
-        XCTAssertEqual(DesktopSidebarProjection.displayName(named, members: members), "Release check")
-    }
-
-    func testGroupDecodesNamedFlagAndDefaultsToUnnamed() throws {
-        let json = #"{"revision":3,"groups":[{"id":"g1","name":"Release check","named":true,"members":["a","b"]},{"id":"g2","name":"Group Kiwi","members":["c","d"]}],"pinned_sessions":{}}"#
-        let layout = try JSONDecoder().decode(DesktopLayout.self, from: Data(json.utf8))
-        XCTAssertEqual(layout.groups.map(\.named), [true, false])
     }
 
     func testPinnedBlockFirstNewestPinFirst() {
@@ -132,6 +109,21 @@ final class DesktopSidebarProjectionTests: XCTestCase {
         XCTAssertEqual(result.first?.items.map(\.id), ["session:c", "session:a", "session:b"])
     }
 
+    func testAttentionSummaryCountsUnreadIndependentlyFromActivity() {
+        let members = [
+            SessionSummary(key: "a", attention: .waiting, marker: "waiting"),
+            SessionSummary(key: "b", attention: .working, marker: "unread"),
+            SessionSummary(key: "c", attention: .unread, marker: "unread"),
+            SessionSummary(key: "d", attention: .none, marker: "recent"),
+            SessionSummary(key: "e"),
+        ]
+        let summary = DesktopSidebarProjection.attentionSummary(members)
+        // waiting: a; working: b (behind red) + d (recent shares green);
+        // unread: b + c. One session can count in two buckets.
+        XCTAssertEqual(summary.map(\.0), [.waiting, .working, .unread])
+        XCTAssertEqual(summary.map(\.1), [1, 2, 2])
+    }
+
     func testGroupArrivingAfterFirstRenderKeepsItsMembersPlace() {
         var order = DesktopSidebarProjection.StableOrder()
         let sessions = [session("live", hoursAgo: 0.1), session("a", hoursAgo: 4), session("b", hoursAgo: 5)]
@@ -139,18 +131,5 @@ final class DesktopSidebarProjectionTests: XCTestCase {
         let layout = DesktopLayout(revision: 2, groups: [DesktopGroup(id: "g", name: "Group Pear", members: ["a", "b"])], pinnedSessions: [:])
         let result = DesktopSidebarProjection.sections(sessions: sessions, layout: layout, filter: "", order: &order, now: now, calendar: calendar)
         XCTAssertEqual(result.first?.items.map(\.id), ["session:live", "group:g"])
-    }
-
-    func testActiveSessionsAreHostedWithMarkerWaitingFirst() {
-        func s(_ key: String, marker: String, hosted: Bool) -> SessionSummary {
-            SessionSummary(key: key, runtime: "codex", mtime: 1, hosted: hosted, marker: marker)
-        }
-        let result = DesktopSidebarProjection.activeSessions([
-            s("work", marker: "working", hosted: true),
-            s("wait", marker: "waiting", hosted: true),
-            s("idle", marker: "", hosted: true),
-            s("elsewhere", marker: "waiting", hosted: false),
-        ])
-        XCTAssertEqual(result.map(\.key), ["wait", "work"])
     }
 }

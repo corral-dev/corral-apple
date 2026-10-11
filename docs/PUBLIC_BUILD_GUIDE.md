@@ -43,7 +43,9 @@ The signing relationship follows Apple's [Keychain sharing documentation](https:
 
 Private tags, build caches, credentials, original Git history and private business planning do not enter the public repository.
 
-Current-publication visual limit: the environment did not permit a fresh desktop window capture. Earlier unverified phone preview images are not presented as current application screenshots. Public-source and build verification must be reported separately from visual acceptance.
+Current-publication visual evidence: after console unlock, the installed Mac 0.3.70 main window was captured and inspected, with the local connection ready. Conversation, split-motion and phone acceptance are separate checks. Earlier unverified phone preview images are not presented as current application screenshots.
+
+Anonymous release verification must retry an interrupted response body within the existing three-attempt GET budget and reject partial bytes. Python's [`IncompleteRead`](https://docs.python.org/3.14/library/http.client.html#http.client.IncompleteRead) is an `HTTPException`, so catching URL/connection errors alone misses this failure. Keep SHA-256 verification, immutable asset checks and accepted notarization identities; a failed verification must not recreate or overwrite an already published artifact. The bounded retry is a delivery reliability fix, not evidence of application performance.
 
 ## Publication privacy verification
 

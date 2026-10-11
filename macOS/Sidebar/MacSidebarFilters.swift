@@ -3,6 +3,9 @@ import SwiftUI
 /// Native controls over the unfiltered host window; selections only narrow presentation.
 struct MacSidebarFilters: View {
     let sessions: [SessionSummary]
+    /// Sessions showing a status dot.
+    let activeCount: Int
+    @Binding var activeOnly: Bool
     @Binding var runtimes: Set<SessionRuntimeFilter>
     @Binding var projects: Set<SessionProjectFilter>
     @State private var showProjects = false
@@ -11,6 +14,19 @@ struct MacSidebarFilters: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             MacFilterChoices {
+                // Its own dimension: the runtime row's All leaves it alone.
+                MacQuickFilterButton(selected: activeOnly) {
+                    Text("sessions.filter.active")
+                    Text(verbatim: activeCount.formatted())
+                        .monospacedDigit()
+                        .opacity(0.75)
+                } action: {
+                    activeOnly.toggle()
+                }
+                .accessibilityLabel(Text("sessions.filter.active"))
+                .accessibilityValue(Text(verbatim: activeCount.formatted()))
+                Divider()
+                    .interfaceFrame(height: 16)
                 ForEach(SessionRuntimeFilter.ordered, id: \.self) { runtime in
                     MacQuickFilterButton(selected: runtime == .all ? runtimes.isEmpty : runtimes.contains(runtime)) {
                         if runtime == .all {
@@ -87,6 +103,7 @@ struct MacSidebarFilters: View {
             guard !choices.isEmpty else { return }
             let arguments = ProcessInfo.processInfo.arguments
             if arguments.contains("-CorralInspectSelectedFilters") {
+                activeOnly = true
                 runtimes = [.codex]
                 projects = [.project(path: choices[0].path)]
             } else if arguments.contains("-CorralInspectMultiFilters") {
@@ -107,28 +124,48 @@ struct MacSidebarFilters: View {
     }
 }
 
-/// Match the iPhone's quiet native capsules. Text contrast also preserves
-/// the selection distinction when macOS mutes an inactive window's tint.
-private struct MacQuickFilterButton<Content: View>: View {
+/// Native capsules; macOS `.bordered` ignores tint, so a selected choice is
+/// the accent-filled `.borderedProminent` capsule. When macOS mutes an
+/// inactive window's fill, the label contrast keeps the selection readable.
+/// Shared with the New Session dialog.
+struct MacQuickFilterButton<Content: View>: View {
+    @Environment(\.controlActiveState) private var activeState
     let selected: Bool
     @ViewBuilder let content: () -> Content
     let action: () -> Void
 
     var body: some View {
-        button
-        .buttonStyle(.bordered)
+        Group {
+            if selected {
+                button.buttonStyle(.borderedProminent)
+            } else {
+                button.buttonStyle(.bordered)
+            }
+        }
         .buttonBorderShape(.capsule)
         .controlSize(.small)
-        .tint(selected ? Palette.accent : Color.secondary)
+        .tint(Palette.accent)
         .interfaceFrame(height: MacSidebarMetrics.filterHeight)
         .accessibilityAddTraits(selected ? .isSelected : [])
+        #if DEBUG
+        .environment(\.controlActiveState, InspectionLaunchOptions.forcesKeyWindowControls ? .key : activeState)
+        #endif
+    }
+
+    /// On the accent fill the on-accent colour; on the muted inactive fill primary.
+    private var labelColor: Color {
+        guard selected else { return .secondary }
+        #if DEBUG
+        if InspectionLaunchOptions.forcesKeyWindowControls { return Palette.onAccent }
+        #endif
+        return activeState == .inactive ? .primary : Palette.onAccent
     }
 
     private var button: some View {
         Button(action: action) {
             HStack(spacing: Space.xs) { content() }
                 .interfaceFont(.callout.weight(selected ? .semibold : .medium))
-                .foregroundStyle(selected ? Color.primary : Color.secondary)
+                .foregroundStyle(labelColor)
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
         }
@@ -136,7 +173,7 @@ private struct MacQuickFilterButton<Content: View>: View {
 }
 
 /// Keep choices on one line and reveal overflow without a second picker step.
-private struct MacFilterChoices<Content: View>: View {
+struct MacFilterChoices<Content: View>: View {
     @Namespace private var coordinateSpace
     @State private var contentFrame: CGRect = .zero
     @State private var viewportWidth: CGFloat = 0
@@ -165,9 +202,9 @@ private struct MacFilterChoices<Content: View>: View {
     }
 }
 
-/// Adapted from the iPhone's native searchable project picker, using Mac controls.
+/// Adapted from the iPhone's searchable project picker with Mac controls. It
+/// stays open for repeated toggles and closes on a click outside or Esc.
 struct MacProjectFilterPopover: View {
-    @Environment(\.dismiss) private var dismiss
     let options: [SessionProjectOption]
     let hasNoProject: Bool
     @Binding var selected: Set<SessionProjectFilter>
@@ -182,7 +219,10 @@ struct MacProjectFilterPopover: View {
     }
 
     var body: some View {
-        NavigationStack {
+        VStack(spacing: 0) {
+            MacPopoverSearchField(text: $query, prompt: String(localized: "sessions.filter.project.search"))
+                .padding(Space.md)
+            Divider()
             List {
                 Button {
                     selected.removeAll()
@@ -218,13 +258,6 @@ struct MacProjectFilterPopover: View {
                 }
             }
             .listStyle(.plain)
-            .searchable(text: $query, prompt: Text("sessions.filter.project.search"))
-            .navigationTitle("sessions.filter.project.title")
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("action.done") { dismiss() }
-                }
-            }
         }
         .frame(width: 360, height: 420)
         .tint(.primary)

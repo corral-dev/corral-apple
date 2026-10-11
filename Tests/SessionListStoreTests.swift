@@ -544,6 +544,39 @@ final class SessionListStoreTests: XCTestCase {
         XCTAssertEqual(SessionPresentation.statusMarker(for: store.session(for: "claude:g")!), .working)
     }
 
+    func testClearingRedPreservesActivityBehindIt() {
+        let store = SessionListStore()
+        store.updateSessions([
+            SessionSummary(key: "claude:d", mtime: 100, attention: .working, marker: "unread"),
+            SessionSummary(key: "claude:w", mtime: 100, attention: .waiting, marker: "unread"),
+        ])
+        XCTAssertTrue(store.markReadLocally(key: "claude:d"))
+        let dual = store.session(for: "claude:d")!
+        XCTAssertEqual(dual.attention, AttentionKind.working)
+        XCTAssertEqual(dual.marker, "")
+        XCTAssertEqual(SessionPresentation.activityMarker(for: dual), .working)
+        XCTAssertFalse(SessionPresentation.hasUnread(for: dual))
+        XCTAssertTrue(SessionListFiltering.isActive(dual))
+        // The same host echo (same activity time) must not repaint red…
+        store.applySessionEvent(SessionSummary(key: "claude:d", mtime: 100, attention: .working, marker: "unread"))
+        XCTAssertFalse(SessionPresentation.hasUnread(for: store.session(for: "claude:d")!))
+        XCTAssertEqual(SessionPresentation.activityMarker(for: store.session(for: "claude:d")!), .working)
+        // …while newer activity brings red back on top of green.
+        store.applySessionEvent(SessionSummary(key: "claude:d", mtime: 200, attention: .working, marker: "unread"))
+        XCTAssertTrue(SessionPresentation.hasUnread(for: store.session(for: "claude:d")!))
+        XCTAssertEqual(SessionPresentation.activityMarker(for: store.session(for: "claude:d")!), .working)
+
+        // Yellow behind red stays in the waiting section after the read.
+        XCTAssertTrue(store.markReadLocally(key: "claude:w"))
+        let waited = store.session(for: "claude:w")!
+        XCTAssertEqual(SessionPresentation.activityMarker(for: waited), .waiting)
+        XCTAssertTrue(store.sections.contains {
+            if case .waiting(let items) = $0 { return items.map(\.key).contains("claude:w") }
+            return false
+        })
+        XCTAssertEqual(store.waitingCount, 1)
+    }
+
     func testHostConfirmationEndsLocalReadHold() {
         let store = SessionListStore()
         store.updateSessions([SessionSummary(key: "claude:r", mtime: 100, attention: .unread, marker: "unread")])

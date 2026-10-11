@@ -4,7 +4,7 @@ import Observation
 import SwiftUI
 
 /// The right side of the main window, modelled on the TUI's split area: up to
-/// four panes, one focused pane, optional Active sessions board, and the shared
+/// four panes, one focused pane, and the shared
 /// group layout (`layout.*`). Two or more panes are a TUI session group, so the
 /// same split shows up in every TUI window of the host and vice versa.
 @MainActor
@@ -18,19 +18,15 @@ final class MacWorkspace {
     }
 
     static let maxPanes = 4
-    static let boardPageSize = 4
 
     private(set) var hostID: String?
     @ObservationIgnored private var layoutGeneration = UUID()
 
     private(set) var paneKeys: [String] = []
     var focusedKey: String?
-    var showingBoard = false
-    var boardPage = 0
-    /// Panes that enter with motion, by key: 0 fades in (a pane the user
-    /// added), ±1 also slides in from that side (a board page turn). Panes
-    /// opened by a sidebar click, restoration or a machine switch are absent.
-    private(set) var pendingEntrances: [String: Int] = [:]
+    /// Panes the user added, which fade in. Panes opened by a sidebar click,
+    /// restoration or a machine switch are absent.
+    private(set) var pendingEntrances: Set<String> = []
     /// Split motion (design: Motion design, round 2): per pane, the horizontal
     /// offset back to where it was drawn before a pane was added or closed (a
     /// new last pane: beyond the trailing edge), animated to zero once the new
@@ -85,11 +81,9 @@ final class MacWorkspace {
         layout = .empty
         paneKeys = []
         focusedKey = nil
-        showingBoard = false
-        boardPage = 0
         runtimes = []
         promptsOpen = [:]
-        pendingEntrances = [:]
+        pendingEntrances = []
         cancelSplitMotion()
         keyFocusTarget = nil
         scrollRequests = [:]
@@ -127,8 +121,7 @@ final class MacWorkspace {
     /// `takeKeys` nil infers it: a mouse click on a sidebar row moves the caret
     /// into the opened pane, arrow-key browsing keeps focus in the sidebar.
     func open(_ key: String, sessions: [SessionSummary], takeKeys: Bool? = nil) {
-        if showingBoard { showingBoard = false }
-        if !pendingEntrances.isEmpty { pendingEntrances = [:] }
+        if !pendingEntrances.isEmpty { pendingEntrances = [] }
         defer { if takeKeys ?? Self.selectionCameFromPointer { requestKeyFocus(key) } }
         if paneKeys.contains(key) {
             focus(key)
@@ -178,8 +171,7 @@ final class MacWorkspace {
         let visible = Set(sessions.map(\.key))
         let members = group.members.filter { visible.contains($0) }
         guard let first = members.first else { return }
-        showingBoard = false
-        pendingEntrances = [:]
+        pendingEntrances = []
         cancelSplitMotion()
         paneKeys = Array(members.prefix(Self.maxPanes))
         let target = group.members.contains(group.focus) && members.contains(group.focus) ? group.focus : first
@@ -192,8 +184,7 @@ final class MacWorkspace {
     /// split must not overwrite them. The next pane change syncs as usual.
     func restorePanes(_ keys: [String]) {
         guard let first = keys.first else { return }
-        showingBoard = false
-        pendingEntrances = [:]
+        pendingEntrances = []
         cancelSplitMotion()
         var unique: [String] = []
         for key in keys where !unique.contains(key) { unique.append(key) }
@@ -204,18 +195,15 @@ final class MacWorkspace {
     #if DEBUG
     /// Restore local acceptance state, including an initially empty workspace,
     /// without changing the host's shared session groups.
-    func inspectionRestoreWorkspace(keys: [String], focus: String?, board: Bool) {
+    func inspectionRestoreWorkspace(keys: [String], focus: String?) {
         cancelSplitMotion()
         paneKeys = keys
         focusedKey = focus
-        showingBoard = board
     }
     #endif
 
     /// Split: add a session as another pane (replaces the focused pane when full).
     func addPane(_ key: String, project: String) {
-        let splitWasShown = !showingBoard
-        showingBoard = false
         if paneKeys.contains(key) {
             focus(key)
             return
@@ -227,8 +215,8 @@ final class MacWorkspace {
         } else {
             paneKeys.append(key)
         }
-        pendingEntrances[key] = 0
-        if splitWasShown { glide(from: before, entering: key) }
+        pendingEntrances.insert(key)
+        glide(from: before, entering: key)
         focusedKey = key
         requestKeyFocus(key)
         syncGroup(project: project)
@@ -242,7 +230,7 @@ final class MacWorkspace {
         let wasGrouped = paneKeys.count >= 2 && layout.group(containing: key) != nil
         let slot = drawnPaneKeys.firstIndex(of: key) ?? index
         paneKeys.remove(at: index)
-        if !showingBoard { beginLeaving(key, slot: slot) }
+        beginLeaving(key, slot: slot)
         if focusedKey == key {
             focusedKey = paneKeys.isEmpty ? nil : paneKeys[min(index, paneKeys.count - 1)]
             requestKeyFocus(focusedKey)
@@ -290,7 +278,7 @@ final class MacWorkspace {
     /// The closed pane stays in its slot while it fades out, then leaves the
     /// layout and the panes after it glide into the freed space.
     private func beginLeaving(_ key: String, slot: Int) {
-        pendingEntrances[key] = nil
+        pendingEntrances.remove(key)
         leavingPanes[key] = slot
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(MacMotion.seconds(MacMotion.paneExitSeconds)))
@@ -399,7 +387,7 @@ final class MacWorkspace {
         scrollRequests[key] = ChatScrollRequest(messageID: messageID)
     }
 
-    /// The sidebar reflects the focused pane; the board has its own selection.
+    /// The sidebar reflects the focused pane.
     func replaceKey(_ old: String, with new: String) {
         if let index = paneKeys.firstIndex(of: old) { paneKeys[index] = new }
         if focusedKey == old { focusedKey = new }
@@ -429,37 +417,9 @@ final class MacWorkspace {
         }
     }
 
-    // MARK: - Active sessions board
-
-    func showBoard() {
-        cancelSplitMotion()
-        showingBoard = true
-        boardPage = 0
-    }
-
-    func boardPages(active: [SessionSummary]) -> Int {
-        max(1, Int(ceil(Double(active.count) / Double(Self.boardPageSize))))
-    }
-
-    func turnBoardPage(by delta: Int, active: [SessionSummary]) {
-        let pages = boardPages(active: active)
-        let previous = Set(boardKeys(page: boardPage, active: active))
-        boardPage = ((boardPage + delta) % pages + pages) % pages
-        // The new page's panes slide in from the side they come from.
-        let direction = delta >= 0 ? 1 : -1
-        pendingEntrances = [:]
-        for key in boardKeys(page: boardPage, active: active) where !previous.contains(key) {
-            pendingEntrances[key] = direction
-        }
-    }
-
-    func boardKeys(page: Int, active: [SessionSummary]) -> [String] {
-        Array(active.dropFirst(page * Self.boardPageSize).prefix(Self.boardPageSize)).map(\.key)
-    }
-
     /// The pane finished (or skipped) its entrance.
     func clearEntrance(_ key: String) {
-        pendingEntrances[key] = nil
+        pendingEntrances.remove(key)
     }
 
     // MARK: - Layout watch (shared with the TUI)
@@ -551,10 +511,6 @@ final class MacWorkspace {
         await call(WireProtocol.mLayoutCollapse, ["group_id": group.id, "collapsed": collapsed])
     }
 
-    func renameGroup(_ group: DesktopGroup, to name: String) async {
-        await call(WireProtocol.mLayoutRenameGroup, ["group_id": group.id, "name": name])
-    }
-
     /// Fork / continue with another assistant: the new session opens in a pane
     /// beside its source, as the TUI's advanced actions do.
     func fork(_ source: SessionSummary) async {
@@ -575,6 +531,14 @@ final class MacWorkspace {
 
     func resume(_ key: String) async -> Bool {
         await call(WireProtocol.mSessionResume, ["key": key]) != nil
+    }
+
+    /// Terminal view starting an ended session: the failure belongs to the
+    /// pane that asked, so it is returned instead of raised as a window alert.
+    func resumeInPane(_ key: String) async -> String? {
+        var failure: String?
+        let result = await call(WireProtocol.mSessionResume, ["key": key]) { failure = $0 }
+        return result == nil ? failure ?? String(localized: "error.unknown") : nil
     }
 
     /// TUI top bar: click an assistant to add a pane with a new session in the
@@ -611,7 +575,6 @@ final class MacWorkspace {
         if asPane, !paneKeys.isEmpty {
             addPane(session.key, project: session.cwd)
         } else {
-            showingBoard = false
             cancelSplitMotion()
             paneKeys = [session.key]
             focusedKey = session.key
@@ -634,12 +597,14 @@ final class MacWorkspace {
     /// interrupt with an alert the way a failed user action does.
     @discardableResult
     private func call(
-        _ method: String, _ params: [String: Any] = [:], refreshLayout: Bool = true, background: Bool = false
+        _ method: String, _ params: [String: Any] = [:], refreshLayout: Bool = true, background: Bool = false,
+        onFailure: ((String) -> Void)? = nil
     ) async -> Any? {
+        let report: (String) -> Void = { message in
+            if let onFailure { onFailure(message) } else if !background { self.actionError = message }
+        }
         guard let client = appModel?.client else {
-            if !background {
-                actionError = String(localized: String.LocalizationValue("error.not_connected"))
-            }
+            report(String(localized: String.LocalizationValue("error.not_connected")))
             return nil
         }
         let host = hostID
@@ -657,8 +622,8 @@ final class MacWorkspace {
             return result
         } catch {
             guard !Task.isCancelled, appModel?.client === client, hostID == host else { return nil }
-            if !background, !(error is CancellationError) {
-                actionError = SessionActionsMenu.failureMessage(for: error)
+            if !(error is CancellationError) {
+                report(SessionActionsMenu.failureMessage(for: error))
             }
             return nil
         }
@@ -715,7 +680,7 @@ final class MacWorkspace {
     /// the split height below the pane header.
     private func newPaneTerminalGrid() -> TerminalGrid? {
         guard splitWidth > 0, splitHeight > 0 else { return nil }
-        let joining = showingBoard || paneKeys.isEmpty ? 1 : min(paneKeys.count + 1, Self.maxPanes)
+        let joining = paneKeys.isEmpty ? 1 : min(paneKeys.count + 1, Self.maxPanes)
         let width = (splitWidth - CGFloat(joining - 1)) / CGFloat(joining)
         return TerminalAppearance.fittingGrid(for: CGSize(width: width, height: splitHeight - Self.paneHeaderHeight * interfaceScale), interfaceScale: interfaceScale)
     }
@@ -724,9 +689,8 @@ final class MacWorkspace {
     static let paneHeaderHeight: CGFloat = 31
 
     private func showTerminalPane(_ key: String) {
-        if paneKeys.isEmpty || showingBoard {
-            showingBoard = false
-            pendingEntrances = [:]
+        if paneKeys.isEmpty {
+            pendingEntrances = []
             cancelSplitMotion()
             paneKeys = [key]
             focusedKey = key

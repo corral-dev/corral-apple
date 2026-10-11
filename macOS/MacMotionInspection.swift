@@ -94,16 +94,6 @@ enum MacMotionInspection {
         await step("focus A") { workspace.focus(chatA.key) }
         await step("focus B") { workspace.focus(probe.key) }
         await step("close B") { workspace.closePane(probe.key) }
-        await step("show board (instant)") { workspace.showBoard() }
-        let active = DesktopSidebarProjection.activeSessions(feed.listStore.windowSessions)
-        if workspace.boardPages(active: active) > 1 {
-            await step("board next page", settle: 4) {
-                workspace.turnBoardPage(by: 1, active: active)
-            }
-            await step("board previous page", settle: 3) {
-                workspace.turnBoardPage(by: -1, active: active)
-            }
-        }
         await step("back to A (instant)") { workspace.open(chatA.key, sessions: sessions) }
 
         try? await Task.sleep(for: .seconds(2))

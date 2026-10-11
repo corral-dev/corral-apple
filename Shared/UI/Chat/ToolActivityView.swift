@@ -3,33 +3,57 @@ import SwiftUI
 /// Compact summary capsule that opens tool details in a native popover on the
 /// Mac and a large dismissible detail sheet on iPhone.
 /// Consecutive tool-only turns merge into one card; bodies load on demand.
-struct ToolActivityView: View {
-    @Environment(\.interfaceScale) private var interfaceScale
+struct ToolActivityView: View, Equatable {
     let tools: [ToolCall]
     let sourceSeqs: [Int]
     let runtimeID: String?
-    var store: ConversationStore?
+    var store: ConversationStore? = nil
+    /// Explicit style inputs instead of environment (see MessageBubbleView):
+    /// row equality must cover every dynamic input.
+    var interfaceScale: CGFloat = 1
+    var sessionTextScale: CGFloat = SessionTextSize.default.scale
+    var colorScheme: ColorScheme = .light
+
+    /// `store` is compared by identity: content changes arrive through `tools`.
+    /// A replaced store (reconnect) must re-resolve even for identical tools.
+    static func == (lhs: ToolActivityView, rhs: ToolActivityView) -> Bool {
+        lhs.tools == rhs.tools
+            && lhs.sourceSeqs == rhs.sourceSeqs
+            && lhs.runtimeID == rhs.runtimeID
+            && lhs.store.map(ObjectIdentifier.init) == rhs.store.map(ObjectIdentifier.init)
+            && lhs.interfaceScale == rhs.interfaceScale
+            && lhs.sessionTextScale == rhs.sessionTextScale
+            && lhs.colorScheme == rhs.colorScheme
+    }
 
     @State private var showDetail = false
     @State private var detailTools: [ToolCall]
     @State private var isLoadingDetail = false
     @State private var detailError: String?
-    @Environment(\.sessionTextScale) private var sessionTextScale
 
     init(
         tools: [ToolCall],
         sourceSeqs: [Int],
         runtimeID: String?,
-        store: ConversationStore? = nil
+        store: ConversationStore? = nil,
+        interfaceScale: CGFloat = 1,
+        sessionTextScale: CGFloat = SessionTextSize.default.scale,
+        colorScheme: ColorScheme = .light
     ) {
         self.tools = tools
         self.sourceSeqs = sourceSeqs
         self.runtimeID = runtimeID
         self.store = store
+        self.interfaceScale = interfaceScale
+        self.sessionTextScale = sessionTextScale
+        self.colorScheme = colorScheme
         _detailTools = State(initialValue: tools)
     }
 
     var body: some View {
+        #if DEBUG
+        let _ = SwitchBodyCounters.toolBodies &+= 1
+        #endif
         #if os(macOS)
         popoverBody
         #else

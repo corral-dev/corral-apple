@@ -48,6 +48,7 @@ struct RetainedLayoutProbeView: View {
     let a = model.views["a"]!
     let b = model.views["b"]!
     let sizes = [a.frame.size, b.frame.size]
+    let frames = [a.convert(a.bounds, to: view), b.convert(b.bounds, to: view)]
     precondition(sizes[0].width > 0 && sizes[1].width > 0)
     for index in 0..<12 {
         model.visible = index.isMultiple(of: 2) ? ["c", "d"] : ["a", "b"]
@@ -57,9 +58,19 @@ struct RetainedLayoutProbeView: View {
         try? await Task.sleep(for: .milliseconds(20))
         precondition(a.frame.size == sizes[0] && b.frame.size == sizes[1],
                      "roster changes must not reflow hidden native slots")
+        precondition(a.convert(a.bounds, to: view) == frames[0]
+                     && b.convert(b.bounds, to: view) == frames[1],
+                     "dormant native slots must stay at their previous position")
     }
     precondition(model.creations.values.allSatisfy { $0 == 1 },
                  "native slots must retain identity while dormant")
+    model.visible = ["b", "a"]
+    model.roster = ["a", "b", "c", "d"]
+    await Task.yield()
+    view.layoutSubtreeIfNeeded()
+    try? await Task.sleep(for: .milliseconds(20))
+    precondition(b.convert(b.bounds, to: view).minX < a.convert(a.bounds, to: view).minX,
+                 "visible workspace order must be independent of retained roster order")
     window.orderOut(nil)
     print("PASS mounted layout: repeated split switching preserves native identity and dormant geometry")
 }

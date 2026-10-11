@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Right side of the window: the split panes (a TUI session group when two or
-/// more), or the Active sessions board. Panes share the width equally, as in
+/// more). Panes share the width equally, as in
 /// the TUI's split (no draggable dividers).
 struct MacSplitArea: View {
     @Environment(\.interfaceScale) private var interfaceScale
@@ -44,7 +44,6 @@ private struct MacRetainedPanes: View {
     @Environment(MacWorkspace.self) private var workspace
     let keys: [String]
     let feed: HostSessionFeed
-    var allowsClose = true
     var autoFocusKey: String?
     @State private var recent: [String] = []
 
@@ -54,24 +53,26 @@ private struct MacRetainedPanes: View {
                 && workspace.mode(for: $0) == .chat
         }
         MacRetainedPaneLayout(visibleKeys: keys) {
-            ForEach(roster, id: \.self) { key in
+            // Visible order is supplied by the layout, not this retained roster.
+            // Warm switches should not reorder the mounted hosting boundaries.
+            ForEach(roster.sorted(), id: \.self) { key in
                 let visible = keys.contains(key)
                 HStack(spacing: 0) {
                     Divider().frame(width: (keys.firstIndex(of: key) ?? 0) > 0 ? 1 : 0)
+                        .opacity(visible ? 1 : 0)
                     Group {
                         if ProjectShell.isShellKey(key) {
                             MacShellPane(shellKey: key)
                         } else if let session = feed.listStore.session(for: key) {
                             MacPaneSurface(session: session, metadataStore: feed.listStore,
-                                           allowsClose: allowsClose, autoFocusComposer: autoFocusKey == key,
+                                           allowsClose: true, autoFocusComposer: autoFocusKey == key,
                                            isPresented: visible)
                         }
                     }
-                    .modifier(PaneEntrance(key: key, direction: workspace.pendingEntrances[key]))
+                    .modifier(PaneEntrance(key: key, entering: workspace.pendingEntrances.contains(key)))
                 }
                 .modifier(PaneSlot(shift: workspace.paneShifts[key] ?? 0,
                                    leaving: workspace.leavingPanes[key] != nil))
-                .opacity(visible ? 1 : 0)
                 .allowsHitTesting(visible)
                 .accessibilityHidden(!visible)
                 .layoutValue(key: MacRetainedPaneKey.self, value: key)
@@ -98,11 +99,11 @@ nonisolated private struct MacRetainedPaneKey: LayoutValueKey {
 /// children remain at their last proposal without contributing to its width.
 private struct MacRetainedPaneLayout: Layout {
     let visibleKeys: [String]
-    struct Cache { var sizes: [String: CGSize] = [:] }
+    struct Cache { var frames: [String: CGRect] = [:] }
     func makeCache(subviews: Subviews) -> Cache { Cache() }
     func updateCache(_ cache: inout Cache, subviews: Subviews) {
         let keys = Set(subviews.map { $0[MacRetainedPaneKey.self] })
-        cache.sizes = cache.sizes.filter { keys.contains($0.key) }
+        cache.frames = cache.frames.filter { keys.contains($0.key) }
     }
     private var equal: EqualPaneLayout { EqualPaneLayout(minimumWidth: MacSplitArea.paneMinimum) }
 
@@ -122,18 +123,21 @@ private struct MacRetainedPaneLayout: Layout {
         let count = indices.count
         if count > 0 {
             let paneWidth = max(0, (bounds.width - CGFloat(count - 1)) / CGFloat(count))
+            var x: CGFloat = 0
             for (slot, index) in indices.enumerated() {
-                cache.sizes[subviews[index][MacRetainedPaneKey.self]] = CGSize(
-                    width: paneWidth + (slot > 0 ? 1 : 0), height: bounds.height)
+                let width = paneWidth + (slot > 0 ? 1 : 0)
+                cache.frames[subviews[index][MacRetainedPaneKey.self]] = CGRect(
+                    x: x, y: 0, width: width, height: bounds.height)
+                x += width
             }
         }
         let liveKeys = Set(subviews.map { $0[MacRetainedPaneKey.self] })
-        cache.sizes = cache.sizes.filter { liveKeys.contains($0.key) }
+        cache.frames = cache.frames.filter { liveKeys.contains($0.key) }
         for index in subviews.indices where !indices.contains(index) {
             let key = subviews[index][MacRetainedPaneKey.self]
-            let size = cache.sizes[key] ?? bounds.size
-            subviews[index].place(at: bounds.origin, anchor: .topLeading,
-                                 proposal: ProposedViewSize(size))
+            let frame = cache.frames[key] ?? CGRect(origin: .zero, size: bounds.size)
+            subviews[index].place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY),
+                                 anchor: .topLeading, proposal: ProposedViewSize(frame.size))
         }
     }
 }
@@ -147,99 +151,31 @@ struct WindowMinimumWidthKey: PreferenceKey {
     }
 }
 
-/// The TUI's Active sessions board: hosted sessions that wait, work, are
-/// unread or were active just now, four at a time with cyclic paging. Panes
-/// here are live and accept input but cannot be closed (board semantics).
-struct MacActiveBoard: View {
-    @Environment(\.interfaceScale) private var interfaceScale
-    @Environment(MacWorkspace.self) private var workspace
-    let feed: HostSessionFeed
-    @State private var sidebarInset: CGFloat = 0
-
-    var body: some View {
-        let active = DesktopSidebarProjection.activeSessions(feed.listStore.windowSessions)
-        let pages = workspace.boardPages(active: active)
-        let page = min(workspace.boardPage, pages - 1)
-        let shown = Array(active.dropFirst(page * MacWorkspace.boardPageSize).prefix(MacWorkspace.boardPageSize))
-        VStack(spacing: 0) {
-            HStack(spacing: Space.md * interfaceScale) {
-                Label("mac.board.title \(active.count)", systemImage: "rectangle.split.2x2")
-                    .interfaceFont(.body.weight(.semibold))
-                Spacer()
-                if pages > 1 {
-                    Button {
-                        workspace.turnBoardPage(by: -1, active: active)
-                    } label: {
-                        Image(systemName: "chevron.left")
-                    }
-                    .keyboardShortcut("[", modifiers: .command)
-                    .help(Text("mac.board.previous"))
-                    Text(verbatim: "\(page + 1)/\(pages)")
-                        .interfaceFont(.subheadline.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                    Button {
-                        workspace.turnBoardPage(by: 1, active: active)
-                    } label: {
-                        Image(systemName: "chevron.right")
-                    }
-                    .keyboardShortcut("]", modifiers: .command)
-                    .help(Text("mac.board.next"))
-                }
-            }
-            .buttonStyle(.borderless)
-            .interfacePadding(.horizontal, Space.md)
-            .interfacePadding(.vertical, Space.sm)
-            Divider()
-            if shown.isEmpty {
-                ContentUnavailableView("mac.board.empty", systemImage: "rectangle.split.2x2")
-                    .interfaceFrame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                MacRetainedPanes(keys: shown.map(\.key), feed: feed, allowsClose: false)
-                    .id(workspace.hostID)
-                .environment(\.macVisiblePaneKeys, shown.map(\.key))
-                .clipped()
-                .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.leading } action: { sidebarInset = $0 }
-                .preference(
-                    key: WindowMinimumWidthKey.self,
-                    value: MacSplitArea.requiredWidth(panes: shown.count, sidebar: sidebarInset)
-                )
-            }
-        }
-    }
-}
-
 /// A pane's entrance (design: Motion design). The layout has already changed
-/// in one step; the pane starts hidden and fades in (sliding from `direction`
-/// on a board page turn) only after its first frame is committed, because
+/// in one step; the pane starts hidden and fades in only after its first
+/// frame is committed, because
 /// building a pane can block the main thread long enough to swallow an
 /// animation that started with the change. Panes without a pending entrance
 /// render as they are.
 private struct PaneEntrance: ViewModifier {
-    @Environment(\.interfaceScale) private var interfaceScale
     @Environment(MacWorkspace.self) private var workspace
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let key: String
-    let direction: Int?
     @State private var entered: Bool
 
-    init(key: String, direction: Int?) {
+    init(key: String, entering: Bool) {
         self.key = key
-        self.direction = direction
         // Decided once, when the pane is created.
-        _entered = State(initialValue: direction == nil)
+        _entered = State(initialValue: !entering)
     }
 
     func body(content: Content) -> some View {
         content
             .opacity(entered ? 1 : 0)
-            .visualEffect { [entered, reduceMotion, direction, pageOffset = MacMotion.pageOffset] effect, _ in
-                effect.offset(x: entered || reduceMotion ? 0 : CGFloat(direction ?? 0) * pageOffset)
-            }
             .task {
                 guard !entered else { return }
-                // Let the first frame (and any build stall) pass before moving.
+                // Let the first frame (and any build stall) pass before fading.
                 try? await Task.sleep(for: .milliseconds(16))
-                withAnimation(MacMotion.paneEntrance(sliding: (direction ?? 0) != 0, reduceMotion: reduceMotion)) {
+                withAnimation(MacMotion.paneEntrance) {
                     entered = true
                 }
                 workspace.clearEntrance(key)

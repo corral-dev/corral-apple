@@ -30,6 +30,8 @@ enum ChatTimelineRhythm {
 
 struct ChatView: View {
     @Environment(\.interfaceScale) private var interfaceScale
+    @Environment(\.sessionTextScale) private var sessionTextScale
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.calendar) private var calendar
     @Environment(\.timeZone) private var timeZone
     @Bindable var store: ConversationStore
@@ -39,7 +41,8 @@ struct ChatView: View {
     #if os(macOS)
     @Environment(\.macConversationTextDocument) private var textDocument
     #endif
-    /// Host-decided sidebar dot; the activity footer follows it.
+    /// Host-decided activity dot (waiting/working/recent); the activity footer
+    /// follows it. Red unread is an independent overlay and never passed here.
     var sessionMarker: SessionPresentation.StatusMarker? = nil
     var isConnected = true
     var isSending = false
@@ -55,6 +58,16 @@ struct ChatView: View {
     @State private var revealedMessageID: String?
     var onQuestionSubmit: ((String, [NativeQuestionAnswer]) -> Void)?
     var onRetryMessage: ((RichMessage) -> Void)?
+
+    /// Identity of the retained Mac text network, for row equality. Nil
+    /// outside Mac panes (and on iOS), where rows have no shared network.
+    private var textDocumentID: ObjectIdentifier? {
+#if os(macOS)
+        textDocument.map(ObjectIdentifier.init)
+#else
+        nil
+#endif
+    }
 
     init(
         store: ConversationStore,
@@ -195,14 +208,22 @@ struct ChatView: View {
                         MessageBubbleView(
                             message: message,
                             runtimeID: runtimeID,
-                            onRetry: { onRetryMessage?(message) }
+                            onRetry: { onRetryMessage?(message) },
+                            interfaceScale: interfaceScale,
+                            sessionTextScale: sessionTextScale,
+                            colorScheme: colorScheme,
+                            bubbleTextCap: MessageBubbleLayout.defaultBubbleCap,
+                            selectionDocumentID: textDocumentID
                         )
                     case .toolGroup(_, let sourceSeqs, let tools):
                         ToolActivityView(
                             tools: tools,
                             sourceSeqs: sourceSeqs,
                             runtimeID: runtimeID,
-                            store: store
+                            store: store,
+                            interfaceScale: interfaceScale,
+                            sessionTextScale: sessionTextScale,
+                            colorScheme: colorScheme
                         )
                     }
                 }

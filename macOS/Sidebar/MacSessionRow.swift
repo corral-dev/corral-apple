@@ -8,7 +8,7 @@ struct MacSessionRow: View {
     @Environment(\.interfaceScale) private var interfaceScale
     @Environment(\.sidebarRowSize) private var rowSize
     let session: SessionSummary
-    /// Project name already shown by the enclosing group row, if any.
+    /// Project name already shown by the enclosing split header, if any.
     var groupProject: String?
 
     var body: some View {
@@ -49,12 +49,12 @@ struct MacSessionRow: View {
     }
 
     /// Waiting for an answer or unread: the title is semibold, the Mail
-    /// convention (design: Visual guidance pass); the trailing dot stays.
+    /// convention (design: Visual guidance pass); the trailing dots stay.
+    /// Red unread is independent from the yellow waiting activity: either one
+    /// (or both together) keeps the emphasis.
     private var needsPerson: Bool {
-        switch SessionPresentation.statusMarker(for: session) {
-        case .waiting?, .unread?: true
-        default: false
-        }
+        SessionPresentation.activityMarker(for: session) == .waiting
+            || SessionPresentation.hasUnread(for: session)
     }
 
     /// Project then preview; a blank string keeps the line when both are empty.
@@ -79,14 +79,40 @@ struct MacSessionRow: View {
         }
     }
 
+    /// Activity dot plus the independent red unread dot; both can show at once.
     @ViewBuilder
     private var statusDot: some View {
-        if let marker = SessionPresentation.statusMarker(for: session) {
-            Circle()
-                .fill(MacSidebarMetrics.color(for: marker))
-                .interfaceFrame(width: 7, height: 7)
-                .accessibilityLabel(Text(MacSidebarMetrics.label(for: marker)))
+        let dots = statusDots
+        if !dots.isEmpty {
+            HStack(spacing: 4 * interfaceScale) {
+                ForEach(dots.indices, id: \.self) { index in
+                    Circle()
+                        .fill(dots[index].color)
+                        .interfaceFrame(width: 7, height: 7)
+                        .accessibilityLabel(Text(dots[index].label))
+                }
+            }
+            .fixedSize()
         }
+    }
+
+    /// Activity first, then the independent red unread overlay.
+    private var statusDots: [(color: Color, label: LocalizedStringKey)] {
+        var dots: [(color: Color, label: LocalizedStringKey)] = []
+        switch SessionPresentation.activityMarker(for: session) {
+        case .waiting:
+            dots.append((MacSidebarMetrics.color(for: .waiting), MacSidebarMetrics.label(for: .waiting)))
+        case .working:
+            dots.append((MacSidebarMetrics.color(for: .working), MacSidebarMetrics.label(for: .working)))
+        case .recent:
+            dots.append((MacSidebarMetrics.color(for: .recent), MacSidebarMetrics.label(for: .recent)))
+        case .unread, nil:
+            break
+        }
+        if SessionPresentation.hasUnread(for: session) {
+            dots.append((MacSidebarMetrics.color(for: .unread), MacSidebarMetrics.label(for: .unread)))
+        }
+        return dots
     }
 
     private var tooltip: String {

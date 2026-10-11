@@ -25,6 +25,12 @@ enum InspectionLaunchOptions {
         return true
     }
 
+    /// Mac quick-filter captures from a background launch render as in the
+    /// key window, so acceptance never has to steal focus to activate it.
+    static var forcesKeyWindowControls: Bool {
+        ProcessInfo.processInfo.arguments.contains("-CorralInspectKeyWindow")
+    }
+
     static var forcedColorScheme: ColorScheme? {
         let arguments = ProcessInfo.processInfo.arguments
         if arguments.contains("-CorralInspectLight") { return .light }

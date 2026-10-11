@@ -11,8 +11,9 @@ enum ChatActivityState: Equatable {
         hasPrompt: Bool, hasRunningTool: Bool,
         marker: SessionPresentation.StatusMarker? = nil
     ) -> Self? {
-        // The cue follows the sidebar dot: green (`working` or `recent`) shows Working,
-        // yellow shows the waiting cue.
+        // The cue follows the activity dot: green (`working` or `recent`)
+        // shows Working, yellow shows the waiting cue. Red unread is an
+        // independent overlay and never drives (or suppresses) this cue.
         let greenDot = marker == .working || marker == .recent
         let working = attention == .working || greenDot
         // Sending resumes an ended session, so fresh or provisional activity wins

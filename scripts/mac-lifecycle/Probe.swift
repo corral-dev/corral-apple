@@ -253,14 +253,14 @@ struct LifecycleProbe {
         workspace.startLayoutWatch(); await settle()
         check(workspace.layout.revision == 100, "host A layout did not load")
         workspace.restorePanes(["same", "a"]); workspace.setMode(.terminal, for: "same")
-        workspace.promptsOpen = ["a": true]; workspace.showBoard()
+        workspace.promptsOpen = ["a": true]
         delayed.value = true; a.ready(); await settle()
         let creating = Task { await workspace.fork(SessionSummary(key: "a")) }
         await settle()
         model.client = b; workspace.selectHost("b"); workspace.startLayoutWatch(); await settle()
         check(workspace.layout.revision == 5 && workspace.layout.pinnedSessions["b"] != nil,
               "lower revision on host B was rejected")
-        check(workspace.paneKeys.isEmpty && workspace.focusedKey == nil && !workspace.showingBoard
+        check(workspace.paneKeys.isEmpty && workspace.focusedKey == nil
               && workspace.promptsOpen.isEmpty && workspace.mode(for: "same") == .chat,
               "switching hosts retained another machine's workspace state")
         oldLayout.succeed(DesktopLayout(revision: 200, groups: [], pinnedSessions: ["a": 1]))

@@ -7,13 +7,8 @@ import SwiftUI
 /// every frame). Under Reduce Motion, disclosures change instantly, entrances
 /// keep only their fade, colour fades and crossfades stay.
 enum MacMotion {
-    /// A pane the user added fades in; a board page's panes also slide.
-    static func paneEntrance(sliding: Bool, reduceMotion: Bool) -> Animation {
-        (sliding && !reduceMotion ? Animation.smooth(duration: 0.26) : .easeOut(duration: 0.2)).inspected
-    }
-
-    /// Distance a board page's panes travel while they fade in.
-    static let pageOffset: CGFloat = 24
+    /// A pane the user added fades in.
+    static let paneEntrance: Animation = Animation.easeOut(duration: 0.2).inspected
 
     /// Split panes travelling to their new slots (offset only, never width).
     static let paneGlide: Animation = Animation.smooth(duration: 0.34).inspected

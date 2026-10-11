@@ -71,11 +71,28 @@ struct SessionPrincipalHeader: View {
 /// Intrinsic-width runtime chips keep each official logo and name on one line.
 /// Horizontal scrolling handles narrow screens and larger text without tiles.
 struct SessionRuntimeFilterRow: View {
+    @Binding var activeOnly: Bool
+    /// Sessions showing a status dot.
+    let activeCount: Int
     @Binding var selected: Set<SessionRuntimeFilter>
 
     var body: some View {
         SessionFilterScrollView {
             HStack(spacing: SessionFilterStyle.chipSpacing) {
+                // Its own dimension: the runtime All leaves it alone.
+                SessionFilterChip(selected: activeOnly) {
+                    Text("sessions.filter.active")
+                    Text(verbatim: activeCount.formatted())
+                        .monospacedDigit()
+                        .opacity(0.75)
+                } action: {
+                    activeOnly.toggle()
+                    HapticFeedback.shared.emit(.selection)
+                }
+                .accessibilityLabel(Text("sessions.filter.active"))
+                .accessibilityValue(Text(verbatim: activeCount.formatted()))
+                Divider()
+                    .frame(height: 20)
                 ForEach(SessionRuntimeFilter.ordered, id: \.self) { option in
                     SessionFilterChip(selected: option == .all ? selected.isEmpty : selected.contains(option)) {
                         if option == .all {
@@ -106,6 +123,7 @@ struct SessionRuntimeFilterRow: View {
         #if DEBUG
         .task {
             if ProcessInfo.processInfo.arguments.contains("-CorralInspectSelectedFilters") {
+                activeOnly = true
                 selected = [.codex]
             } else if ProcessInfo.processInfo.arguments.contains("-CorralInspectMultiFilters") {
                 selected = [.claude, .codex]

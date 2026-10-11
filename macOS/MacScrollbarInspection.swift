@@ -14,9 +14,9 @@ enum MacScrollbarInspection {
         guard let window = NSApp.windows.first(where: { $0.title == "Corral" }),
               let content = window.contentView,
               let table = descendants(content).compactMap({ $0 as? NSOutlineView }).first else { return }
-        let keys = workspace.paneKeys, focus = workspace.focusedKey, board = workspace.showingBoard
+        let keys = workspace.paneKeys, focus = workspace.focusedKey
         let groups = workspace.layout.groups.map { "\($0.id):\($0.members.joined(separator: ","))" }
-        defer { workspace.inspectionRestoreWorkspace(keys: keys, focus: focus, board: board) }
+        defer { workspace.inspectionRestoreWorkspace(keys: keys, focus: focus) }
         var selected: Set<String> = []
         var attempts = 0
         for _ in 0..<3 {
@@ -30,7 +30,7 @@ enum MacScrollbarInspection {
                       scroll.scrollerStyle == .overlay,
                       scroll.contentView.frame.width >= scroll.bounds.width - 1 else { return }
                 attempts += 1
-                if let key = workspace.focusedKey, !workspace.showingBoard { selected.insert(key) }
+                if let key = workspace.focusedKey { selected.insert(key) }
             }
         }
         let evidence: [String: Any] = [

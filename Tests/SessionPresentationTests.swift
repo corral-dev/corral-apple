@@ -105,4 +105,26 @@ final class SessionPresentationTests: XCTestCase {
         ])
         XCTAssertEqual(SessionPresentation.statusMarker(for: waiting), .waiting)
     }
+
+    func testUnreadIsIndependentOverlayOverActivity() {
+        // Red over green behind it: both stay visible, activity preserved.
+        let dual = SessionSummary(key: "codex:d", attention: .working, marker: "unread")
+        XCTAssertTrue(SessionPresentation.hasUnread(for: dual))
+        XCTAssertEqual(SessionPresentation.activityMarker(for: dual), .working)
+        // Pure red: no activity (red alone is not active).
+        let red = SessionSummary(key: "codex:r", attention: .unread, marker: "unread")
+        XCTAssertTrue(SessionPresentation.hasUnread(for: red))
+        XCTAssertNil(SessionPresentation.activityMarker(for: red))
+        // Locally cleared red (marker "") keeps the green behind it.
+        let cleared = SessionSummary(key: "codex:c", attention: .working, marker: "")
+        XCTAssertFalse(SessionPresentation.hasUnread(for: cleared))
+        XCTAssertEqual(SessionPresentation.activityMarker(for: cleared), .working)
+        // Yellow behind red, and pure yellow.
+        let waitDual = SessionSummary(key: "codex:w", attention: .waiting, marker: "unread")
+        XCTAssertTrue(SessionPresentation.hasUnread(for: waitDual))
+        XCTAssertEqual(SessionPresentation.activityMarker(for: waitDual), .waiting)
+        let wait = SessionSummary(key: "codex:y", attention: .waiting, marker: "waiting")
+        XCTAssertFalse(SessionPresentation.hasUnread(for: wait))
+        XCTAssertEqual(SessionPresentation.activityMarker(for: wait), .waiting)
+    }
 }

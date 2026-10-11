@@ -27,7 +27,7 @@ enum MacSessionSwitchInspection {
         for _ in 0..<100 where workspace.layout.revision == 0 || feed.listStore.windowSessions.isEmpty {
             try? await Task.sleep(for: .milliseconds(100))
         }
-        let original = (workspace.paneKeys, workspace.focusedKey, workspace.showingBoard)
+        let original = (workspace.paneKeys, workspace.focusedKey)
         let sessions = feed.listStore.windowSessions
         let candidates = Array(sessions.filter {
             !$0.live && !$0.hosted && $0.attention == .none
@@ -48,6 +48,7 @@ enum MacSessionSwitchInspection {
                 }
                 ConversationStore.resetSwitchCounters()
                 MacTextRowSwitchCounters.reset()
+                SwitchBodyCounters.reset()
                 let clock = ContinuousClock()
                 let started = clock.now
                 let stall = MainThreadStallProbe()
@@ -57,7 +58,7 @@ enum MacSessionSwitchInspection {
                 } else {
                     // The same split presentation mutation without writing a
                     // temporary group into the host or the user's TUI.
-                    workspace.inspectionRestoreWorkspace(keys: chosen.map(\.key), focus: session.key, board: false)
+                    workspace.inspectionRestoreWorkspace(keys: chosen.map(\.key), focus: session.key)
                 }
                 let selectionMs = milliseconds(started.duration(to: clock.now))
                 var visible = false
@@ -106,13 +107,15 @@ enum MacSessionSwitchInspection {
                 record["timelineSkips"] = ConversationStore.timelineSkips
                 record["promptsHits"] = ConversationStore.promptsHits
                 record["promptsRecomputes"] = ConversationStore.promptsRecomputes
+                record["bubbleBodies"] = SwitchBodyCounters.bubbleBodies
+                record["toolBodies"] = SwitchBodyCounters.toolBodies
                 measurements.append(record)
                 save(measurements)
                 for session in chosen { stores[session.key] = nil }
             }
           }
         }
-        workspace.inspectionRestoreWorkspace(keys: original.0, focus: original.1, board: original.2)
+        workspace.inspectionRestoreWorkspace(keys: original.0, focus: original.1)
         save(measurements)
     }
 

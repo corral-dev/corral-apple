@@ -113,10 +113,19 @@ final class ConversationStore {
     private var snapshotRevision = 0
     private var promptRequestRevision = 0
     private var hasStopped = false
+    /// Tail of this conversation's outgoing order (owner requirement 2026-10-11): the
+    /// client queues sends, so the host never sees a second input while one is confirming.
+    private var outboundTail: Task<Void, Never>?
+    /// Sends handed to the outgoing order that have not finished their request yet.
+    private(set) var queuedOutboundCount = 0
+    /// Receipt polling settles an earlier send within 45 s; this only bounds a stuck wait.
+    static let outboundSettleTimeout: Duration = .seconds(60)
 
 #if DEBUG
     /// Tests suspend an actual detail request while events alter the retained window.
     var commandStatusRequestForTesting: ((String) async throws -> Any)?
+    /// Tests observe the order in which outgoing text reaches the host.
+    var inputRequestForTesting: (([String: Any]) async throws -> Any)?
     var toolDetailRequestForTesting: ((Int) async throws -> SessionToolDetailResponse)?
 #endif
 
@@ -418,9 +427,41 @@ final class ConversationStore {
         }
     }
 
-    /// Send text once. When receipts are available, callers must already have persisted
-    /// a pending bubble + `command_id` and cleared the composer.
+    /// Runs `operation` after every earlier send in this conversation has left and its
+    /// host outcome has settled, so input reaches the assistant in tap order.
+    private func inOutboundOrder(_ operation: @escaping @MainActor () async throws -> Void) async throws {
+        let previous = outboundTail
+        queuedOutboundCount += 1
+        defer { queuedOutboundCount -= 1 }
+        let turn = Task { @MainActor [weak self] in
+            await previous?.value
+            await self?.waitForEarlierDeliveries()
+            try await operation()
+        }
+        outboundTail = Task { _ = try? await turn.value }
+        try await turn.value
+    }
+
+    /// An earlier message is still being confirmed by the host while it is `accepted`.
+    private func waitForEarlierDeliveries() async {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: Self.outboundSettleTimeout)
+        while !hasStopped, clock.now < deadline,
+              messages.contains(where: { $0.isLocal && $0.delivery == .accepted }) {
+            try? await Task.sleep(for: .milliseconds(200))
+        }
+    }
+
+    /// Send text once, after earlier sends in this conversation. When receipts are
+    /// available, callers must already have persisted a pending bubble + `command_id`
+    /// and cleared the composer.
     func sendText(_ text: String, submit: Bool = true, commandID: String? = nil) async throws {
+        try await inOutboundOrder { [weak self] in
+            try await self?.deliverText(text, submit: submit, commandID: commandID)
+        }
+    }
+
+    private func deliverText(_ text: String, submit: Bool, commandID: String?) async throws {
         guard let client else {
             throw RemoteClient.ConnectionError.notConnected
         }
@@ -444,7 +485,15 @@ final class ConversationStore {
         }
         let payload: Any
         do {
+#if DEBUG
+            if let inputRequestForTesting {
+                payload = try await inputRequestForTesting(params)
+            } else {
+                payload = try await client.call(WireProtocol.mInputText, params: params)
+            }
+#else
             payload = try await client.call(WireProtocol.mInputText, params: params)
+#endif
         } catch {
             if startsTurn { cancelProvisionalWorking() }
             throw error
@@ -478,6 +527,12 @@ final class ConversationStore {
     }
 
     func sendImage(base64: String, commandID: String? = nil) async throws {
+        try await inOutboundOrder { [weak self] in
+            try await self?.deliverImage(base64: base64, commandID: commandID)
+        }
+    }
+
+    private func deliverImage(base64: String, commandID: String?) async throws {
         guard let client else {
             throw RemoteClient.ConnectionError.notConnected
         }

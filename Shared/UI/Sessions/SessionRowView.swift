@@ -123,35 +123,46 @@ struct SessionRowView: View {
         }
     }
 
-    /// 有状态画点，无状态占同样尺寸，保证时间基线不跳。
+    /// Activity dot plus the independent red unread dot. Both can show at
+    /// once; an empty row keeps one dot of space so the time baseline holds.
     @ViewBuilder
     private var statusDotPlaceholder: some View {
-        if let status = statusDot {
-            Circle()
-                .fill(status.color)
-                .interfaceFrame(width: TouchTarget.attentionDot, height: TouchTarget.attentionDot)
-                .accessibilityLabel(Text(status.label))
-        } else {
+        let dots = statusDots
+        if dots.isEmpty {
             Color.clear
                 .interfaceFrame(width: TouchTarget.attentionDot, height: TouchTarget.attentionDot)
                 .accessibilityHidden(true)
+        } else {
+            HStack(spacing: 4 * interfaceScale) {
+                ForEach(dots.indices, id: \.self) { index in
+                    Circle()
+                        .fill(dots[index].color)
+                        .interfaceFrame(width: TouchTarget.attentionDot, height: TouchTarget.attentionDot)
+                        .accessibilityLabel(Text(dots[index].label))
+                }
+            }
+            .fixedSize()
         }
     }
 
-    /// Host-decided TUI dot (`marker`); `recent` shares the working green.
-    private var statusDot: (color: Color, label: LocalizedStringKey)? {
-        switch SessionPresentation.statusMarker(for: session) {
+    /// Activity first, then the independent red unread overlay.
+    /// `recent` shares the working green.
+    private var statusDots: [(color: Color, label: LocalizedStringKey)] {
+        var dots: [(color: Color, label: LocalizedStringKey)] = []
+        switch SessionPresentation.activityMarker(for: session) {
         case .waiting:
-            return (Palette.attentionWaiting, "sessions.attention.waiting")
+            dots.append((Palette.attentionWaiting, "sessions.attention.waiting"))
         case .working:
-            return (Palette.attentionWorking, "sessions.attention.working")
-        case .unread:
-            return (Palette.attentionUnread, "sessions.attention.unread")
+            dots.append((Palette.attentionWorking, "sessions.attention.working"))
         case .recent:
-            return (Palette.attentionWorking, "sessions.live")
-        case nil:
-            return nil
+            dots.append((Palette.attentionWorking, "sessions.live"))
+        case .unread, nil:
+            break
         }
+        if SessionPresentation.hasUnread(for: session) {
+            dots.append((Palette.attentionUnread, "sessions.attention.unread"))
+        }
+        return dots
     }
 
     /// 官方助手标识；未知助手才回退系统符号。

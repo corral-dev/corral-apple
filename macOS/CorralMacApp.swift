@@ -87,7 +87,6 @@ final class MacCommandCenter {
     var closePaneRequest = 0
     var toggleViewRequest = 0
     var searchRequest = 0
-    var showBoardRequest = 0
     var pinRequest = 0
     var focusPaneRequest: Int?
     var pairRequest = 0
@@ -139,8 +138,6 @@ struct MacCommands: Commands {
                     .keyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: .command)
             }
             Divider()
-            Button("mac.board.show") { center.showBoardRequest += 1 }
-                .keyboardShortcut("0", modifiers: .command)
             Button("mac.menu.next_needs_you") { center.nextAttentionRequest += 1 }
                 .keyboardShortcut(.downArrow, modifiers: [.command, .option])
             Button("mac.menu.previous_needs_you") { center.previousAttentionRequest += 1 }

@@ -100,6 +100,37 @@ final class SessionCreationCoordinatorTests: XCTestCase {
         await store.stop()
     }
 
+    func testQueuedTextWaitsUntilEarlierMessageSettles() async throws {
+        let client = RemoteClient(devicePrivateKey: Data(repeating: 0, count: 32))
+        client.hostCapabilities.commandReceipts = true
+        defer { client.disconnect() }
+        let store = ConversationStore(sessionKey: "codex:a", client: client, live: true, hostID: "fixture")
+        var sent: [String] = []
+        store.inputRequestForTesting = { params in
+            sent.append(params["text"] as? String ?? "")
+            return ["status": "accepted"]
+        }
+        var released = false
+        store.commandStatusRequestForTesting = { id in
+            ["status": id == "one" && released ? "delivered" : "accepted"]
+        }
+        let firstSeq = store.enqueueLocalUser("first", commandID: "one")
+        store.recordPendingCommand(commandID: "one", text: "first", localSeq: firstSeq)
+        try await store.sendText("first", commandID: "one")
+        store.applyCommandStatus(commandID: "one", status: "accepted")
+        let secondSeq = store.enqueueLocalUser("second", commandID: "two")
+        store.recordPendingCommand(commandID: "two", text: "second", localSeq: secondSeq)
+        let second = Task { try await store.sendText("second", commandID: "two") }
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertEqual(sent, ["first"], "A later message must wait while the earlier one is confirming")
+        XCTAssertEqual(store.queuedOutboundCount, 1)
+        released = true
+        try await second.value
+        XCTAssertEqual(sent, ["first", "second"])
+        XCTAssertEqual(store.queuedOutboundCount, 0)
+        await store.stop()
+    }
+
     func testExpiredCreationOnlyQueriesStatus() async throws {
         try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
         let old = PendingSessionCreation(commandID: "old", hostID: "host", runtimeID: "codex", cwd: "", createdAt: Date(timeIntervalSince1970: 1))

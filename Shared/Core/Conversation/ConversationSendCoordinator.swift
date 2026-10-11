@@ -70,7 +70,8 @@ protocol ConversationSendDisplay: AnyObject {
 
 /// Synchronous plan for one text send. Built by `beginTextSend` (same runloop
 /// as the tap, so the `isSending` exclusion cannot race); run by
-/// `runTextSend` inside a Task.
+/// `runTextSend` inside a Task, which releases that exclusion at once because
+/// the store sends in tap order behind earlier messages.
 struct TextSendPlan: Sendable {
     let payload: String
     let commandID: String?
@@ -190,7 +191,9 @@ struct ConversationSendCoordinator: Sendable {
             display.setSending(false)
             return
         }
-        defer { display.setSending(false) }
+        // The bubble and draft are already staged; the store queues the send behind
+        // earlier ones, so the composer accepts the next message right away.
+        display.setSending(false)
         // Text-only sends reuse the shared text path (same ordering, same
         // exclusion window, same error mapping as before the extraction).
         if plan.images.isEmpty, let textPlan = plan.text {
@@ -306,7 +309,8 @@ struct ConversationSendCoordinator: Sendable {
             display.setSending(false)
             return
         }
-        defer { display.setSending(false) }
+        // Staged and queued in the store's outgoing order: free the composer now.
+        display.setSending(false)
         do {
             try await finishTextSend(plan, store: store)
             display.clearError()

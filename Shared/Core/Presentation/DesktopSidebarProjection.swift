@@ -105,7 +105,7 @@ enum DesktopSidebarProjection {
         // Every session yields exactly one row: a native list misplaces rows
         // whose identities repeat.
         var seenKeys: Set<String> = []
-        let visible = sessions.filter { matches($0, filter: filter, layout: layout) && seenKeys.insert($0.key).inserted }
+        let visible = sessions.filter { matches($0, filter: filter) && seenKeys.insert($0.key).inserted }
         let visibleByKey = Dictionary(uniqueKeysWithValues: visible.map { ($0.key, $0) })
 
         var items: [Item] = []
@@ -153,34 +153,14 @@ enum DesktopSidebarProjection {
         return result
     }
 
-    /// A split's sidebar name: the user-given name, else its members' row titles
-    /// in pane order joined by " + ", skipping punctuation-only placeholders
-    /// such as "..." (rule shared with the TUI; the host's internal fruit
-    /// identity is never shown).
-    static func displayName(_ group: DesktopGroup, members: [SessionSummary]) -> String {
-        if group.named, !group.name.isEmpty { return group.name }
-        let titles = members
-            .map { SessionPresentation.displayTitle(for: $0).split(whereSeparator: \.isWhitespace).joined(separator: " ") }
-            .filter { !$0.isEmpty }
-        let meaningful = titles.filter { title in title.contains { $0.isLetter || $0.isNumber } }
-        return (meaningful.isEmpty ? titles : meaningful).joined(separator: " + ")
-    }
-
-    /// Local filter (the TUI's project filter box): title, project path or a
-    /// user-given split name. Conversation bodies are searched separately
-    /// (full-text search).
-    static func matches(_ session: SessionSummary, filter: String, layout: DesktopLayout) -> Bool {
+    /// Local filter (the TUI's project filter box): title or project path.
+    /// Splits are never named, so a split matches only through its members.
+    /// Conversation bodies are searched separately (full-text search).
+    static func matches(_ session: SessionSummary, filter: String) -> Bool {
         let needle = filter.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !needle.isEmpty else { return true }
         if SessionPresentation.displayTitle(for: session).lowercased().contains(needle) { return true }
-        if session.cwd.lowercased().contains(needle) || session.cwdDisplay.lowercased().contains(needle) {
-            return true
-        }
-        if let group = layout.group(containing: session.key), group.named,
-           group.name.lowercased().contains(needle) {
-            return true
-        }
-        return false
+        return session.cwd.lowercased().contains(needle) || session.cwdDisplay.lowercased().contains(needle)
     }
 
     static func pinTime(of item: Item, layout: DesktopLayout) -> Double? {
@@ -220,25 +200,27 @@ enum DesktopSidebarProjection {
         return buckets
     }
 
-    /// Collapsed group summary: counts per attention dot in the TUI's fixed order.
+    /// Collapsed group summary: counts per dot in the TUI's fixed order.
+    /// Red unread is independent from the activity dots: a session with both
+    /// an activity and unread results counts once in each bucket, so the
+    /// counts can sum past the member count. `recent` shares the working bucket.
     static func attentionSummary(_ members: [SessionSummary]) -> [(SessionPresentation.StatusMarker, Int)] {
+        let activities = members.compactMap { SessionPresentation.activityMarker(for: $0) }
+        let unreadCount = members.filter { SessionPresentation.hasUnread(for: $0) }.count
         let order: [SessionPresentation.StatusMarker] = [.waiting, .working, .unread]
         return order.compactMap { marker in
-            let count = members.filter { SessionPresentation.statusMarker(for: $0) == marker }.count
+            let count: Int
+            switch marker {
+            case .waiting:
+                count = activities.filter { $0 == .waiting }.count
+            case .working:
+                count = activities.filter { $0 == .working || $0 == .recent }.count
+            case .unread:
+                count = unreadCount
+            case .recent:
+                return nil
+            }
             return count > 0 ? (marker, count) : nil
         }
-    }
-
-    /// Active sessions board membership (TUI authority): hosted sessions that
-    /// wait, work, are unread or were active just now; waiting first.
-    static func activeSessions(_ sessions: [SessionSummary]) -> [SessionSummary] {
-        let rank: [SessionPresentation.StatusMarker: Int] = [.waiting: 0, .working: 1, .unread: 2, .recent: 3]
-        return sessions
-            .filter { $0.hosted && SessionPresentation.statusMarker(for: $0) != nil }
-            .sorted { lhs, rhs in
-                let left = rank[SessionPresentation.statusMarker(for: lhs) ?? .recent] ?? 4
-                let right = rank[SessionPresentation.statusMarker(for: rhs) ?? .recent] ?? 4
-                return left == right ? lhs.mtime > rhs.mtime : left < right
-            }
     }
 }

@@ -267,7 +267,8 @@ final class SessionListStore {
 
     var waitingCount: Int {
         listKeys.compactMap { recordsByKey[$0] }.filter {
-            ActiveRuntimeVisibility.isListVisible($0) && $0.attention == .waiting
+            ActiveRuntimeVisibility.isListVisible($0)
+                && SessionPresentation.activityMarker(for: $0) == .waiting
         }.count
     }
 
@@ -390,16 +391,18 @@ final class SessionListStore {
 
     private func rebuildSections() {
         let source = filteredSessions
+        // Waiting membership follows the activity dot only; an independent red
+        // unread overlay never moves a session in or out of this section.
         let waiting = source
-            .filter { $0.attention == .waiting }
+            .filter { SessionPresentation.activityMarker(for: $0) == .waiting }
             .sorted(by: Self.byRecency)
 
         let pinned = source
-            .filter { $0.attention != .waiting && ($0.pinned == true || $0.group?.pinned == true) }
+            .filter { SessionPresentation.activityMarker(for: $0) != .waiting && ($0.pinned == true || $0.group?.pinned == true) }
             .sorted(by: Self.byRecency)
 
         let remaining = source.filter { session in
-            session.attention != .waiting
+            SessionPresentation.activityMarker(for: session) != .waiting
                 && session.pinned != true
                 && session.group?.pinned != true
         }
@@ -445,10 +448,11 @@ final class SessionListStore {
 
 private extension SessionSummary {
     var isUnread: Bool {
-        attention == .unread || marker?.lowercased() == "unread"
+        SessionPresentation.hasUnread(for: self)
     }
 
-    /// The same row with only the red unread state removed.
+    /// The same row with only the red unread state removed. A waiting/working
+    /// activity behind the red overlay is preserved untouched.
     func clearingUnread() -> SessionSummary {
         let isUnreadMarker = marker?.lowercased() == "unread"
         return SessionSummary(

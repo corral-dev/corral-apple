@@ -36,10 +36,8 @@ nonisolated struct DesktopLayout: Decodable, Sendable, Equatable {
 
 nonisolated struct DesktopGroup: Decodable, Sendable, Equatable, Identifiable {
     let id: String
-    /// User-given name when `named`; otherwise the host's hidden internal
-    /// identity (never shown — see `DesktopSidebarProjection.displayName`).
+    /// The host's hidden internal identity; splits are never named on screen.
     var name: String
-    var named: Bool
     var project: String
     var members: [String]
     var focus: String
@@ -49,19 +47,18 @@ nonisolated struct DesktopGroup: Decodable, Sendable, Equatable, Identifiable {
     var updatedAt: Double
 
     enum CodingKeys: String, CodingKey {
-        case id, name, named, project, members, focus, collapsed, pinned
+        case id, name, project, members, focus, collapsed, pinned
         case pinnedAt = "pinned_at"
         case updatedAt = "updated_at"
     }
 
     init(
-        id: String, name: String, named: Bool = false, project: String = "", members: [String],
+        id: String, name: String, project: String = "", members: [String],
         focus: String = "", collapsed: Bool = false, pinned: Bool = false,
         pinnedAt: Double = 0, updatedAt: Double = 0
     ) {
         self.id = id
         self.name = name
-        self.named = named
         self.project = project
         self.members = members
         self.focus = focus
@@ -75,8 +72,6 @@ nonisolated struct DesktopGroup: Decodable, Sendable, Equatable, Identifiable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = container.decodeFlexibleString(forKey: .id)
         name = container.decodeFlexibleString(forKey: .name)
-        // Hosts before split naming never send `named` and cannot rename.
-        named = container.decodeFlexibleBool(forKey: .named)
         project = container.decodeFlexibleString(forKey: .project)
         members = (try? container.decodeIfPresent([String].self, forKey: .members)) ?? []
         focus = container.decodeFlexibleString(forKey: .focus)

@@ -1602,91 +1602,6 @@
         }
       }
     },
-    "mac.board.empty": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No active sessions"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "没有活跃会话"
-          }
-        }
-      }
-    },
-    "mac.board.next": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Next Page"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "下一页"
-          }
-        }
-      }
-    },
-    "mac.board.previous": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Previous Page"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "上一页"
-          }
-        }
-      }
-    },
-    "mac.board.show": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Active Sessions"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "活跃会话"
-          }
-        }
-      }
-    },
-    "mac.board.title %lld": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Active sessions · %lld"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "活跃会话 · %lld"
-          }
-        }
-      }
-    },
     "mac.detail.empty.description": {
       "extractionState": "manual",
       "localizations": {
@@ -1751,74 +1666,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "打开分屏"
-          }
-        }
-      }
-    },
-    "mac.group.rename": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Rename Split View…"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "重命名分屏…"
-          }
-        }
-      }
-    },
-    "mac.group.rename.message": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Leave empty to name it after its sessions."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "留空则用会话标题命名。"
-          }
-        }
-      }
-    },
-    "mac.group.rename.save": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Save"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "保存"
-          }
-        }
-      }
-    },
-    "mac.group.rename.title": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Rename Split View"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "重命名分屏"
           }
         }
       }
@@ -2492,13 +2339,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Filter by title, project or split name"
+            "value": "Filter by title or project"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "按标题、项目或分屏名筛选"
+            "value": "按标题或项目筛选"
           }
         }
       }
@@ -3866,6 +3713,23 @@
         }
       }
     },
+    "sessions.filter.active": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Active"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "活跃"
+          }
+        }
+      }
+    },
     "sessions.filter.all": {
       "extractionState": "manual",
       "localizations": {
@@ -4984,6 +4848,57 @@
           "stringUnit": {
             "state": "translated",
             "value": "重新启动"
+          }
+        }
+      }
+    },
+    "terminal.running_elsewhere.description": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Its live screen can’t be shown here. The chat view keeps following it."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这里看不到它的实时画面，聊天视图会持续更新。"
+          }
+        }
+      }
+    },
+    "terminal.running_elsewhere.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Running in another terminal window"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在另一个终端窗口里运行"
+          }
+        }
+      }
+    },
+    "terminal.start_failed.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t start this session"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法启动这个会话"
           }
         }
       }

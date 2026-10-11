@@ -472,6 +472,38 @@ final class SessionListFilteringTests: XCTestCase {
         XCTAssertFalse(outside.label.isEmpty)
     }
 
+    func testActiveIsTheActivityDotSetUnreadAloneIsNotActive() {
+        func marked(_ key: String, _ marker: String, runtime: String = "codex") -> SessionSummary {
+            SessionSummary(key: key, runtime: runtime, mtime: 1, hosted: marker == "recent", marker: marker)
+        }
+        let sessions = [
+            marked("codex:wait", "waiting"),
+            marked("claude:work", "working", runtime: "claude"),
+            marked("codex:unread", "unread"),
+            marked("codex:recent", "recent"),
+            marked("codex:idle", ""),
+            marked("codex:open", ""),
+            marked("kimi:wait", "waiting", runtime: "kimi"),
+            // Red unread overlay over a working activity behind it: still active.
+            SessionSummary(key: "codex:dual", runtime: "codex", mtime: 1, attention: .working, marker: "unread"),
+        ]
+        // Pure red is only an unread explanation, not activity.
+        XCTAssertFalse(SessionListFiltering.isActive(sessions[2]))
+        XCTAssertTrue(SessionListFiltering.isActive(sessions[7]))
+        XCTAssertEqual(
+            SessionListFiltering.apply(sessions: sessions, runtimes: [], projects: [], activeOnly: true).map(\.key),
+            ["codex:wait", "claude:work", "codex:recent", "codex:dual"]
+        )
+        XCTAssertEqual(
+            SessionListFiltering.apply(sessions: sessions, runtimes: [.codex], projects: [], activeOnly: true,
+                                       keeping: ["codex:open"]).map(\.key),
+            ["codex:wait", "codex:recent", "codex:open", "codex:dual"]
+        )
+        XCTAssertEqual(SessionListFiltering.activeCount(sessions: sessions), 4)
+        XCTAssertEqual(SessionListFiltering.activeCount(sessions: sessions, keeping: ["codex:open"]), 5)
+        XCTAssertEqual(SessionListFiltering.apply(sessions: sessions, runtimes: [], projects: []).count, 7)
+    }
+
     // MARK: - Helpers
 
     private func summary(

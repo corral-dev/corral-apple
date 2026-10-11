@@ -119,8 +119,36 @@ enum SessionPresentation {
         case waiting, working, unread, recent
     }
 
-    /// The TUI dot as computed by the host (`resolve_active_marker`). Never green
-    /// from a merely live process; hosts without `marker` fall back to attention only.
+    /// Red unread state. Independent from the activity dot below: unread is
+    /// only an explanation that there are unseen messages, never an activity
+    /// signal. It can coexist with a waiting/working activity behind it, and
+    /// clearing it must leave that activity untouched.
+    static func hasUnread(for session: SessionSummary) -> Bool {
+        if session.attention == .unread { return true }
+        return session.marker?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "unread"
+    }
+
+    /// The activity dot (yellow waiting / green working+recent). Ignores the
+    /// red unread overlay: when `marker` says unread, the activity behind it
+    /// comes from `attention` (working/waiting); an emptied marker (locally
+    /// cleared red) falls back to `attention` the same way so clearing red
+    /// never kills a green/yellow dot. Pure red yields nil (red is not active).
+    /// Hosts without `marker` fall back to attention only.
+    static func activityMarker(for session: SessionSummary) -> StatusMarker? {
+        if let raw = session.marker?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+           !raw.isEmpty, raw != "unread", let marker = StatusMarker(rawValue: raw) {
+            return marker
+        }
+        switch session.attention {
+        case .waiting: return .waiting
+        case .working: return .working
+        case .unread, .none: return nil
+        }
+    }
+
+    /// Legacy single-dot projection (marker first, then attention). Kept for
+    /// compat and existing tests; UI renders `activityMarker(for:)` plus the
+    /// independent `hasUnread(for:)` red dot instead of this.
     static func statusMarker(for session: SessionSummary) -> StatusMarker? {
         if let marker = session.marker {
             return StatusMarker(rawValue: marker.lowercased())
