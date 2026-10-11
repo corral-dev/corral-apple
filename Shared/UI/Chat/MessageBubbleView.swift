@@ -132,6 +132,10 @@ struct MessageBubbleView: View, Equatable {
     /// One compact block under the bubble (owner correction 2026-10-11): it hugs the
     /// bubble's trailing edge, but its lines read left to right like a paragraph.
     /// Status and Retry share the first line; the cause hangs under the status.
+    /// The block is capped to a readable measure so a short bubble does not
+    /// leave a full-column cause paragraph beside it.
+    private static let feedbackMaxWidth: CGFloat = 360
+
     private var deliveryFeedback: some View {
         let unconfirmed = message.delivery == .needsReview
         return HStack(alignment: .firstTextBaseline, spacing: Space.xs * interfaceScale) {
@@ -161,6 +165,7 @@ struct MessageBubbleView: View, Equatable {
             }
         }
         .interfaceFont(.footnote)
+        .interfaceFrame(maxWidth: Self.feedbackMaxWidth * interfaceScale, alignment: .trailing)
         .interfaceFrame(maxWidth: .infinity, alignment: .trailing)
         .interfacePadding(.leading, Space.xxl)
     }

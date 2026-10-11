@@ -17,6 +17,9 @@ nonisolated struct SessionPrompt: Codable, Sendable, Identifiable, Equatable {
     let customNeedsChoice: Bool
     let isSecret: Bool
     let optionDetails: [SessionPromptOption]
+    /// The host's native picker owns the keyboard (Claude, Codex sync): chat
+    /// input is refused until it is answered. Absent on older hosts.
+    let blocksInput: Bool
 
     enum CodingKeys: String, CodingKey {
         case id, name, summary, detail, prompt, header, options
@@ -27,6 +30,7 @@ nonisolated struct SessionPrompt: Codable, Sendable, Identifiable, Equatable {
         case customNeedsChoice = "custom_needs_choice"
         case isSecret = "is_secret"
         case optionDetails = "option_details"
+        case blocksInput = "blocks_input"
     }
 
     init(
@@ -43,7 +47,8 @@ nonisolated struct SessionPrompt: Codable, Sendable, Identifiable, Equatable {
         allowCustom: Bool = false,
         customNeedsChoice: Bool = false,
         isSecret: Bool = false,
-        optionDetails: [SessionPromptOption] = []
+        optionDetails: [SessionPromptOption] = [],
+        blocksInput: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -59,6 +64,7 @@ nonisolated struct SessionPrompt: Codable, Sendable, Identifiable, Equatable {
         self.customNeedsChoice = customNeedsChoice
         self.isSecret = isSecret
         self.optionDetails = optionDetails
+        self.blocksInput = blocksInput
     }
 
     init(from decoder: Decoder) throws {
@@ -85,6 +91,7 @@ nonisolated struct SessionPrompt: Codable, Sendable, Identifiable, Equatable {
         allowCustom = container.decodeFlexibleBool(forKey: .allowCustom)
         customNeedsChoice = container.decodeFlexibleBool(forKey: .customNeedsChoice)
         isSecret = container.decodeFlexibleBool(forKey: .isSecret)
+        blocksInput = container.decodeFlexibleBool(forKey: .blocksInput)
         if let options = try? container.decodeIfPresent([String].self, forKey: .options) {
             self.options = options
         } else if let wrapped = try? container.decodeIfPresent([FailableDecodable<String>].self, forKey: .options) {
@@ -158,6 +165,15 @@ enum NativeQuestionSubmissionStatus: Equatable, Sendable {
     case stale(String?)
     case unavailable(String?)
     case failed(String?)
+}
+
+/// Whether chat input must wait for the open question (host `blocks_input`).
+enum PendingQuestionGate {
+    static func blocksInput(_ prompts: [SessionPrompt], submission: NativeQuestionSubmissionState?) -> Bool {
+        guard let current = prompts.first, current.blocksInput else { return false }
+        // An answer already delivered releases the keyboard before the host refreshes.
+        return !(submission?.requestID == current.requestID && submission?.status == .delivered)
+    }
 }
 
 struct NativeQuestionSubmissionState: Equatable, Sendable {

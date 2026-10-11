@@ -192,6 +192,8 @@ nonisolated struct HostCapabilities: Codable, Sendable, Equatable {
     var sessionCreateReceipts: Bool = false
     var toolDetail: Bool
     var sessionRestart: Bool
+    /// Host stops a running turn with the runtime's own key (`session.interrupt`).
+    var sessionInterrupt: Bool = false
     /// Host shares the TUI's split groups with desktop clients (`layout.*`).
     var desktopLayout: Bool = false
     /// Host streams raw pane output and takes desktop size votes (`terminal.*`).
@@ -209,6 +211,7 @@ nonisolated struct HostCapabilities: Codable, Sendable, Equatable {
         case toolDetail = "tool_detail"
         case features
         case sessionRestart = "session_restart"
+        case sessionInterrupt = "session_interrupt"
         case desktopLayout = "desktop_layout"
         case terminalStream = "terminal_stream"
         case userPrompts = "user_prompts"
@@ -226,6 +229,7 @@ nonisolated struct HostCapabilities: Codable, Sendable, Equatable {
         let features = (try? container.decode([String].self, forKey: .features)) ?? []
         sessionCreateReceipts = (try? container.decode(Bool.self, forKey: .sessionCreateReceipts)) ?? features.contains("session_create_receipts")
         sessionRestart = (try? container.decode(Bool.self, forKey: .sessionRestart)) ?? features.contains("session_restart")
+        sessionInterrupt = (try? container.decode(Bool.self, forKey: .sessionInterrupt)) ?? features.contains("session_interrupt")
         desktopLayout = (try? container.decode(Bool.self, forKey: .desktopLayout)) ?? features.contains("desktop_layout")
         terminalStream = (try? container.decode(Bool.self, forKey: .terminalStream)) ?? features.contains("terminal_stream")
         userPrompts = (try? container.decode(Bool.self, forKey: .userPrompts)) ?? features.contains("user_prompts")

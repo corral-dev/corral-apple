@@ -28,11 +28,15 @@ struct ComposerBar: View {
     var onFocusChange: ((Bool) -> Void)? = nil
     /// This session's own prompts, oldest first, recalled with Up / Down.
     var history: [String] = []
+    /// Set while the assistant runs and the host can interrupt it; an empty
+    /// composer then shows stop in place of send.
+    var onStop: (() -> Void)? = nil
+    /// The interrupt is in flight: stop stays, quiet and disabled.
+    var isStopping = false
     var onSend: (_ text: String, _ images: [DraftImageAttachment]) -> Void
 
     @FocusState private var focused: Bool
     #if os(macOS)
-    @State private var selection: TextSelection?
     @State private var showImageImporter = false
     #endif
     @State private var didAutoFocus = false
@@ -54,6 +58,14 @@ struct ComposerBar: View {
             text: text,
             attachmentCount: attachments.count,
             isBusy: isBusy
+        )
+    }
+
+    private var showsStop: Bool {
+        onStop != nil && ComposerSendPolicy.showsStop(
+            text: text,
+            attachmentCount: attachments.count,
+            isRunning: true
         )
     }
 
@@ -184,7 +196,10 @@ struct ComposerBar: View {
         #if os(macOS)
         // Return sends through onSubmit (the field editor finishes any input-method
         // composition first); Shift-Return inserts a line break at the caret.
-        TextField("composer.placeholder", text: $text, selection: $selection, axis: .vertical)
+        // Keep selection with the native editor. A SwiftUI TextSelection binding
+        // also observes background message text views on this OS, then applies
+        // their ranges to this field when the conversation refreshes.
+        TextField("composer.placeholder", text: $text, axis: .vertical)
             .onKeyPress(.return, phases: .down) { press in
                 guard press.modifiers.contains(.shift) else { return .ignored }
                 insertLineBreak()
@@ -235,20 +250,36 @@ struct ComposerBar: View {
         .interfaceFrame(height: Self.sendVisual)
     }
 
+    /// Send, or stop while the assistant runs and nothing is drafted.
     private var sendButton: some View {
-        Button(action: sendDraft) {
-            Image(systemName: "arrow.up")
+        let stop = showsStop
+        let active = stop ? !isStopping && !isBusy : canSend
+        let label: LocalizedStringKey = stop ? "composer.stop" : "composer.send"
+        let identifier: String = stop ? "composer.stop" : "composer.send"
+        let fill: Color = active ? Palette.accent : Color(.quaternarySystemFill)
+        return Button {
+            if stop { stopTurn() } else { sendDraft() }
+        } label: {
+            Image(systemName: stop ? "stop.fill" : "arrow.up")
+                .contentTransition(.symbolEffect(.replace))
                 .interfaceFont(.body.weight(.bold))
-                .foregroundStyle(canSend ? Palette.onAccent : Color.secondary)
+                .foregroundStyle(active ? Palette.onAccent : Color.secondary)
                 .interfaceFrame(width: Self.sendVisual, height: Self.sendVisual)
-                .background(
-                    Circle().fill(canSend ? Palette.accent : Color(.quaternarySystemFill))
-                )
+                .background(Circle().fill(fill))
         }
         .buttonStyle(PressableButtonStyle())
         .modifier(ComposerHitTarget(visual: Self.sendVisual))
-        .disabled(!canSend)
-        .accessibilityLabel(Text("composer.send"))
+        .disabled(!active)
+        .accessibilityIdentifier(identifier)
+        #if os(macOS)
+        .help(Text(label))
+        #endif
+        .accessibilityLabel(Text(label))
+    }
+
+    private func stopTurn() {
+        guard showsStop, !isStopping, !isBusy else { return }
+        onStop?()
     }
 
     private var attachmentStrip: some View {
@@ -357,9 +388,16 @@ struct ComposerBar: View {
             ? recall.older(entries: history, current: text)
             : recall.newer(entries: history)
         guard let next else { return .ignored }
-        text = next
         #if os(macOS)
-        selection = TextSelection(insertionPoint: text.endIndex)
+        if let editor = activeEditor {
+            // Native replacement updates the text binding and places the caret
+            // after the recalled prompt without a persistent selection binding.
+            editor.insertText(next, replacementRange: NSRange(location: 0, length: (editor.string as NSString).length))
+        } else {
+            text = next
+        }
+        #else
+        text = next
         #endif
         return .handled
     }
@@ -380,14 +418,15 @@ struct ComposerBar: View {
     }
 
     #if os(macOS)
+    private var activeEditor: NSTextView? {
+        guard let editor = (NSApp.keyWindow ?? NSApp.orderedWindows.first)?.firstResponder as? NSTextView,
+              editor.isEditable else { return nil }
+        return editor
+    }
+
     private func insertLineBreak() {
-        guard case .selection(let range)? = selection?.indices else {
-            text += "\n"
-            return
-        }
-        text.replaceSubrange(range, with: "\n")
-        let caret = text.index(range.lowerBound, offsetBy: 1, limitedBy: text.endIndex) ?? text.endIndex
-        selection = TextSelection(insertionPoint: caret)
+        guard let editor = activeEditor, !editor.hasMarkedText() else { return }
+        editor.insertText("\n", replacementRange: editor.selectedRange())
     }
 
     #if DEBUG
@@ -408,7 +447,9 @@ struct ComposerBar: View {
             try? await Task.sleep(for: .seconds(3))
             if step.hasPrefix("draft:") {
                 text = String(step.dropFirst(6)).replacingOccurrences(of: "\\n", with: "\n")
-                selection = TextSelection(insertionPoint: text.endIndex)
+                if let editor = activeEditor {
+                    editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
+                }
                 continue
             }
             let up = step == "up"

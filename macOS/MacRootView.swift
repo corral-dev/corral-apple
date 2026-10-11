@@ -98,6 +98,10 @@ struct MacRootView: View {
             let arguments = ProcessInfo.processInfo.arguments
             if arguments.contains("-CorralInspectSettings") { openSettings() }
             if arguments.contains("-CorralInspectPairing") { showPairing = true }
+            // Isolated capture hosts (scripts/readme-captures) pair without the pointer.
+            if let raw = ProcessInfo.processInfo.environment["CORRAL_INSPECTION_PAIR_URL"], let url = URL(string: raw) {
+                await pair(url: url, deviceName: "Corral README Capture")
+            }
         }
         #endif
     }
@@ -507,10 +511,10 @@ struct MacRootView: View {
         clickMonitor = nil
     }
 
-    private func pair(url: URL) async {
+    private func pair(url: URL, deviceName: String = UIDeviceName.current) async {
         do {
             let payload = try PairingPayload.parse(url: url)
-            _ = try await appModel.completePairing(payload, deviceName: UIDeviceName.current)
+            _ = try await appModel.completePairing(payload, deviceName: deviceName)
         } catch is CancellationError {
             // The window starts its own connection as soon as the paired machine
             // appears; that supersedes the pairing connection, not the pairing.

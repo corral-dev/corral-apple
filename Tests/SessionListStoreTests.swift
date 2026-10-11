@@ -21,6 +21,58 @@ final class SessionListStoreTests: XCTestCase {
         try await super.tearDown()
     }
 
+    func testConfirmedDeleteRejectsDelayedListSearchAndDetailAcrossReconnect() throws {
+        let store = SessionListStore()
+        store.loadPersisted(hostID: "delete-host")
+        let deleted = try session(key: "claude:deleted", title: "Deleted")
+        let kept = try session(key: "claude:kept", title: "Kept")
+        store.updateSessions([deleted, kept])
+        store.rememberOpened(deleted)
+        store.removeSession(key: deleted.key)
+        store.beginConnectionEpoch()
+        store.applyListResponse(SessionsListResponse(sessions: [deleted, kept], version: "stale", revision: 99))
+        store.applySessionEvent(deleted, revision: 100)
+        store.searchQuery = "Deleted"
+        store.applySearchHits([deleted], query: "Deleted")
+        XCTAssertNil(store.session(for: deleted.key))
+        XCTAssertTrue(store.filteredSessions.isEmpty)
+        store.searchQuery = ""
+        XCTAssertEqual(store.windowSessions.map(\.key), [kept.key])
+        SessionListCache.flushPendingWrites()
+        XCTAssertEqual(SessionListCache.load(hostID: "delete-host")?.sessions.map(\.key), [kept.key])
+    }
+
+    func testConfirmedDeleteFollowsLateIdentityMigrationAndExistingAliases() throws {
+        let store = SessionListStore()
+        let provisional = try session(key: "claude:provisional", title: "Provisional")
+        let canonical = try session(key: "claude:canonical", title: "Canonical")
+        store.updateSessions([provisional])
+        store.removeSession(key: provisional.key)
+        store.migrateSession(from: provisional.key, to: canonical.key)
+        store.updateSessions([provisional, canonical])
+        XCTAssertTrue(store.windowSessions.isEmpty)
+        XCTAssertNil(store.session(for: canonical.key))
+
+        let second = SessionListStore()
+        second.updateSessions([provisional])
+        second.migrateSession(from: provisional.key, to: canonical.key)
+        second.removeSession(key: provisional.key)
+        second.patchSession(canonical)
+        second.patchSession(provisional)
+        XCTAssertTrue(second.windowSessions.isEmpty)
+    }
+
+    func testDeletedIdentityIsScopedToItsHost() throws {
+        let store = SessionListStore()
+        let row = try session(key: "claude:same-key", title: "Session")
+        store.loadPersisted(hostID: "host-a")
+        store.updateSessions([row])
+        store.removeSession(key: row.key)
+        store.loadPersisted(hostID: "host-b")
+        store.updateSessions([row])
+        XCTAssertEqual(store.session(for: row.key)?.title, row.title)
+    }
+
     func testReplacedSearchAndWindowReleaseUnownedMetadata() throws {
         let store = SessionListStore()
         let opened = try session(key: "claude:opened", title: "Opened")

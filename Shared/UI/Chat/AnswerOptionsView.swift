@@ -6,6 +6,9 @@ struct AnswerOptionsView: View {
     let prompts: [SessionPrompt]
     let isConnected: Bool
     var isBusy = false
+    /// Set when a composer send was refused because this request owns the
+    /// host keyboard: show the quiet hint instead of another error surface.
+    var showsBlockedHint = false
     let submissionState: NativeQuestionSubmissionState?
     let onSubmit: (String, [NativeQuestionAnswer]) -> Void
 
@@ -32,6 +35,14 @@ struct AnswerOptionsView: View {
             && requestPrompts.allSatisfy(isAnswered)
     }
 
+    /// Quiet pointer shown only after a composer send was refused for this
+    /// request. Clears with the request or its answer; never an error banner.
+    private var showsBlockedNotice: Bool {
+        showsBlockedHint
+            && requestPrompts.first?.blocksInput == true
+            && currentStatus != .delivered
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: Space.md * interfaceScale) {
             HStack(spacing: Space.sm * interfaceScale) {
@@ -46,32 +57,26 @@ struct AnswerOptionsView: View {
                 }
             }
 
+            if showsBlockedNotice {
+                Text("chat.question.blocked_hint")
+                    .sessionFont(.toolMeta)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             ForEach(Array(requestPrompts.enumerated()), id: \.element.questionID) { index, question in
                 questionRow(question, index: index)
             }
 
             statusMessage
 
-            Button(action: submit) {
-                HStack(spacing: Space.xs * interfaceScale) {
-                    if isSubmitting { ProgressView().interfaceControlSize(.small) }
-                    Text(submitTitle)
-                        .sessionFont(.toolTitle)
-                }
-                .interfaceFrame(maxWidth: .infinity)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(Palette.accent)
-            .foregroundStyle(Palette.onAccent)
-            .disabled(!canSubmit)
-            .accessibilityHint(Text("chat.question.submit_hint"))
+            submitButton
         }
         .interfaceFrame(maxWidth: .infinity, alignment: .leading)
         .interfacePadding(Space.md)
         .background(
             Palette.assistantBubble,
-            in: RoundedRectangle(cornerRadius: Radius.lg * interfaceScale, style: .continuous)
+            in: RoundedRectangle(cornerRadius: Radius.composer * interfaceScale, style: .continuous)
         )
         .onAppear(perform: seedDisclosureState)
         .onChange(of: requestID) { _, _ in
@@ -257,6 +262,57 @@ struct AnswerOptionsView: View {
         if currentStatus == .delivered { return "chat.question.sent" }
         if case .failed = currentStatus { return "chat.question.retry" }
         return "chat.question.submit"
+    }
+
+    /// Native capsule. Mac trails with a regular control; iPhone keeps a
+    /// full-width capsule for reach. Incomplete answers use the neutral
+    /// bordered style (macOS ignores tint there, so it never reads as a
+    /// washed-out green bar); submittable answers go accent prominent.
+    @ViewBuilder
+    private var submitButton: some View {
+        #if os(macOS)
+        HStack(spacing: 0) {
+            Spacer(minLength: 0)
+            submitControl
+        }
+        #else
+        submitControl
+        #endif
+    }
+
+    @ViewBuilder
+    private var submitControl: some View {
+        if canSubmit {
+            Button(action: submit) {
+                submitLabel
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(Palette.accent)
+            .foregroundStyle(Palette.onAccent)
+            .interfaceControlSize(.regular)
+            .disabled(!canSubmit)
+            .accessibilityHint(Text("chat.question.submit_hint"))
+        } else {
+            Button(action: submit) {
+                submitLabel
+            }
+            .buttonStyle(.bordered)
+            .interfaceControlSize(.regular)
+            .disabled(!canSubmit)
+            .accessibilityHint(Text("chat.question.submit_hint"))
+        }
+    }
+
+    private var submitLabel: some View {
+        HStack(spacing: Space.xs * interfaceScale) {
+            if isSubmitting { ProgressView().interfaceControlSize(.small) }
+            Text(submitTitle)
+                .sessionFont(.toolTitle)
+        }
+        #if os(iOS)
+        .interfaceFrame(maxWidth: .infinity)
+        #endif
+        .contentShape(Rectangle())
     }
 
     private func statusLabel(_ key: LocalizedStringKey, detail: String?, symbol: String) -> some View {

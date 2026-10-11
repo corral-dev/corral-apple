@@ -66,6 +66,8 @@ protocol ConversationSendDisplay: AnyObject {
     /// Hands the failed / not-yet-attempted images back to the composer.
     /// The view maps them onto its preview-carrying attachments.
     func restoreImages(_ images: [StagedSendImage])
+    /// The open question owns the host keyboard: point at it instead of sending.
+    func showQuestionPending()
 }
 
 /// Synchronous plan for one text send. Built by `beginTextSend` (same runloop
@@ -131,6 +133,16 @@ struct ConversationSendCoordinator: Sendable {
             )
             display.restoreImages(images)
             display.showError(notConnectedMessage, haptic: .error, operationID: nil)
+            return nil
+        }
+        if PendingQuestionGate.blocksInput(store.prompts, submission: store.questionSubmissionState) {
+            // Nothing leaves the composer: no bubble the host would refuse.
+            display.composerDraft = ComposerSendPolicy.restoredDraft(
+                failedText: trimmed,
+                currentDraft: display.composerDraft
+            )
+            display.restoreImages(images)
+            display.showQuestionPending()
             return nil
         }
         if images.isEmpty, hasText {
@@ -283,6 +295,15 @@ struct ConversationSendCoordinator: Sendable {
                 didClearComposer: clearDraftOnStart
             )
             display.showError(notConnectedMessage, haptic: .error, operationID: nil)
+            return nil
+        }
+        if PendingQuestionGate.blocksInput(store.prompts, submission: store.questionSubmissionState) {
+            display.composerDraft = ComposerSendPolicy.restoredDraft(
+                failedText: payload,
+                currentDraft: display.composerDraft,
+                didClearComposer: clearDraftOnStart
+            )
+            display.showQuestionPending()
             return nil
         }
         display.setSending(true)

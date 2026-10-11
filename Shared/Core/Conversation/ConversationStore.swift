@@ -543,6 +543,15 @@ final class ConversationStore {
         _ = try await client.call(WireProtocol.mInputKeys, params: params)
     }
 
+    /// Stops the running turn. Not queued behind sends, never retried: a second
+    /// interrupt key on an idle assistant opens its history navigation.
+    func interrupt() async throws {
+        guard let client else {
+            throw RemoteClient.ConnectionError.notConnected
+        }
+        _ = try await client.call(WireProtocol.mSessionInterrupt, params: ["key": sessionKey])
+    }
+
     func sendImage(base64: String, commandID: String? = nil) async throws {
         try await inOutboundOrder { [weak self] in
             try await self?.deliverImage(base64: base64, commandID: commandID)

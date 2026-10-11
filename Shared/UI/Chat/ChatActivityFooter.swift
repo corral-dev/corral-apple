@@ -25,6 +25,23 @@ enum ChatActivityState: Equatable {
         return hasRunningTool ? .tool : .working
     }
 
+    /// One resolution for the activity cue and the composer's stop button.
+    static func resolve(
+        store: ConversationStore, connected: Bool, marker: SessionPresentation.StatusMarker?
+    ) -> Self? {
+        resolve(
+            live: store.isLive,
+            connected: connected,
+            attention: store.displayAttention,
+            hasPrompt: !store.prompts.isEmpty,
+            hasRunningTool: store.hasRunningTool,
+            marker: marker
+        )
+    }
+
+    /// The assistant is executing a turn; waiting for a reply is not running.
+    var isRunning: Bool { self != .waiting }
+
     var label: LocalizedStringResource {
         switch self {
         case .working: "chat.activity.working"

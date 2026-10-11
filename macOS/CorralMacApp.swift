@@ -46,6 +46,20 @@ struct CorralMacApp: App {
                 #if DEBUG
                 .preferredColorScheme(InspectionLaunchOptions.forcedColorScheme)
                 .draftImageInspection()
+                // Standalone polish fixture: real question/error views over the
+                // main window, no pairing or session. Captured by window id.
+                .overlay {
+                    if ProcessInfo.processInfo.arguments.contains("-CorralInspectQuestionPolish") {
+                        HStack(spacing: 0) {
+                            Spacer(minLength: 0)
+                            QuestionPolishFixtureView()
+                                .frame(width: 480)
+                            Spacer(minLength: 0)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(Color(.systemGroupedBackground))
+                    }
+                }
                 #if CORRAL_DIRECT_DOWNLOAD
                 .modifier(MacUpdateInspection())
                 #endif

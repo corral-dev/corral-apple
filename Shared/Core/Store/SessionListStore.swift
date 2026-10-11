@@ -58,6 +58,8 @@ final class SessionListStore {
     private var aliasByKey: [String: String] = [:]
     private var revisionByKey: [String: UInt64] = [:]
     private var acceptedRevision: UInt64 = 0
+    /// Host-confirmed deletions outlive reconnects and delayed list/search events.
+    private var deletedKeys: Set<String> = []
     /// Sessions acknowledged on this client while red, with the activity time seen then.
     /// A host row still saying unread for that activity is a stale echo of the
     /// pre-read state; newer activity brings the dot back.
@@ -77,6 +79,7 @@ final class SessionListStore {
             aliasByKey.removeAll()
             revisionByKey.removeAll()
             acceptedRevision = 0
+            deletedKeys.removeAll()
             locallyReadMtime.removeAll()
             version = ""
             searchQuery = ""
@@ -151,6 +154,10 @@ final class SessionListStore {
 
     func removeSession(key: String) {
         let resolved = resolvedKey(key)
+        deletedKeys.formUnion([key, resolved])
+        for (alias, target) in aliasByKey where target == key || target == resolved {
+            deletedKeys.insert(alias)
+        }
         listKeys.removeAll { $0 == key || $0 == resolved }
         searchKeys?.removeAll { $0 == key || $0 == resolved }
         openedKeys.remove(key)
@@ -165,6 +172,7 @@ final class SessionListStore {
         for (alias, target) in aliasByKey where target == key || target == resolved {
             aliasByKey[alias] = nil
         }
+        metadataEpoch &+= 1
         persistIfNeeded()
         rebuildSections()
     }
@@ -321,6 +329,7 @@ final class SessionListStore {
     /// the next persist rewrites the snapshot without them (host files untouched).
     private func merge(_ incoming: SessionSummary, revision: UInt64? = nil) {
         let key = resolvedKey(incoming.key)
+        guard !deletedKeys.contains(incoming.key), !deletedKeys.contains(key) else { return }
         guard ActiveRuntimeVisibility.isListVisible(incoming) else {
             recordsByKey[key] = nil
             revisionByKey[key] = nil
@@ -349,6 +358,12 @@ final class SessionListStore {
     /// Keep provisional detail routes alive when the host promotes them to a canonical key.
     func migrateSession(from oldKey: String, to newKey: String) {
         guard oldKey != newKey else { return }
+        if deletedKeys.contains(oldKey) || deletedKeys.contains(resolvedKey(oldKey))
+            || deletedKeys.contains(newKey) || deletedKeys.contains(resolvedKey(newKey)) {
+            aliasByKey[oldKey] = newKey
+            removeSession(key: oldKey)
+            return
+        }
         aliasByKey[oldKey] = newKey
         for (alias, target) in aliasByKey where target == oldKey {
             aliasByKey[alias] = newKey

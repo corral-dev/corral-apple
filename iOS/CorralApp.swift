@@ -11,6 +11,11 @@ struct CorralApp: App {
     /// notification path with the tapped host; repeats of the routed ticket no-op.
     @State private var routedTicket: UInt64?
     @Environment(\.scenePhase) private var scenePhase
+    #if DEBUG
+    /// Standalone polish fixture: real question/error views, no pairing or session.
+    @State private var showQuestionPolish =
+        ProcessInfo.processInfo.arguments.contains("-CorralInspectQuestionPolish")
+    #endif
 
     init() {
         // Apple requires the notification-center delegate before the app finishes
@@ -56,6 +61,13 @@ struct CorralApp: App {
                     || ProcessInfo.processInfo.arguments.contains("-CorralInspectNewSession"),
                       let host = appModel.hosts.first else { return }
                 navigationPath.append(host)
+            }
+            .fullScreenCover(isPresented: $showQuestionPolish) {
+                NavigationStack {
+                    QuestionPolishFixtureView()
+                }
+                .tint(Palette.accent)
+                .preferredColorScheme(InspectionLaunchOptions.forcedColorScheme)
             }
             #endif
             .onAppear {

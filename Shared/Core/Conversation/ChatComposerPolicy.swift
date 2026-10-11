@@ -22,6 +22,13 @@ enum ComposerSendPolicy {
         return trimmedSendableText(text, isBusy: false) != nil
     }
 
+    /// Stop replaces send while the assistant runs and nothing is drafted;
+    /// typing or attaching brings send back so a mid-turn message still steers.
+    static func showsStop(text: String, attachmentCount: Int, isRunning: Bool) -> Bool {
+        isRunning && attachmentCount == 0
+            && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     /// Recovery must retain anything typed while the previous send was awaiting delivery.
     static func restoredDraft(failedText: String, currentDraft: String) -> String {
         guard !currentDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {

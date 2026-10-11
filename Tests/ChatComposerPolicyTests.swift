@@ -22,6 +22,27 @@ final class ChatComposerPolicyTests: XCTestCase {
         XCTAssertFalse(ComposerSendPolicy.canStartAction(isBusy: true))
     }
 
+    func testStopReplacesSendOnlyWhileRunningWithEmptyDraft() {
+        XCTAssertTrue(ComposerSendPolicy.showsStop(text: "", attachmentCount: 0, isRunning: true))
+        XCTAssertTrue(ComposerSendPolicy.showsStop(text: " \n", attachmentCount: 0, isRunning: true))
+        XCTAssertFalse(ComposerSendPolicy.showsStop(text: "steer", attachmentCount: 0, isRunning: true))
+        XCTAssertFalse(ComposerSendPolicy.showsStop(text: "", attachmentCount: 1, isRunning: true))
+        XCTAssertFalse(ComposerSendPolicy.showsStop(text: "", attachmentCount: 0, isRunning: false))
+    }
+
+    func testHostCapabilitiesDecodeSessionInterrupt() throws {
+        let advertised = try JSONDecoder().decode(
+            HostCapabilities.self,
+            from: Data(#"{"command_receipts": true, "tool_detail": true, "session_interrupt": true}"#.utf8)
+        )
+        XCTAssertTrue(advertised.sessionInterrupt)
+        let older = try JSONDecoder().decode(
+            HostCapabilities.self,
+            from: Data(#"{"command_receipts": true, "tool_detail": true}"#.utf8)
+        )
+        XCTAssertFalse(older.sessionInterrupt)
+    }
+
     func testCanSendWithAttachmentsEvenWithoutText() {
         XCTAssertTrue(ComposerSendPolicy.canSend(text: "", attachmentCount: 1, isBusy: false))
         XCTAssertTrue(ComposerSendPolicy.canSend(text: "hi", attachmentCount: 0, isBusy: false))

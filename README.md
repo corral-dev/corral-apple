@@ -12,21 +12,39 @@ Read replies, answer questions, and send the next instruction to Claude Code, Co
 - **Find your work.** Filter by project and search conversation text.
 - **Keep typing.** Use keyboard shortcuts on Mac, or reply from your iPhone.
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/mac-split-dark.png">
+    <img src="docs/screenshots/mac-split-light.png" alt="Corral for Mac showing a Claude Code session and a Codex review side by side, with the session sidebar" width="100%">
+  </picture>
+</p>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/iphone-sessions-dark.png">
+    <img src="docs/screenshots/iphone-sessions-light.png" alt="Corral for iPhone showing the session list with fictional development sessions" width="45%">
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/iphone-chat-dark.png">
+    <img src="docs/screenshots/iphone-chat-light.png" alt="Corral for iPhone showing a code review conversation with tool activity" width="45%">
+  </picture>
+</p>
+
 ## Install
 
-The clients are a **source beta**: build with Xcode. Public App Store and TestFlight downloads are not available yet.
+The **Mac app** is a signed download. The **iPhone app** is a source beta: build it with Xcode. Public App Store and TestFlight downloads are not available yet.
 
 | Client | Requirements |
 | --- | --- |
-| Mac | macOS 26+, Xcode with the macOS 26 SDK |
+| Mac | macOS 26+ (building from source also needs Xcode with the macOS 26 SDK) |
 | iPhone | iOS 17+, Xcode, your own signing team and a physical iPhone |
 | Host | [Corral CLI](https://github.com/corral-dev/corral#install) on macOS or Linux, with an installed coding assistant |
 
 ### Mac
 
-Download the [signed Mac DMG](https://github.com/corral-dev/corral-apple/releases/latest) for automatic updates. The official app checks hourly, downloads updates in the background and installs them when you quit.
+Download the [signed Mac DMG](https://github.com/corral-dev/corral-apple/releases/latest) and drag Corral to Applications. It checks for updates hourly, downloads them in the background and installs them when you quit.
 
-With Xcode and its command-line tools installed:
+To build from source instead, with Xcode and its command-line tools installed:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/corral-dev/corral-apple/main/install.sh | bash

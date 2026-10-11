@@ -67,6 +67,7 @@ nonisolated enum WireProtocol {
     static let mSessionNew = "session.new"
     static let mSessionResume = "session.resume"
     static let mSessionRestart = "session.restart"
+    static let mSessionInterrupt = "session.interrupt"
     static let mSessionCopy = "session.copy"
     static let mSessionHandoff = "session.handoff"
     static let mSessionStop = "session.stop"

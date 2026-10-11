@@ -291,6 +291,53 @@ final class ConversationSendCoordinatorTests: XCTestCase {
         XCTAssertEqual(display.errors.first?.haptic, .error)
     }
 
+    // MARK: - Open-question input gate
+
+    func testTextSendBlockedByOpenQuestion() {
+        store.prompts = [FakeSendStore.makeBlockingPrompt(requestID: "req-1")]
+        display.composerDraft = ""
+        let plan = coordinator.beginTextSend(
+            "hello",
+            store: store, display: display,
+            reuseCommandID: nil, reuseSeq: nil, clearDraftOnStart: true,
+            isBusy: false, isHostReady: true
+        )
+        XCTAssertNil(plan)
+        // No bubble the host would refuse: nothing staged, nothing sent.
+        XCTAssertTrue(store.messages.isEmpty)
+        XCTAssertTrue(store.sentTexts.isEmpty)
+        XCTAssertEqual(display.composerDraft, "hello")
+        XCTAssertEqual(display.questionPendingCount, 1)
+        XCTAssertTrue(display.errors.isEmpty)
+        XCTAssertTrue(display.haptics.isEmpty)
+        XCTAssertTrue(display.sendingStates.isEmpty)
+    }
+
+    func testTextSendAllowedAfterQuestionAnswered() {
+        store.prompts = [FakeSendStore.makeBlockingPrompt(requestID: "req-1")]
+        store.questionSubmissionState = .init(requestID: "req-1", status: .delivered)
+        let plan = coordinator.beginTextSend(
+            "hello",
+            store: store, display: display,
+            reuseCommandID: nil, reuseSeq: nil, clearDraftOnStart: true,
+            isBusy: false, isHostReady: true
+        )
+        XCTAssertNotNil(plan)
+        XCTAssertEqual(display.questionPendingCount, 0)
+    }
+
+    func testNonBlockingPromptDoesNotGateTextSend() {
+        store.prompts = [FakeSendStore.makePrompt(requestID: "req-1")]
+        let plan = coordinator.beginTextSend(
+            "hello",
+            store: store, display: display,
+            reuseCommandID: nil, reuseSeq: nil, clearDraftOnStart: true,
+            isBusy: false, isHostReady: true
+        )
+        XCTAssertNotNil(plan)
+        XCTAssertEqual(display.questionPendingCount, 0)
+    }
+
     // MARK: - Question submission
 
     func testQuestionFailureKeepsAnswers() async {
@@ -383,6 +430,13 @@ final class FakeSendStore: ConversationSendStore {
 
     static func makePrompt(requestID: String) -> SessionPrompt {
         SessionPrompt(id: "p1", name: nil, summary: nil, detail: nil, options: ["A"], requestID: requestID)
+    }
+
+    static func makeBlockingPrompt(requestID: String) -> SessionPrompt {
+        SessionPrompt(
+            id: "p1", name: nil, summary: nil, detail: nil, options: ["A"],
+            requestID: requestID, blocksInput: true
+        )
     }
 
     func appendLocal(text: String, delivery: MessageDelivery, commandID: String?) {
@@ -491,12 +545,13 @@ final class FakeSendDisplay: ConversationSendDisplay {
     var haptics: [(haptic: ConversationSendHaptic, operationID: UUID?)] = []
     var operationCount = 0
     var restoredImageBatches: [[StagedSendImage]] = []
+    var questionPendingCount = 0
 
     var isIdle: Bool {
         sendingStates.isEmpty && haptics.isEmpty && errors.isEmpty
             && scrollCount == 0 && clearedErrorCount == 0
             && restoredImageBatches.isEmpty && persistedDrafts.isEmpty
-            && clearedPersistedCount == 0
+            && clearedPersistedCount == 0 && questionPendingCount == 0
     }
 
     func setSending(_ sending: Bool) { sendingStates.append(sending) }
@@ -515,4 +570,5 @@ final class FakeSendDisplay: ConversationSendDisplay {
         return UUID()
     }
     func restoreImages(_ images: [StagedSendImage]) { restoredImageBatches.append(images) }
+    func showQuestionPending() { questionPendingCount += 1 }
 }

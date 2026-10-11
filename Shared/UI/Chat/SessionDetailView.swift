@@ -64,6 +64,7 @@ struct SessionDetailView: View {
     @State private var isSending = false
     @State private var isActionBusy = false
     @State private var isRestarting = false
+    @State private var isInterrupting = false
     @State private var restartFailed = false
     @State private var runtimes: [RuntimeEntry] = []
     @State private var scrollToLatestRequest = 0
@@ -73,6 +74,8 @@ struct SessionDetailView: View {
     @State private var showUserPrompts = false
     @State private var showProjectTerminal = false
     @State private var scrollToMessageID: String?
+    /// Request whose picker refused a composer send: its card shows the hint.
+    @State private var blockedQuestionRequestID: String? = nil
     /// Prompt chosen in the Your prompts sheet, applied after the sheet closes.
     @State private var pendingPromptJump: String?
     @State private var draftHostID = ""
@@ -338,6 +341,7 @@ struct SessionDetailView: View {
                             scrollToLatestRequest: scrollToLatestRequest,
                             loadEarlierPullProgress: $loadEarlierPullProgress,
                             scrollToMessageID: $scrollToMessageID,
+                            blockedQuestionRequestID: blockedQuestionRequestID,
                             onQuestionSubmit: submitQuestion,
                             onRetryMessage: retryFailedMessage
                         )
@@ -469,6 +473,8 @@ struct SessionDetailView: View {
                 focusRequest: composerFocusRequest,
                 onFocusChange: onComposerFocusChange,
                 history: userPrompts.compactMap { $0.text?.trimmingCharacters(in: .whitespacesAndNewlines) },
+                onStop: stopAction,
+                isStopping: isInterrupting,
                 onSend: submitDraft
             )
         }
@@ -532,10 +538,12 @@ struct SessionDetailView: View {
         } else if (action == "send" || action == "rejectRetry"), let text = environment["CORRAL_INSPECTION_TEXT"], !text.isEmpty {
             draft = text
             submitDraft(text, [])
+        } else if action == "interrupt" {
+            await inspectInterrupt(text: environment["CORRAL_INSPECTION_TEXT"], environment: environment)
         } else { return }
         for _ in 0..<100 {
             guard !Task.isCancelled else { return }
-            if !isSending && !isActionBusy { break }
+            if !isSending && !isActionBusy && !isInterrupting { break }
             try? await Task.sleep(for: .milliseconds(200))
         }
         if action == "rejectRetry", let failed = conv.messages.last(where: { $0.delivery == .failed }) {
@@ -558,12 +566,80 @@ struct SessionDetailView: View {
             "messages": messages, "composer_error": composerError ?? "",
             "draft": draft, "busy": isSending || isActionBusy,
             "restart_failed": restartFailed,
-            "restart_supported": appModel.client?.hostCapabilities.sessionRestart == true
+            "restart_supported": appModel.client?.hostCapabilities.sessionRestart == true,
+            "interrupt_supported": appModel.client?.hostCapabilities.sessionInterrupt == true,
+            "running_after": isAssistantRunning
         ]
         if let data = try? JSONSerialization.data(withJSONObject: receipt, options: .prettyPrinted) {
             try? data.write(to: FileManager.default.temporaryDirectory
                 .appendingPathComponent("corral-delivery-inspection.json"), options: .atomic)
         }
+    }
+#endif
+
+    private var isAssistantRunning: Bool {
+        guard let store = conversationStore else { return false }
+        return ChatActivityState.resolve(
+            store: store,
+            connected: isHostReady,
+            marker: SessionPresentation.activityMarker(for: session)
+        )?.isRunning == true
+    }
+
+    /// Stop shows while the turn runs, and stays (quiet) until an interrupt
+    /// already sent has ended it.
+    private var canInterrupt: Bool {
+        (isAssistantRunning || isInterrupting)
+            && isHostReady
+            && appModel.client?.hostCapabilities.sessionInterrupt == true
+    }
+
+    private var stopAction: (() -> Void)? {
+        guard canInterrupt else { return nil }
+        return { interruptTurn() }
+    }
+
+    private func interruptTurn() {
+        guard !isInterrupting, canInterrupt, let store = conversationStore else { return }
+        // Acquired before the task: a second tap cannot send a second interrupt key.
+        isInterrupting = true
+        clearComposerError()
+        let operationID = hapticScope.beginOperation()
+        HapticFeedback.shared.emit(.committed, operationID: operationID, scope: hapticScope)
+        Task {
+            do {
+                try await store.interrupt()
+            } catch {
+                isInterrupting = false
+                showComposerError(SessionActionsMenu.failureMessage(for: error), operationID: operationID)
+                return
+            }
+            // The host reports the turn end through the activity marker.
+            for _ in 0..<40 where isAssistantRunning {
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+            isInterrupting = false
+        }
+    }
+
+#if DEBUG
+    /// Sends the long task, waits until the stop button shows, holds it for a
+    /// capture (`CORRAL_INSPECTION_STOP_DELAY` seconds), then runs the
+    /// production stop handler.
+    private func inspectInterrupt(text: String?, environment: [String: String]) async {
+        if let text, !text.isEmpty {
+            draft = text
+            submitDraft(text, [])
+        }
+        for _ in 0..<300 {
+            guard !Task.isCancelled else { return }
+            if canInterrupt && !isSending { break }
+            try? await Task.sleep(for: .milliseconds(200))
+        }
+        let hold = environment["CORRAL_INSPECTION_STOP_DELAY"].flatMap(Double.init) ?? 0
+        try? await Task.sleep(for: .seconds(hold))
+        guard !Task.isCancelled else { return }
+        interruptTurn()
     }
 #endif
 
@@ -664,6 +740,11 @@ struct SessionDetailView: View {
     }
 
     private func submitQuestion(_ requestID: String, answers: [NativeQuestionAnswer]) {
+        // Answering clears the refused-send hint for this request; a failed
+        // answer re-arms it on the next refused send.
+        if blockedQuestionRequestID == requestID {
+            blockedQuestionRequestID = nil
+        }
         let store: (any ConversationSendStore)? = conversationStore
         let display = DetailSendDisplay(view: self, hapticScope: hapticScope, sentImages: [])
         guard let plan = sendCoordinator.beginQuestionSubmit(
@@ -807,6 +888,14 @@ struct SessionDetailView: View {
                 attachment.commandID = staged.commandID
                 return attachment
             })
+        }
+
+        func showQuestionPending() {
+            // The host refused chat input while its picker owns the keyboard:
+            // glide to the open question card and show its quiet hint
+            // instead of staging a bubble the host would refuse.
+            view.blockedQuestionRequestID = view.conversationStore?.prompts.first?.requestID
+            view.scrollToMessageID = "prompts"
         }
 
         private func hapticEventOrNil(for haptic: ConversationSendHaptic?) -> HapticEvent? {

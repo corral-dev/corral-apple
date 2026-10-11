@@ -134,8 +134,12 @@ struct MacSidebar: View {
                 Button("sessions.action.delete", role: .destructive) {
                     if let session = sessionToDelete {
                         Task {
-                            try? await feed.delete(session)
-                            workspace.closePane(session.key)
+                            do {
+                                try await feed.delete(session)
+                                workspace.closePane(session.key)
+                            } catch {
+                                // The shared feed keeps the row and presents the host error.
+                            }
                         }
                     }
                     sessionToDelete = nil

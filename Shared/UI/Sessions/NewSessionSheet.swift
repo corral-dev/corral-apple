@@ -21,6 +21,9 @@ struct NewSessionSheet: View {
     @State private var errorMessage: String?
     @State private var hapticScope = HapticScope()
     @State private var navigationPath: [NewSessionRoute] = []
+    #if DEBUG
+    private static var inspectedCreation = false
+    #endif
 
     var body: some View {
         Group {
@@ -377,10 +380,15 @@ struct NewSessionSheet: View {
             navigationPath = [.projects]
             #endif
         }
-        if ProcessInfo.processInfo.arguments.contains("-CorralInspectCreateSession") {
+        // Creation inspection fires once per process: a rebuilt window
+        // reopening the sheet must not create the session again.
+        let arguments = ProcessInfo.processInfo.arguments
+        if !Self.inspectedCreation, arguments.contains("-CorralInspectCreateSession") {
+            Self.inspectedCreation = true
             await create()
         }
-        if ProcessInfo.processInfo.arguments.contains("-CorralInspectCreateRecentSession"), let combo = recentCombos.first {
+        if !Self.inspectedCreation, arguments.contains("-CorralInspectCreateRecentSession"), let combo = recentCombos.first {
+            Self.inspectedCreation = true
             await createFromCombo(combo)
         }
         #endif

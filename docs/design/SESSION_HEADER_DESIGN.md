@@ -188,7 +188,7 @@ Implementation is accepted only after evidence from the affected screen, not fro
 | First activity capsule at rest | Fully visible with one deliberate top gap; stays content-hugging and scrolls with conversation |
 | VoiceOver and Reduce Motion | One heading target, full title announcement, non-overlapping controls, no needless motion |
 
-For later implementation: inspect paired-device availability first and use the existing installed app on the available physical iPhone. Do not boot a simulator while a paired physical device is available, and do not install a second UI-test app. Delivery must follow the shared installation/upload process; capture and inspect the header afterward. Record any untestable state separately rather than marking the table passed.
+For later implementation: inspect paired-device availability first and use the existing installed app on the available physical iPhone. Do not install a second UI-test app; a simulator capture does not replace this acceptance. Delivery must follow the shared installation/upload process; capture and inspect the header afterward. Record any untestable state separately rather than marking the table passed.
 
 ## 9. Basis and evidence limits
 

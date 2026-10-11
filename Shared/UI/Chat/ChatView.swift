@@ -54,6 +54,8 @@ struct ChatView: View {
     @State private var promptSubmission = 0
     /// Outside jump requests (Your prompts) may target rows not loaded yet.
     @Binding var scrollToMessageID: String?
+    /// Request that refused a composer send: its card shows the quiet hint.
+    var blockedQuestionRequestID: String? = nil
     /// The same request once its row is loaded; the scroll view consumes it.
     @State private var revealedMessageID: String?
     var onQuestionSubmit: ((String, [NativeQuestionAnswer]) -> Void)?
@@ -78,6 +80,7 @@ struct ChatView: View {
         scrollToLatestRequest: Int = 0,
         loadEarlierPullProgress: Binding<Double?> = .constant(nil),
         scrollToMessageID: Binding<String?> = .constant(nil),
+        blockedQuestionRequestID: String? = nil,
         onQuestionSubmit: ((String, [NativeQuestionAnswer]) -> Void)? = nil,
         onRetryMessage: ((RichMessage) -> Void)? = nil
     ) {
@@ -89,6 +92,7 @@ struct ChatView: View {
         self.scrollToLatestRequest = scrollToLatestRequest
         self._loadEarlierPullProgress = loadEarlierPullProgress
         self._scrollToMessageID = scrollToMessageID
+        self.blockedQuestionRequestID = blockedQuestionRequestID
         self.onQuestionSubmit = onQuestionSubmit
         self.onRetryMessage = onRetryMessage
     }
@@ -244,6 +248,7 @@ struct ChatView: View {
                     prompts: store.prompts,
                     isConnected: isConnected,
                     isBusy: isSending,
+                    showsBlockedHint: showsBlockedHint,
                     submissionState: store.questionSubmissionState,
                     onSubmit: submitQuestion
                 )
@@ -272,18 +277,16 @@ struct ChatView: View {
 
     /// 对话流底部的安静提示。loading 与空态走别的分支，这里只处理 messageList。
     private var activityState: ChatActivityState? {
-        ChatActivityState.resolve(
-            live: store.isLive,
-            connected: isConnected,
-            attention: store.displayAttention,
-            hasPrompt: !store.prompts.isEmpty,
-            hasRunningTool: hasRunningTool,
-            marker: sessionMarker
-        )
+        ChatActivityState.resolve(store: store, connected: isConnected, marker: sessionMarker)
     }
 
-    private var hasRunningTool: Bool {
-        store.hasRunningTool
+    /// The refused send targets the currently open request; any other value
+    /// (including a cleared request) hides the hint without extra state.
+    private var showsBlockedHint: Bool {
+        guard let blocked = blockedQuestionRequestID,
+              let current = store.prompts.first?.requestID
+        else { return false }
+        return blocked == current
     }
 
     private func submitQuestion(_ requestID: String, answers: [NativeQuestionAnswer]) {

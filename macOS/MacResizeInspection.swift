@@ -7,6 +7,7 @@ import AppKit
 /// `CORRAL_INSPECTION_WINDOW_WIDTH` (default 931) for a capture.
 enum MacResizeInspection {
     static func runIfRequested() async {
+        await applyRequestedSize()
         guard ProcessInfo.processInfo.arguments.contains("-CorralInspectResizeSweep") else { return }
         try? await Task.sleep(for: .seconds(12))
         guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil && $0.title == "Corral" })
@@ -42,6 +43,24 @@ enum MacResizeInspection {
         try? await Task.sleep(for: .seconds(1))
         dumpSplits(window, label: "at 600")
         window.setFrame(NSRect(x: origin.x, y: origin.y, width: max(finalWidth, window.minSize.width), height: height), display: true)
+    }
+
+    /// `CORRAL_INSPECTION_WINDOW_SIZE=<width>x<height>` gives captures a fixed
+    /// main-window frame without a pointer drag. A saved frame can be restored
+    /// after the first second, so the size is re-applied until it holds.
+    private static func applyRequestedSize() async {
+        let parts = (ProcessInfo.processInfo.environment["CORRAL_INSPECTION_WINDOW_SIZE"] ?? "")
+            .split(separator: "x").compactMap { Double($0) }
+        guard parts.count == 2 else { return }
+        for _ in 0..<10 {
+            try? await Task.sleep(for: .seconds(1))
+            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.title == "Corral" })
+                ?? NSApp.windows.first(where: \.isVisible) else { continue }
+            let size = NSSize(width: max(parts[0], window.minSize.width), height: max(parts[1], window.minSize.height))
+            if window.frame.size != size {
+                window.setFrame(NSRect(origin: window.frame.origin, size: size), display: true)
+            }
+        }
     }
 
     /// Every split view in the window with its panes' widths and minimum widths.

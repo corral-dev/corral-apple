@@ -48,8 +48,35 @@ final class NativeQuestionTests: XCTestCase {
         XCTAssertFalse(prompt.multiSelect)
         XCTAssertFalse(prompt.allowCustom)
         XCTAssertFalse(prompt.isSecret)
+        XCTAssertFalse(prompt.blocksInput)
         XCTAssertEqual(prompt.options, ["Continue"])
         XCTAssertTrue(prompt.optionDetails.isEmpty)
+    }
+
+    func testBlocksInputDecodesAndDefaultsAbsent() throws {
+        let blocking = try RemoteJSONDecoder.decode(
+            SessionPrompt.self,
+            from: ["id": "q", "options": ["A"], "blocks_input": true]
+        )
+        XCTAssertTrue(blocking.blocksInput)
+
+        let older = try RemoteJSONDecoder.decode(
+            SessionPrompt.self,
+            from: ["id": "q", "options": ["A"]]
+        )
+        XCTAssertFalse(older.blocksInput)
+
+        let answered = NativeQuestionSubmissionState(requestID: "req-1", status: .delivered)
+        XCTAssertTrue(PendingQuestionGate.blocksInput(
+            [SessionPrompt(id: "p", name: nil, summary: nil, detail: nil, options: ["A"],
+                           requestID: "req-1", blocksInput: true)],
+            submission: nil
+        ))
+        XCTAssertFalse(PendingQuestionGate.blocksInput(
+            [SessionPrompt(id: "p", name: nil, summary: nil, detail: nil, options: ["A"],
+                           requestID: "req-1", blocksInput: true)],
+            submission: answered
+        ))
     }
 
     func testPreviewQuestionNeedsChoiceBeforeTypedNoteCounts() throws {

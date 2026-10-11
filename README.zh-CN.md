@@ -12,21 +12,39 @@
 - **找到正在做的事。** 按项目筛选，搜索对话全文。
 - **随手回复。** 在 Mac 上用键盘快捷键操作，或从 iPhone 回复。
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/mac-split-dark.png">
+    <img src="docs/screenshots/mac-split-light.png" alt="Corral Mac 版：左侧为会话列表，右侧并排显示一个 Claude Code 会话和一个 Codex 评审会话" width="100%">
+  </picture>
+</p>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/iphone-sessions-dark.png">
+    <img src="docs/screenshots/iphone-sessions-light.png" alt="Corral iPhone 版会话列表（演示数据）" width="45%">
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/iphone-chat-dark.png">
+    <img src="docs/screenshots/iphone-chat-light.png" alt="Corral iPhone 版代码评审对话（含工具调用）" width="45%">
+  </picture>
+</p>
+
 ## 安装
 
-客户端目前是**源码测试版**，需要使用 Xcode 构建。尚无公开的 App Store 或 TestFlight 下载。
+**Mac 版**提供签名安装包，直接下载即可。**iPhone 版**目前是源码测试版，需要使用 Xcode 构建。尚无公开的 App Store 或 TestFlight 下载。
 
 | 客户端 | 要求 |
 | --- | --- |
-| Mac | macOS 26+、带有 macOS 26 SDK 的 Xcode |
+| Mac | macOS 26+（从源码构建还需要带有 macOS 26 SDK 的 Xcode） |
 | iPhone | iOS 17+、Xcode、自己的签名团队及一台实体 iPhone |
 | 开发机 | 在 macOS 或 Linux 上安装 [Corral CLI](https://github.com/corral-dev/corral#install)和编程助手 |
 
 ### Mac
 
-下载[已签名的 Mac DMG](https://github.com/corral-dev/corral-apple/releases/latest)可获得自动更新。官方客户端默认每小时检查，后台下载，并在退出时安装。
+下载[已签名的 Mac DMG](https://github.com/corral-dev/corral-apple/releases/latest)，把 Corral 拖进「应用程序」。之后每小时检查一次更新，后台下载，并在退出时安装。
 
-安装好 Xcode 及其命令行工具后运行：
+如果想从源码构建，安装好 Xcode 及其命令行工具后运行：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/corral-dev/corral-apple/main/install.sh | bash
