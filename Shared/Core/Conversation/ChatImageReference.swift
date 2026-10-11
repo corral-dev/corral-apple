@@ -51,11 +51,12 @@ nonisolated struct ChatImageReference: Hashable, Sendable {
             add(String(match.output.1), kind: .explicit, alt: nil, at: match.range)
         }
 
-        let prose = maskFencedCode(text)
-        for match in prose.matches(of: bareReference) {
+        let fencedRanges = fencedCodeRanges(in: text)
+        for match in text.matches(of: bareReference) {
             let range = match.range
             guard !claimed.contains(where: { $0.overlaps(range) }) else { continue }
-            add(String(text[range]), kind: .mention, alt: nil, at: range)
+            guard !fencedRanges.contains(where: { $0.overlaps(range) }) else { continue }
+            add(String(match.output), kind: .mention, alt: nil, at: range)
         }
 
         var seen = Set<String>()
@@ -96,24 +97,20 @@ nonisolated struct ChatImageReference: Hashable, Sendable {
         return text
     }
 
-    /// Replace fenced code with spaces (same length) so bare mentions inside code
-    /// are ignored while ranges still index into the original text.
-    private static func maskFencedCode(_ text: String) -> String {
-        guard text.contains("```") else { return text }
-        var output = ""
+    /// Keep every range in the original string. Replacing Unicode graphemes with
+    /// ASCII spaces changes encoded offsets, making cross-string indices invalid.
+    private static func fencedCodeRanges(in text: String) -> [Range<String.Index>] {
+        guard text.contains("```") else { return [] }
+        var ranges: [Range<String.Index>] = []
         var inFence = false
-        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+        for line in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
             let isFence = line.trimmingCharacters(in: .whitespaces).hasPrefix("```")
             if isFence || inFence {
-                output += String(repeating: " ", count: line.count)
-            } else {
-                output += line
+                ranges.append(line.startIndex..<line.endIndex)
             }
-            output += "\n"
             if isFence { inFence.toggle() }
         }
-        output.removeLast()
-        return output
+        return ranges
     }
 
     private nonisolated(unsafe) static let markdownImage =

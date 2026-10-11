@@ -126,6 +126,12 @@ final class ConversationStore {
     var commandStatusRequestForTesting: ((String) async throws -> Any)?
     /// Tests observe the order in which outgoing text reaches the host.
     var inputRequestForTesting: (([String: Any]) async throws -> Any)?
+    /// Tests move local bubbles back in time (e.g. restored from an old cache).
+    func ageLocalMessagesForTesting(by seconds: Double) {
+        for index in messages.indices where messages[index].isLocal {
+            messages[index].timestamp = (messages[index].timestamp ?? 0) - seconds
+        }
+    }
     var toolDetailRequestForTesting: ((Int) async throws -> SessionToolDetailResponse)?
 #endif
 
@@ -442,13 +448,24 @@ final class ConversationStore {
         try await turn.value
     }
 
-    /// An earlier message is still being confirmed by the host while it is `accepted`.
+    /// An earlier message is still being confirmed while it is `accepted` with a
+    /// command identity inside the settle window. Identity-less echoes and stale
+    /// bubbles (e.g. restored from the reopen cache) are never confirmed by
+    /// receipt polling, so they must not hold back new sends.
     private func waitForEarlierDeliveries() async {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: Self.outboundSettleTimeout)
-        while !hasStopped, clock.now < deadline,
-              messages.contains(where: { $0.isLocal && $0.delivery == .accepted }) {
+        while !hasStopped, clock.now < deadline, hasConfirmingSend(now: Date()) {
             try? await Task.sleep(for: .milliseconds(200))
+        }
+    }
+
+    private func hasConfirmingSend(now: Date) -> Bool {
+        let window = Double(Self.outboundSettleTimeout.components.seconds)
+        return messages.contains { message in
+            guard message.isLocal, message.delivery == .accepted, message.commandID != nil,
+                  let sentAt = message.timestamp else { return false }
+            return now.timeIntervalSince1970 - sentAt < window
         }
     }
 

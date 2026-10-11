@@ -131,6 +131,35 @@ final class SessionCreationCoordinatorTests: XCTestCase {
         await store.stop()
     }
 
+    func testUnconfirmableAcceptedBubblesDoNotHoldBackNewSends() async throws {
+        let client = RemoteClient(devicePrivateKey: Data(repeating: 0, count: 32))
+        client.hostCapabilities.commandReceipts = true
+        defer { client.disconnect() }
+        let store = ConversationStore(sessionKey: "codex:a", client: client, live: true, hostID: "fixture")
+        var sent: [String] = []
+        store.inputRequestForTesting = { params in
+            sent.append(params["text"] as? String ?? "")
+            return ["status": "accepted"]
+        }
+        store.commandStatusRequestForTesting = { _ in ["status": "accepted"] }
+        // A host echo without a command identity: receipt polling can never settle it.
+        let echoSeq = store.enqueueLocalUser("echo", commandID: nil)
+        store.markLocalAccepted(seq: echoSeq)
+        let start = ContinuousClock.now
+        try await store.sendText("after echo", commandID: "fresh-one")
+        XCTAssertEqual(sent, ["after echo"])
+        XCTAssertLessThan(ContinuousClock.now - start, .seconds(1), "An identity-less accepted echo must not delay sends")
+        // A tracked send accepted long ago (restored from the reopen cache) is stale too.
+        let oldSeq = store.enqueueLocalUser("old", commandID: "old-one")
+        store.markLocalAccepted(seq: oldSeq)
+        store.ageLocalMessagesForTesting(by: 3600)
+        let again = ContinuousClock.now
+        try await store.sendText("after stale", commandID: "fresh-two")
+        XCTAssertEqual(sent, ["after echo", "after stale"])
+        XCTAssertLessThan(ContinuousClock.now - again, .seconds(1), "A stale accepted bubble must not delay sends")
+        await store.stop()
+    }
+
     func testExpiredCreationOnlyQueriesStatus() async throws {
         try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
         let old = PendingSessionCreation(commandID: "old", hostID: "host", runtimeID: "codex", cwd: "", createdAt: Date(timeIntervalSince1970: 1))

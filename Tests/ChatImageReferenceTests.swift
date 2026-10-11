@@ -49,6 +49,32 @@ final class ChatImageReferenceTests: XCTestCase {
         XCTAssertEqual(ChatImageReference.references(in: text).map(\.ref), ["out/final.png"])
     }
 
+    func testUnicodeFencesPreserveOriginalImageTargets() {
+        for unicode in ["中文", "😀", "e\u{301}", "👨‍👩‍👧‍👦"] {
+            for newline in ["\n", "\r\n"] {
+                let text = "Before: before.png\(newline)```swift\(newline)"
+                    + "\(unicode) hidden.png\(newline)```\(newline)"
+                    + "\(unicode) After: /tmp/result.png and ![shot](shots/after.jpg)"
+                let refs = ChatImageReference.references(in: text)
+                XCTAssertEqual(refs.map(\.ref), ["before.png", "/tmp/result.png", "shots/after.jpg"])
+                XCTAssertEqual(refs.map(\.kind), [.mention, .mention, .explicit])
+            }
+        }
+    }
+
+    func testUnicodeUnterminatedAndMultipleFences() {
+        let text = "```\n👨‍👩‍👧‍👦 hidden.png\n```\nfirst.jpg\n"
+            + "```\n中文 hidden.gif\n```\nsecond.webp\n```\n😀 hidden.heic"
+        XCTAssertEqual(ChatImageReference.references(in: text).map(\.ref), ["first.jpg", "second.webp"])
+    }
+
+    func testExplicitImageInsideUnicodeFenceKeepsExistingBehavior() {
+        let text = "```\n中文 ![Preview](images/explicit.png) hidden.jpg\n```\nafter.gif"
+        let refs = ChatImageReference.references(in: text)
+        XCTAssertEqual(refs.map(\.ref), ["images/explicit.png", "after.gif"])
+        XCTAssertEqual(refs.first?.kind, .explicit)
+    }
+
     func testCapPerMessage() {
         let text = (1...10).map { "img\($0).png" }.joined(separator: " ")
         XCTAssertEqual(ChatImageReference.references(in: text).count, ChatImageReference.maxPerMessage)
