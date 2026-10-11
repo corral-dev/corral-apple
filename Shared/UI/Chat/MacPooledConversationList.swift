@@ -27,9 +27,12 @@ enum MacPooledRow: Equatable, Identifiable {
 /// cell hosts the same SwiftUI row UI (`MessageBubbleView`, `ToolActivityView`
 /// and friends) with the shared `MacConversationTextDocument` network, so
 /// selection, links, copy, zoom and reflow behave like the lazy-stack path.
-/// Off-screen rows have no views at all. Row heights resolve through the same
-/// detached measurement path via Auto Layout fitting, so no height math is
-/// duplicated here.
+/// Off-screen rows have no views at all.
+///
+/// Heights: rows never seen at the current geometry use a text-measured
+/// estimate; every displayed row is measured from its own hosted content and
+/// corrected after the delegate returns, keeping the reader's position (the
+/// latest edge while following, otherwise the first visible row).
 ///
 /// iOS keeps the `ChatScrollView` path; this component is Mac-only.
 struct MacPooledConversationList: NSViewRepresentable {
@@ -66,7 +69,8 @@ struct MacPooledConversationList: NSViewRepresentable {
     func makeNSView(context: Context) -> NSScrollView {
         let coordinator = context.coordinator
         coordinator.configure(self)
-        let scroll = NSScrollView()
+        let scroll = PooledScrollView()
+        scroll.onUserScroll = { [weak coordinator] in coordinator?.noteUserScroll() }
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
         scroll.hasVerticalScroller = true
@@ -86,8 +90,11 @@ struct MacPooledConversationList: NSViewRepresentable {
         table.focusRingType = .none
         table.gridStyleMask = []
         table.intercellSpacing = .zero
+        // The default (inset) style pads every cell by 16 points on each side;
+        // the readable column owns the margins, so cells span the full width.
+        table.style = .fullWidth
         // Automatic heights measure cells without a settled width and stick;
-        // the delegate below resolves every row explicitly instead.
+        // the coordinator measures displayed rows explicitly instead.
         table.usesAutomaticRowHeights = false
         table.rowHeight = 44
         table.backgroundColor = .clear
@@ -96,9 +103,8 @@ struct MacPooledConversationList: NSViewRepresentable {
         table.addTableColumn(column)
         table.headerView = nil
         scroll.documentView = table
-        coordinator.reloadAllRows()
-        coordinator.scrollToBottom(animated: false)
         coordinator.observeScroll(of: scroll)
+        coordinator.mount()
         return scroll
     }
 
@@ -122,23 +128,34 @@ struct MacPooledConversationList: NSViewRepresentable {
     /// stay owned by the shared conversation document.
     final class PooledRowCell: NSView {
         static let identifier = NSUserInterfaceItemIdentifier("MacPooledRowCell")
-        private var hosting: NSHostingView<AnyView>?
+        private var hosting: NSHostingController<AnyView>?
 
         func setRoot(_ root: AnyView) {
             if let hosting {
                 hosting.rootView = root
             } else {
-                let created = NSHostingView(rootView: root)
-                created.frame = bounds
-                created.autoresizingMask = [.width, .height]
-                addSubview(created)
+                let created = NSHostingController(rootView: root)
+                // The table owns the row height; the hosted view only fills it.
+                created.sizingOptions = []
+                created.view.frame = bounds
+                created.view.autoresizingMask = [.width, .height]
+                addSubview(created.view)
                 hosting = created
             }
         }
 
+        /// Height the hosted row needs at `width`, from SwiftUI layout itself
+        /// (the text representables answer through their measurement path).
+        func fittingHeight(width: CGFloat) -> CGFloat? {
+            guard let hosting else { return nil }
+            let size = hosting.sizeThatFits(in: NSSize(width: width, height: CGFloat.greatestFiniteMagnitude))
+            guard size.height.isFinite, size.height > 0, size.height < 1_000_000 else { return nil }
+            return ceil(size.height)
+        }
+
         override func layout() {
             super.layout()
-            hosting?.frame = bounds
+            hosting?.view.frame = bounds
         }
     }
 
@@ -146,14 +163,78 @@ struct MacPooledConversationList: NSViewRepresentable {
     /// the view stays free of product logic.
     final class PooledConversationTable: NSTableView {
         weak var coordinator: Coordinator?
+
+        /// Rows measured while this pass realized them get their corrected
+        /// heights before the pass ends, so a clipped frame is never drawn.
+        /// This runs after the delegate callbacks, so it is not reentrant.
+        override func layout() {
+            super.layout()
+            if coordinator?.applyPendingHeights() == true {
+                super.layout()
+            }
+        }
+    }
+
+    /// Reports reader-initiated scrolling (wheel, trackpad, scroller drag) so
+    /// programmatic pins and layout clamps never count as reading history.
+    final class PooledScrollView: NSScrollView {
+        var onUserScroll: (() -> Void)?
+
+        override func scrollWheel(with event: NSEvent) {
+            onUserScroll?()
+            super.scrollWheel(with: event)
+        }
     }
 
     @MainActor
     final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
+        /// Everything a row renders besides its own item. A change re-renders
+        /// the visible rows; geometry inputs also invalidate measured heights.
+        private struct RenderContext: Equatable {
+            var runtimeID: String?
+            var interfaceScale: CGFloat
+            var sessionTextScale: CGFloat
+            var colorScheme: ColorScheme
+            var document: ObjectIdentifier?
+        }
+
+        /// Inputs of the trailing cards, whose row ids never change.
+        private struct TrailingContext: Equatable {
+            var prompts: [SessionPrompt]
+            var activity: ChatActivityState?
+            var isConnected: Bool
+            var isSending: Bool
+            var questionSubmissionState: NativeQuestionSubmissionState?
+        }
+
+        /// Geometry a height was resolved for.
+        private struct Geometry: Equatable {
+            var width: CGFloat
+            var interfaceScale: CGFloat
+            var sessionTextScale: CGFloat
+            var document: ObjectIdentifier?
+        }
+
+        private struct HeightEntry {
+            var geometry: Geometry
+            var height: CGFloat
+            var measured: Bool
+        }
+
+        /// A reading position: a row and its top edge relative to the viewport.
+        private struct Anchor {
+            var id: String
+            var offset: CGFloat
+        }
+
         weak var table: PooledConversationTable?
         private var rows: [MacPooledRow] = []
         private var lastRows: [MacPooledRow] = []
+        private var lastSeparators: [String: Date] = [:]
+        private var lastGaps: [String: CGFloat] = [:]
         private var lastDetailSourceID: ObjectIdentifier?
+        private var lastRender: RenderContext?
+        private var lastTrailing: TrailingContext?
         private var separators: [String: Date] = [:]
         private var gaps: [String: CGFloat] = [:]
         private var prompts: [SessionPrompt] = []
@@ -178,28 +259,40 @@ struct MacPooledConversationList: NSViewRepresentable {
         private var isAutoLoading = false
         private var autoLoadHeld = false
         private var lastTableWidth: CGFloat = 0
-        private var scrollObserver: NSObjectProtocol?
+        private var scrollObservers: [NSObjectProtocol] = []
         private var jumpSerial = 0
         private var didInitialScroll = false
-        // Row heights keyed per row by geometry context. A hit returns
-        // instantly; a context mismatch returns the last height (fast during
-        // resize drags) and display converges it (see didAdd). New rows are
-        // estimated once via detached text measurement plus stable chrome.
-        private struct HeightEntry {
-            var width: CGFloat
-            var interfaceScale: CGFloat
-            var sessionTextScale: CGFloat
-            var document: ObjectIdentifier?
-            var height: CGFloat
-
-            func matches(width: CGFloat, coordinator: Coordinator) -> Bool {
-                abs(width - self.width) < 0.5
-                    && interfaceScale == coordinator.interfaceScale
-                    && sessionTextScale == coordinator.sessionTextScale
-                    && document == coordinator.document.map(ObjectIdentifier.init)
-            }
-        }
+        private var pinScheduled = false
+        private var pendingHeightIDs: Set<String> = []
+        private var heightFlushScheduled = false
+        private var isApplyingHeights = false
         private var heightEntries: [String: HeightEntry] = [:]
+
+        private var renderContext: RenderContext {
+            RenderContext(runtimeID: runtimeID, interfaceScale: interfaceScale,
+                          sessionTextScale: sessionTextScale, colorScheme: colorScheme,
+                          document: document.map(ObjectIdentifier.init))
+        }
+
+        private var trailingContext: TrailingContext {
+            TrailingContext(prompts: prompts, activity: activity, isConnected: isConnected,
+                            isSending: isSending, questionSubmissionState: questionSubmissionState)
+        }
+
+        /// Before the first layout the table has no width; estimate at the
+        /// last real width (or a typical pane) rather than collapsing every
+        /// estimate to a 40-point column.
+        private var layoutWidth: CGFloat {
+            let width = table?.bounds.width ?? 0
+            if width > 80 { return width }
+            return lastTableWidth > 80 ? lastTableWidth : 640
+        }
+
+        private var geometry: Geometry {
+            Geometry(width: layoutWidth, interfaceScale: interfaceScale,
+                     sessionTextScale: sessionTextScale,
+                     document: document.map(ObjectIdentifier.init))
+        }
 
         func configure(_ view: MacPooledConversationList) {
             rows = view.rows
@@ -229,49 +322,39 @@ struct MacPooledConversationList: NSViewRepresentable {
 
         func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
             guard rows.indices.contains(row) else { return 44 }
-            let width = tableView.bounds.width
             let id = rows[row].id
-            if let entry = heightEntries[id], entry.matches(width: width, coordinator: self) {
-                return entry.height
-            }
-            if let entry = heightEntries[id] {
-                // Stale geometry: serve fast, converge on display.
-                return entry.height
-            }
-            let estimated = estimateHeight(for: rows[row], tableWidth: max(width, 1))
-            heightEntries[id] = HeightEntry(width: max(width, 1), interfaceScale: interfaceScale,
-                                            sessionTextScale: sessionTextScale,
-                                            document: document.map(ObjectIdentifier.init),
-                                            height: estimated)
-            return estimated
+            // A stale entry (other width or zoom) still beats a fresh estimate:
+            // display re-measures it at the current geometry.
+            if let entry = heightEntries[id] { return entry.height }
+            let height = estimateHeight(for: rows[row], tableWidth: layoutWidth)
+            heightEntries[id] = HeightEntry(geometry: geometry, height: height, measured: false)
+            return height
         }
 
-        /// Detached text measurement (shared cache) plus stable chrome. Exact
-        /// for the dominant text term; display corrects the remainder.
+        /// Detached text measurement (shared cache) plus stable chrome, used
+        /// only until the row is displayed and measured.
         private func estimateHeight(for row: MacPooledRow, tableWidth: CGFloat) -> CGFloat {
             let font = Typography.sessionUIFont(.bubbleBody, scale: sessionTextScale * interfaceScale)
             switch row {
             case .timeline(let item):
-                let gap = gaps[item.id] ?? 0
+                let gap = (gaps[item.id] ?? 0) * interfaceScale
+                var chrome = gap
+                if separators[item.id] != nil { chrome += 24 * interfaceScale }
                 switch item {
                 case .message(let message):
                     let isUser = message.role.lowercased() == "user"
                     let column = min(tableWidth - 2 * Space.base, ChatLayout.readableWidth ?? tableWidth)
-                    let textWidth = max(column - (isUser ? 2 * Space.base : 0), 40)
+                    let textWidth = max(column - (isUser ? 2 * Space.base : 0), 120)
                     var textHeight = font.pointSize + 10
-                    if document?.text(for: message.seq) != nil,
-                       let measurement = document?.measurement(for: message.seq),
-                       let text = document?.text(for: message.seq) {
+                    if let document, let text = document.text(for: message.seq),
+                       let measurement = document.measurement(for: message.seq) {
                         let measured = measurement.size(for: text, font: font, width: textWidth)
                         textHeight = ceil(max(measured.height, font.pointSize + 4))
                     }
-                    // Stable chrome; images/failure cards are rare and converge
-                    // on display via didAdd below.
-                    var chrome = gap + (isUser ? 2 * Space.md : Space.xs)
-                    if separators[item.id] != nil { chrome += 24 * interfaceScale }
+                    chrome += isUser ? 2 * Space.md : Space.xs
                     return ceil(textHeight + chrome)
                 case .toolGroup:
-                    return ceil(gap + 44)
+                    return ceil(chrome + 44 * interfaceScale)
                 }
             case .prompts:
                 return 200
@@ -280,26 +363,66 @@ struct MacPooledConversationList: NSViewRepresentable {
             }
         }
 
-        /// Display converges stale estimates: re-estimate at the settled
-        /// width when a row appears with an entry from another context.
-        func tableView(_ tableView: NSTableView, didAdd rowView: NSTableRowView, forRow row: Int) {
-            guard rows.indices.contains(row) else { return }
-            let width = tableView.bounds.width
-            let id = rows[row].id
-            guard let entry = heightEntries[id], !entry.matches(width: width, coordinator: self) else { return }
-            heightEntries[id] = HeightEntry(width: width, interfaceScale: interfaceScale,
-                                            sessionTextScale: sessionTextScale,
-                                            document: document.map(ObjectIdentifier.init),
-                                            height: estimateHeight(for: rows[row], tableWidth: max(width, 1)))
-            tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integer: row))
-        }
-
         func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
             guard rows.indices.contains(row) else { return nil }
             let cell = (tableView.makeView(withIdentifier: PooledRowCell.identifier, owner: nil) as? PooledRowCell) ?? PooledRowCell()
             cell.identifier = PooledRowCell.identifier
             cell.setRoot(AnyView(rowContent(for: rows[row])))
+            recordMeasuredHeight(of: cell, id: rows[row].id,
+                                 cellWidth: tableView.frameOfCell(atColumn: 0, row: row).width)
             return cell
+        }
+
+        /// Measure the displayed row; corrections apply after the delegate
+        /// returns (changing heights inside it is a reentrant table operation).
+        private func recordMeasuredHeight(of cell: PooledRowCell, id: String, cellWidth: CGFloat) {
+            let current = geometry
+            if let entry = heightEntries[id], entry.measured, entry.geometry == current { return }
+            // Measure at the width the cell will actually get, not the table's.
+            let width = cellWidth > 80 ? cellWidth : current.width
+            guard let height = cell.fittingHeight(width: width) else { return }
+            let previous = heightEntries[id]?.height
+            heightEntries[id] = HeightEntry(geometry: current, height: height, measured: true)
+            if previous.map({ abs($0 - height) > 0.5 }) ?? true {
+                pendingHeightIDs.insert(id)
+                scheduleHeightFlush()
+            }
+        }
+
+        private func scheduleHeightFlush() {
+            guard !heightFlushScheduled else { return }
+            heightFlushScheduled = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.heightFlushScheduled = false
+                self.flushHeights()
+            }
+        }
+
+        /// Applies measured corrections inside the table's layout pass.
+        /// Returns whether heights changed (the caller lays out again).
+        func applyPendingHeights() -> Bool {
+            guard !pendingHeightIDs.isEmpty, !isApplyingHeights else { return false }
+            isApplyingHeights = true
+            defer { isApplyingHeights = false }
+            flushHeights()
+            return true
+        }
+
+        private func flushHeights() {
+            guard let table, !pendingHeightIDs.isEmpty else { return }
+            var indexes = IndexSet()
+            for (index, row) in rows.enumerated() where pendingHeightIDs.contains(row.id) {
+                indexes.insert(index)
+            }
+            pendingHeightIDs.removeAll()
+            guard !indexes.isEmpty else { return }
+            preservingPosition {
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0
+                    table.noteHeightOfRows(withIndexesChanged: indexes)
+                }
+            }
         }
 
         private func rowContent(for row: MacPooledRow) -> some View {
@@ -357,71 +480,119 @@ struct MacPooledConversationList: NSViewRepresentable {
                     }
                 }
             }
+            .environment(\.interfaceScale, interfaceScale)
+            .environment(\.sessionTextScale, sessionTextScale)
+            .environment(\.colorScheme, colorScheme)
             .environment(\.macConversationTextDocument, document)
             .chatReadableColumn()
+            // A reused cell must not carry the previous row's representables:
+            // native text views belong to one message in the shared document,
+            // so a new row identity realizes (or reattaches) its own view.
+            .id(row.id)
         }
 
         // MARK: - Updates
 
-        /// Diff by stable id, then by value: streaming edits reload one row,
-        /// structural changes rebuild and restore position. Changed rows drop
-        /// their height entries so heights re-estimate instead of going stale.
-        func syncRows() {
-            guard let table else { return }
-            let newIDs = rows.map(\.id)
-            let oldIDs = lastRows.map(\.id)
-            if newIDs != oldIDs || detailSourceID != lastDetailSourceID {
-                let anchor = topVisibleID()
-                let oldByID = Dictionary(uniqueKeysWithValues: lastRows.map { ($0.id, $0) })
-                for row in rows where row != oldByID[row.id] {
-                    heightEntries[row.id] = nil
-                }
-                lastRows = rows
-                lastDetailSourceID = detailSourceID
-                table.reloadData()
-                if followsLatest {
-                    scrollToBottom(animated: false)
-                } else if let anchor, let index = newIDs.firstIndex(of: anchor) {
-                    table.scrollRowToVisible(index)
-                }
-                return
-            }
-            var changed = IndexSet()
-            for (index, row) in rows.enumerated() where row != lastRows[index] {
-                changed.insert(index)
-                heightEntries[row.id] = nil
-            }
+        func mount() {
             lastRows = rows
-            if !changed.isEmpty {
-                table.reloadData(forRowIndexes: changed, columnIndexes: IndexSet(integer: 0))
+            lastSeparators = separators
+            lastGaps = gaps
+            lastDetailSourceID = detailSourceID
+            lastRender = renderContext
+            lastTrailing = trailingContext
+            table?.reloadData()
+            scrollToBottom(animated: false)
+            // The caller's jump button state may belong to a previous list.
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.onFollowChange?(self.followsLatest)
             }
         }
 
-        func reloadAllRows() {
-            lastRows = rows
-            lastDetailSourceID = detailSourceID
-            table?.reloadData()
+        /// Diff by stable id, then by rendered value: streaming edits reload
+        /// one row, structural changes rebuild and keep the reading position.
+        /// Changed rows drop their heights so they re-measure.
+        func syncRows() {
+            guard let table else { return }
+            if detailSourceID != lastDetailSourceID {
+                resetForNewConversation()
+                return
+            }
+            let render = renderContext
+            let trailing = trailingContext
+            defer {
+                lastRows = rows
+                lastSeparators = separators
+                lastGaps = gaps
+                lastRender = render
+                lastTrailing = trailing
+            }
+            let newIDs = rows.map(\.id)
+            if newIDs != lastRows.map(\.id) {
+                let oldByID = Dictionary(lastRows.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
+                for row in rows where row != oldByID[row.id] || rowDecorationChanged(row.id) {
+                    heightEntries[row.id] = nil
+                }
+                if trailing != lastTrailing {
+                    heightEntries["prompts"] = nil
+                    heightEntries["activity"] = nil
+                }
+                preservingPosition { table.reloadData() }
+                return
+            }
+            var changed = IndexSet()
+            for (index, row) in rows.enumerated() {
+                let trailingChanged = (row == .prompts || row == .activity) && trailing != lastTrailing
+                if row != lastRows[index] || rowDecorationChanged(row.id) || trailingChanged {
+                    changed.insert(index)
+                    heightEntries[row.id] = nil
+                }
+            }
+            if render != lastRender {
+                // Zoom, theme or document swaps re-render what is on screen;
+                // the remaining rows re-measure when they are displayed.
+                changed.formUnion(visibleRowIndexes())
+            }
+            if !changed.isEmpty {
+                preservingPosition {
+                    table.reloadData(forRowIndexes: changed, columnIndexes: IndexSet(integer: 0))
+                    table.noteHeightOfRows(withIndexesChanged: changed)
+                }
+            }
+        }
+
+        private func rowDecorationChanged(_ id: String) -> Bool {
+            separators[id] != lastSeparators[id] || gaps[id] != lastGaps[id]
+        }
+
+        /// The same table can be handed another conversation: start it like a
+        /// fresh mount (latest edge, no inherited heights or paging holds).
+        private func resetForNewConversation() {
+            heightEntries.removeAll()
+            pendingHeightIDs.removeAll()
+            userHasScrolled = false
+            autoLoadHeld = false
+            isAutoLoading = false
+            jumpSerial &+= 1
+            setFollowsLatest(true)
+            mount()
         }
 
         func consumeScrollIntents(scrollToMessageID: Binding<String?>, scrollToLatestRequest: Int) {
             guard let table else { return }
             if let target = scrollToMessageID.wrappedValue {
-                if let index = rows.map(\.id).firstIndex(of: target) {
-                    // Estimates drift over dozens of rows; warm the landing
-                    // zone first so the jump lands, then re-pin once display
-                    // has converged heights.
-                    ensureHeights(around: index, radius: 10)
-                    table.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn:
-                        max(0, index - 10)..<min(rows.count, index + 11)))
-                    table.scrollRowToVisible(index)
+                if let index = rows.firstIndex(where: { $0.id == target }) {
+                    setFollowsLatest(false)
+                    reveal(index: index, in: table)
+                    // Display measures the landing zone; land again once its
+                    // corrected heights have been applied.
                     jumpSerial &+= 1
                     let serial = jumpSerial
-                    let targetID = target
                     DispatchQueue.main.async { [weak self] in
-                        guard let self, serial == self.jumpSerial,
-                              let table = self.table,
-                              let settled = self.rows.map(\.id).firstIndex(of: targetID) else { return }
-                        table.scrollRowToVisible(settled)
+                        guard let self, serial == self.jumpSerial, let table = self.table,
+                              let settled = self.rows.firstIndex(where: { $0.id == target }) else { return }
+                        self.flushHeights()
+                        self.reveal(index: settled, in: table)
                     }
                 }
                 DispatchQueue.main.async { scrollToMessageID.wrappedValue = nil }
@@ -432,76 +603,140 @@ struct MacPooledConversationList: NSViewRepresentable {
             }
         }
 
-        /// Measure the landing zone synchronously so programmatic scrolls use
-        /// real heights instead of accumulated estimates.
-        private func ensureHeights(around index: Int, radius: Int) {
-            guard let table else { return }
-            let width = max(table.bounds.width, 1)
-            for i in max(0, index - radius)..<min(rows.count, index + radius + 1) {
-                let id = rows[i].id
-                heightEntries[id] = HeightEntry(width: width, interfaceScale: interfaceScale,
-                                                sessionTextScale: sessionTextScale,
-                                                document: document.map(ObjectIdentifier.init),
-                                                height: estimateHeight(for: rows[i], tableWidth: width))
-            }
+        /// Top-aligns a row with a small margin so a jump reads from its start.
+        private func reveal(index: Int, in table: NSTableView) {
+            guard let clip = table.enclosingScrollView?.contentView else { return }
+            let rect = table.rect(ofRow: index)
+            setClipOrigin(rect.minY - Space.sm * interfaceScale, clip: clip)
         }
 
         // MARK: - Scrolling
 
         func observeScroll(of scroll: NSScrollView) {
-            scrollObserver = NotificationCenter.default.addObserver(
-                forName: NSView.boundsDidChangeNotification,
-                object: scroll.contentView, queue: .main
-            ) { [weak self] _ in self?.scrollGeometryChanged(scroll: scroll) }
+            let center = NotificationCenter.default
+            scrollObservers = [
+                center.addObserver(
+                    forName: NSView.boundsDidChangeNotification,
+                    object: scroll.contentView, queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.scrollGeometryChanged(scroll: scroll) }
+                },
+                center.addObserver(
+                    forName: NSScrollView.willStartLiveScrollNotification,
+                    object: scroll, queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.noteUserScroll() }
+                },
+            ]
+            if let table {
+                // Rows grow below a pinned reader without moving the clip
+                // origin; re-pin on content size changes while following.
+                table.postsFrameChangedNotifications = true
+                scrollObservers.append(center.addObserver(
+                    forName: NSView.frameDidChangeNotification,
+                    object: table, queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.contentSizeChanged() }
+                })
+            }
             scroll.contentView.postsBoundsChangedNotifications = true
         }
 
         func teardown(scroll: NSScrollView) {
-            if let scrollObserver { NotificationCenter.default.removeObserver(scrollObserver) }
+            scrollObservers.forEach(NotificationCenter.default.removeObserver)
+            scrollObservers = []
             scroll.contentView.postsBoundsChangedNotifications = false
             table = nil
+        }
+
+        func noteUserScroll() {
+            userHasScrolled = true
+        }
+
+        private func contentSizeChanged() {
+            guard followsLatest, didInitialScroll, !pinScheduled else { return }
+            // Coalesce: one layout pass can resize the table many times, and
+            // scrolling inside the table's own layout pass is unsafe.
+            pinScheduled = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.pinScheduled = false
+                if self.followsLatest { self.scrollToBottom(animated: false) }
+            }
         }
 
         private func scrollGeometryChanged(scroll: NSScrollView) {
             guard let table else { return }
             let visible = scroll.contentView.documentVisibleRect
-            // The mount-time scroll request lands before layout exists; pin
-            // the initial position on the first valid geometry instead. Later
-            // explicit jumps always arrive after mount and win.
+            // The mount-time pin lands before layout exists; pin again on the
+            // first valid geometry. Later explicit jumps arrive after mount.
             if !didInitialScroll, visible.height > 0, table.numberOfRows > 0 {
                 didInitialScroll = true
+                lastTableWidth = table.bounds.width
                 scrollToBottom(animated: false)
                 return
             }
             if abs(table.bounds.width - lastTableWidth) > 0.5 {
                 lastTableWidth = table.bounds.width
-                // Refresh visible rows now; offscreen rows converge on display
-                // instead of re-estimating the whole history mid-drag.
-                let visibleIndexes = table.rows(in: visible)
-                if visibleIndexes.location != NSNotFound, visibleIndexes.length > 0 {
-                    let range = visibleIndexes.location..<(visibleIndexes.location + visibleIndexes.length)
-                    for index in range where rows.indices.contains(index) {
-                        heightEntries[rows[index].id] = nil
+                // Re-render on-screen rows at the new width now; offscreen rows
+                // keep their last height until they are displayed again.
+                let visibleIndexes = visibleRowIndexes()
+                if !visibleIndexes.isEmpty {
+                    preservingPosition {
+                        table.reloadData(forRowIndexes: visibleIndexes, columnIndexes: IndexSet(integer: 0))
                     }
-                    table.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: range))
                 }
             }
-            if !userHasScrolled, visible.height > 0 { userHasScrolled = true }
-            // Table coordinates grow upward with row 0 (oldest) at the top:
-            // the bottom edge is minY, the top edge is maxY.
-            let nearBottom = visible.minY <= 44
-            if followsLatest != nearBottom {
-                followsLatest = nearBottom
-                onFollowChange?(nearBottom)
+            // NSTableView is flipped: row 0 (oldest) sits at y = 0, so the
+            // reading top is minY and the latest edge is the table's maxY.
+            // Only the reader moves follow state; programmatic pins stay put.
+            if userHasScrolled {
+                setFollowsLatest(table.bounds.height - visible.maxY <= 44)
             }
             loadEarlierIfReading(scroll: scroll, visible: visible)
         }
 
-        private func topVisibleID() -> String? {
+        private func setFollowsLatest(_ value: Bool) {
+            guard followsLatest != value else { return }
+            followsLatest = value
+            onFollowChange?(value)
+        }
+
+        private func visibleRowIndexes() -> IndexSet {
+            guard let table, let clip = table.enclosingScrollView?.contentView else { return [] }
+            let range = table.rows(in: clip.documentVisibleRect)
+            guard range.location != NSNotFound, range.length > 0 else { return [] }
+            return IndexSet(integersIn: range.location..<min(rows.count, range.location + range.length))
+        }
+
+        private func currentAnchor() -> Anchor? {
             guard let table, let clip = table.enclosingScrollView?.contentView else { return nil }
-            let indexes = table.rows(in: clip.documentVisibleRect)
-            guard indexes.location != NSNotFound, rows.indices.contains(indexes.location) else { return nil }
-            return rows[indexes.location].id
+            let visible = clip.documentVisibleRect
+            guard let first = visibleRowIndexes().first, rows.indices.contains(first) else { return nil }
+            return Anchor(id: rows[first].id, offset: table.rect(ofRow: first).minY - visible.minY)
+        }
+
+        /// Applies a layout change without moving what the reader sees: the
+        /// latest edge stays pinned while following, otherwise the first
+        /// visible row keeps its place in the viewport.
+        private func preservingPosition(_ change: () -> Void) {
+            let anchor = followsLatest ? nil : currentAnchor()
+            change()
+            if followsLatest {
+                scrollToBottom(animated: false)
+            } else if let anchor, let table, let clip = table.enclosingScrollView?.contentView,
+                      let index = rows.firstIndex(where: { $0.id == anchor.id }) {
+                setClipOrigin(table.rect(ofRow: index).minY - anchor.offset, clip: clip)
+            }
+        }
+
+        private func setClipOrigin(_ y: CGFloat, clip: NSClipView) {
+            guard let table else { return }
+            let maxY = max(table.frame.height - clip.bounds.height, 0)
+            let target = NSPoint(x: 0, y: min(max(y, 0), maxY))
+            guard abs(clip.bounds.origin.y - target.y) > 0.25 else { return }
+            clip.scroll(to: target)
+            table.enclosingScrollView?.reflectScrolledClipView(clip)
         }
 
         private func loadEarlierIfReading(scroll: NSScrollView, visible: CGRect) {
@@ -509,59 +744,37 @@ struct MacPooledConversationList: NSViewRepresentable {
             let contentHeight = scroll.documentView?.frame.height ?? 0
             let containerHeight = scroll.contentView.bounds.height
             guard containerHeight > 0, contentHeight > 0 else { return }
-            // Short transcripts fill immediately; readers near the top page earlier.
+            // Short transcripts fill immediately; readers near the top page
+            // earlier. The reading position survives through syncRows.
             let overflows = contentHeight - containerHeight > 1
-            let distanceFromTop = contentHeight - visible.maxY
+            let distanceFromTop = visible.minY
             guard !overflows || (userHasScrolled && distanceFromTop < containerHeight) else { return }
             isAutoLoading = true
-            let anchor = followsLatest ? nil : topVisibleID()
             Task { @MainActor in
                 let loaded = await load()
-                if loaded, let anchor, let index = self.rows.map(\.id).firstIndex(of: anchor) {
-                    self.ensureHeights(around: index, radius: 10)
-                    self.table?.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn:
-                        max(0, index - 10)..<min(self.rows.count, index + 11)))
-                    self.table?.scrollRowToVisible(index)
-                }
                 if !loaded { self.autoLoadHeld = true }
                 self.isAutoLoading = false
             }
         }
 
         private func showLatest() {
-            followsLatest = true
-            if !rows.isEmpty {
-                ensureHeights(around: rows.count - 1, radius: 12)
-                table?.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn:
-                    max(0, rows.count - 13)..<rows.count))
-            }
+            setFollowsLatest(true)
             scrollToBottom(animated: false)
         }
 
+        /// Pins the document end, not just the last row: a row taller than the
+        /// viewport would otherwise stop at its top edge.
         func scrollToBottom(animated: Bool) {
-            guard let table, table.numberOfRows > 0 else { return }
-            let last = table.numberOfRows - 1
+            guard let table, table.numberOfRows > 0,
+                  let scroll = table.enclosingScrollView else { return }
+            let clip = scroll.contentView
+            let end = NSPoint(x: 0, y: max(0, table.frame.height - clip.bounds.height))
             if animated {
-                NSAnimationContext.runAnimationGroup { _ in
-                    table.scrollRowToVisible(last)
-                }
-            } else {
-                table.scrollRowToVisible(last)
+                NSAnimationContext.runAnimationGroup { _ in clip.animator().setBoundsOrigin(end) }
+            } else if abs(clip.bounds.origin.y - end.y) > 0.25 {
+                clip.scroll(to: end)
             }
-        }
-
-        func scroll(to id: String, centered: Bool) {
-            guard let table, let index = rows.map(\.id).firstIndex(of: id) else { return }
-            if centered, let clip = table.enclosingScrollView?.contentView,
-               let rowView = table.rowView(atRow: index, makeIfNecessary: false) {
-                let visibleHeight = clip.documentVisibleRect.height
-                let contentHeight = table.bounds.height
-                let y = rowView.frame.midY - visibleHeight / 2
-                clip.scroll(to: NSPoint(x: 0, y: min(max(y, 0), max(contentHeight - visibleHeight, 0))))
-                table.enclosingScrollView?.reflectScrolledClipView(clip)
-            } else {
-                table.scrollRowToVisible(index)
-            }
+            scroll.reflectScrolledClipView(clip)
         }
     }
 }

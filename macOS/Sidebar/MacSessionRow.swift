@@ -58,6 +58,8 @@ struct MacSessionRow: View {
     }
 
     /// Project then preview; a blank string keeps the line when both are empty.
+    /// The project reads first: primary semibold over the secondary preview
+    /// (design: Collapsed split and project prominence).
     private var secondaryLine: Text {
         let preview = SessionPresentation.preview(for: session)
         let project = visibleProject
@@ -65,7 +67,7 @@ struct MacSessionRow: View {
         case (nil, true): return Text(verbatim: " ")
         case (nil, false): return Text(preview)
         case (let project?, true): return project
-        case (let project?, false): return Text("\(project)  \(Text(preview).foregroundStyle(.tertiary))")
+        case (let project?, false): return Text("\(project)  \(Text(preview))")
         }
     }
 
@@ -73,9 +75,9 @@ struct MacSessionRow: View {
         let name = SessionPresentation.projectName(from: session)
         if let groupProject, groupProject == name { return nil }
         switch name {
-        case "~": return Text("sessions.project.home").fontWeight(.medium)
-        case "": return Text("sessions.project.unknown").fontWeight(.medium)
-        default: return Text(verbatim: name).fontWeight(.medium)
+        case "~": return Text("sessions.project.home").fontWeight(.semibold).foregroundStyle(.primary)
+        case "": return Text("sessions.project.unknown").fontWeight(.semibold).foregroundStyle(.primary)
+        default: return Text(verbatim: name).fontWeight(.semibold).foregroundStyle(.primary)
         }
     }
 

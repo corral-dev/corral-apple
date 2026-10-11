@@ -10,6 +10,7 @@ import Observation
     var latestRequest = 0
     var earlierLoads = 0
     var follows = true
+    var source = NSObject()
 }
 
 private struct PooledListScreen: View {
@@ -29,17 +30,6 @@ private struct PooledListScreen: View {
     }
 
     var body: some View {
-        // Keep the shared text network in step, like MacConversationTextSelection.
-        let sources = state.messages.compactMap { message -> MacConversationTextDocument.Source? in
-            guard let text = message.text, !text.allSatisfy(\.isWhitespace) else { return nil }
-            return .init(id: message.seq, text: text, isUser: message.role.lowercased() == "user")
-        }
-        let font = Typography.sessionUIFont(.bubbleBody, scale: state.scale)
-        let style = MacConversationTextDocument.Style(
-            font: font, foreground: .labelColor, userForeground: .white)
-        document.update(identity: ObjectIdentifier(owner), sources: sources, style: style) { source in
-            NSAttributedString(ChatMarkdown.attributed(source.text))
-        }
         return MacPooledConversationList(
             rows: rows,
             separators: [:],
@@ -50,6 +40,7 @@ private struct PooledListScreen: View {
             onQuestionSubmit: { _, _ in },
             onRetryMessage: { _ in },
             onNeedDetails: { _ in nil },
+            detailSourceID: ObjectIdentifier(state.source),
             interfaceScale: state.scale,
             sessionTextScale: 1,
             colorScheme: .light,
@@ -62,6 +53,13 @@ private struct PooledListScreen: View {
             scrollToLatestRequest: state.latestRequest,
             onFollowChange: { state.follows = $0 }
         )
+        // The app's own text-network sync: same conversion, fonts and
+        // per-conversation identity as ChatView.
+        .modifier(MacConversationTextSelection(
+            identity: ObjectIdentifier(state.source),
+            messages: state.messages,
+            documentOverride: document
+        ))
         .environment(\.interfaceScale, state.scale)
     }
 }
@@ -72,7 +70,7 @@ struct PooledListProbe {
         NSApplication.shared.setActivationPolicy(.prohibited)
         isolatedBubbleCheck()
         checkPooledConversation(count: 120)
-        print("PASS pooled conversation list: reuse, selection, jump, top load, reflow")
+        print("PASS pooled conversation list: follow latest, reuse, selection, jump, top load, reflow, fast scroll, switch")
     }
 
     /// One bubble straight in a hosting view: isolates row content from table reuse.
@@ -92,7 +90,8 @@ struct PooledListProbe {
                 .frame(width: 500, height: 200))
         view.frame = NSRect(x: 0, y: 0, width: 500, height: 200)
         view.layoutSubtreeIfNeeded()
-        let texts = ([view] + view.subviews.flatMap(descendants)).compactMap { $0 as? NSTextView }
+        precondition(([view] + view.subviews.flatMap(descendants)).contains { $0 is NSTextView },
+                     "Isolated bubble has no native text view")
     }
 
     /// Which message sequences a text view currently displays: resolved
@@ -121,7 +120,7 @@ struct PooledListProbe {
             RichMessage(seq: index, role: "assistant",
                         text: "Message \(index). " + String(repeating: "Native pooled conversation text. ", count: index.isMultiple(of: 3) ? 40 : 6))
         }
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 480),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 800),
                               styleMask: [.titled, .resizable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.close() }
@@ -135,7 +134,7 @@ struct PooledListProbe {
         // from view.string.
         func visibleViews() -> [NSTextView] {
             descendants(host).compactMap { $0 as? NSTextView }
-                .filter { !$0.isEditable && !$0.visibleRect.isEmpty }
+                .filter { !$0.isEditable && !$0.isHiddenOrHasHiddenAncestor && !$0.visibleRect.isEmpty }
         }
         func seqs(of views: [NSTextView]) -> [Int: NSTextView] {
             var map: [Int: NSTextView] = [:]
@@ -161,13 +160,39 @@ struct PooledListProbe {
         }
         precondition(seqs(of: visible)[count] != nil,
                      "Pooled list did not land on the latest message")
+        guard let scroll = descendants(host).compactMap({ $0 as? NSScrollView }).first,
+              let document0 = scroll.documentView else {
+            preconditionFailure("Pooled list has no scroll view")
+        }
+        // NSTableView is flipped: the latest edge is the document's maxY.
+        func distanceFromBottom() -> CGFloat {
+            document0.frame.height - scroll.contentView.documentVisibleRect.maxY
+        }
+        precondition(state.follows, "Pooled list mounted at the latest edge but stopped following")
+        precondition(distanceFromBottom() <= 1, "Pooled list did not mount pinned to the document end")
+
+        // A following reader stays pinned while new messages stream in.
+        for extra in 1...3 {
+            let seq = count + extra
+            state.messages.append(RichMessage(seq: seq, role: "assistant",
+                text: "Streamed \(seq). " + String(repeating: "Fresh output keeps arriving. ", count: extra == 3 ? 30 : 4)))
+            pump(host)
+        }
+        precondition(state.follows, "New messages turned off follow-latest")
+        precondition(distanceFromBottom() <= 1,
+                     "Pooled list fell off the latest edge as messages arrived (\(distanceFromBottom()) pt)")
+        precondition(state.earlierLoads == 0, "Sitting at the latest edge paged earlier history")
 
         // Single-row edit reuses every other visible native view. The edited
         // row may grow, shifting the viewport: compare per message sequence
         // among rows visible both before and after.
+        visible = visibleViews()
         let beforeBySeq = seqs(of: visible)
+        guard let editedSeq = beforeBySeq.keys.sorted().dropLast().last else {
+            preconditionFailure("Too few visible rows to edit (\(beforeBySeq.keys.sorted()))")
+        }
         state.messages = state.messages.map { message in
-            guard message.seq == count - 5 else { return message }
+            guard message.seq == editedSeq else { return message }
             var edited = message
             edited.text = (message.text ?? "") + " EDITED with enough extra words to wrap another line"
             return edited
@@ -176,7 +201,7 @@ struct PooledListProbe {
         let afterViews = visibleViews()
         precondition(afterViews.contains { $0.string.contains("EDITED") }, "Edited pooled row did not update")
         let afterBySeq = seqs(of: afterViews)
-        let shared = beforeBySeq.keys.filter { afterBySeq[$0] != nil && $0 != count - 5 }
+        let shared = beforeBySeq.keys.filter { afterBySeq[$0] != nil && $0 != editedSeq }
         precondition(shared.count >= 3, "Too few comparable rows across the edit (\(shared.count))")
         let reused = shared.filter { afterBySeq[$0] === beforeBySeq[$0] }
         precondition(reused.count == shared.count,
@@ -218,12 +243,27 @@ struct PooledListProbe {
         // Reading the top pages earlier through the same callback.
         state.scale = 1.0
         pump(host)
-        guard let scroll = descendants(host).compactMap({ $0 as? NSScrollView }).first else {
-            preconditionFailure("Pooled list has no scroll view")
-        }
-        scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, scroll.documentView!.frame.height - scroll.contentView.bounds.height)))
+        // The reader scrolls to the oldest edge (y = 0 in the flipped table).
+        NotificationCenter.default.post(name: NSScrollView.willStartLiveScrollNotification, object: scroll)
+        scroll.contentView.scroll(to: .zero)
+        scroll.reflectScrolledClipView(scroll.contentView)
         pump(host, seconds: 0.8)
         precondition(state.earlierLoads >= 1, "Top proximity did not page earlier history")
+        precondition(!state.follows, "Reading the oldest messages still reports follow-latest")
+
+        // New output must not yank a reader away from history.
+        let readingOrigin = scroll.contentView.bounds.origin.y
+        state.messages.append(RichMessage(seq: count + 10, role: "assistant", text: "Arrives while reading history"))
+        pump(host)
+        precondition(abs(scroll.contentView.bounds.origin.y - readingOrigin) < 1,
+                     "A new message moved a reader who was reading history")
+
+        // Jump to latest re-pins and resumes following.
+        state.latestRequest += 1
+        pump(host)
+        precondition(state.follows, "Jump to latest did not resume following")
+        precondition(distanceFromBottom() <= 1, "Jump to latest did not reach the document end")
+        precondition(seqs(of: visibleViews())[count + 10] != nil, "Jump to latest missed the newest message")
         visible = visibleViews()
         for view in descendants(host).compactMap({ $0 as? NSTableView }) {
             for row in 0..<view.numberOfRows {
@@ -234,6 +274,55 @@ struct PooledListProbe {
             }
         }
         precondition(!visible.isEmpty, "Pooled list lost visible text after top load")
+
+        // Fast scrolling through the whole history: every displayed row shows
+        // its own message and is never clipped by a stale row height.
+        guard let table = descendants(host).compactMap({ $0 as? NSTableView }).first else {
+            preconditionFailure("Pooled list has no table")
+        }
+        func checkVisibleRows(_ phase: String) {
+            for view in visibleViews() {
+                var rowView: NSTableRowView?
+                var cursor: NSView? = view
+                while let current = cursor, rowView == nil {
+                    rowView = current as? NSTableRowView
+                    cursor = current.superview
+                }
+                guard let rowView else { continue }
+                let row = table.row(for: rowView)
+                guard state.messages.indices.contains(row) else { continue }
+                let expected = state.messages[row].seq
+                precondition(document.container(for: expected) === view.textContainer,
+                             "\(phase): row \(row) shows another message's text (expected seq \(expected))")
+                let frame = view.convert(view.bounds, to: rowView)
+                precondition(frame.maxY <= rowView.bounds.height + 1,
+                             "\(phase): row \(row) clips its text (\(frame.maxY) > \(rowView.bounds.height))")
+            }
+        }
+        var y: CGFloat = 0
+        while y < table.frame.height {
+            NotificationCenter.default.post(name: NSScrollView.willStartLiveScrollNotification, object: scroll)
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            pump(host, seconds: 0.02)
+            checkVisibleRows("Fast scroll at \(Int(y))")
+            y += 900
+        }
+        pump(host)
+        checkVisibleRows("Settled fast scroll")
+
+        // Another conversation in the same list starts at its latest edge.
+        state.source = NSObject()
+        state.messages = (1...80).map { index in
+            RichMessage(seq: index, role: index.isMultiple(of: 4) ? "user" : "assistant",
+                        text: "Other \(index). " + String(repeating: "Switched conversation text. ", count: index.isMultiple(of: 5) ? 25 : 3))
+        }
+        pump(host, seconds: 0.6)
+        precondition(state.follows, "Switching conversations kept the previous reading position")
+        precondition(distanceFromBottom() <= 1,
+                     "Switched conversation did not open at its latest edge (\(distanceFromBottom()) pt)")
+        precondition(seqs(of: visibleViews())[80] != nil, "Switched conversation does not show its newest message")
+        checkVisibleRows("Switched conversation")
     }
 
     @MainActor static func pump(_ host: NSView, seconds: TimeInterval = 0.3) {

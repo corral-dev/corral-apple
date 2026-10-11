@@ -79,7 +79,7 @@ struct SessionRuntimeFilterRow: View {
     var body: some View {
         SessionFilterScrollView {
             HStack(spacing: SessionFilterStyle.chipSpacing) {
-                // Its own dimension: the runtime All leaves it alone.
+                // Its own dimension, intersected with the assistant choices.
                 SessionFilterChip(selected: activeOnly) {
                     Text("sessions.filter.active")
                     Text(verbatim: activeCount.formatted())
@@ -93,29 +93,25 @@ struct SessionRuntimeFilterRow: View {
                 .accessibilityValue(Text(verbatim: activeCount.formatted()))
                 Divider()
                     .frame(height: 20)
-                ForEach(SessionRuntimeFilter.ordered, id: \.self) { option in
-                    SessionFilterChip(selected: option == .all ? selected.isEmpty : selected.contains(option)) {
-                        if option == .all {
-                            Text("sessions.filter.all")
+                // No All chip: an empty selection already means every assistant.
+                ForEach(SessionRuntimeFilter.ordered.filter { $0 != .all }, id: \.self) { option in
+                    // Icon only, large enough to tell apart; the name stays for VoiceOver.
+                    SessionFilterChip(selected: selected.contains(option)) {
+                        if let logo = Palette.runtimeLogoName(option.rawValue) {
+                            Image(logo)
+                                .resizable()
+                                .interpolation(.high)
+                                .scaledToFit()
+                                .frame(width: SessionFilterStyle.runtimeIcon, height: SessionFilterStyle.runtimeIcon)
+                                .frame(width: SessionFilterStyle.runtimeSlot)
+                                .accessibilityHidden(true)
                         } else {
-                            if let logo = Palette.runtimeLogoName(option.rawValue) {
-                                Image(logo)
-                                    .resizable()
-                                    .interpolation(.high)
-                                    .scaledToFit()
-                                    .frame(width: 16, height: 16)
-                                    .accessibilityHidden(true)
-                            }
                             Text(verbatim: Palette.runtimeDisplayName(option.rawValue))
                         }
                     } action: {
                         select(option)
                     }
-                    .accessibilityLabel(
-                        option == .all
-                            ? Text("sessions.filter.all")
-                            : Text(verbatim: Palette.runtimeDisplayName(option.rawValue))
-                    )
+                    .accessibilityLabel(Text(verbatim: Palette.runtimeDisplayName(option.rawValue)))
                 }
             }
         }
@@ -450,6 +446,9 @@ private enum SessionFilterStyle {
     static let chipContentSpacing: CGFloat = 6
     static let moreGap: CGFloat = 4
     static let edgeFadeWidth: CGFloat = 24
+    /// Assistant chips are icon-only (owner request 2026-10-11).
+    static let runtimeIcon: CGFloat = 22
+    static let runtimeSlot: CGFloat = 28
 }
 
 #endif

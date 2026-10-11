@@ -6,6 +6,7 @@ import SwiftUI
 /// with the TUI, and a local filter (title, project). Full-text body search is ⌘F.
 struct MacSidebar: View {
     @Environment(\.interfaceScale) private var interfaceScale
+    @Environment(\.sidebarRowSize) private var rowSize
     @Environment(AppModel.self) private var appModel
     @Environment(MacWorkspace.self) private var workspace
     let feed: HostSessionFeed
@@ -304,11 +305,96 @@ struct MacSidebar: View {
             .contextMenu { sessionMenu(session) }
     }
 
-    /// One compact sub-heading line: pin, split symbol, "Split view · project";
-    /// trailing member count, or while collapsed the members' assistant glyphs
-    /// and attention dots. Splits are never named and never repeat member
-    /// titles (design: Split rows, owner request 2026-10-11).
+    /// The project names the split (design: Collapsed split and project
+    /// prominence, owner request 2026-10-11). Collapsed, the split stands in
+    /// for its members at the equal two-line session height: project title,
+    /// combined status and newest time, then member glyphs and "Split view ·
+    /// N sessions". Expanded, one compact line heads the members. Splits are
+    /// never named and never repeat member titles.
+    @ViewBuilder
     private func groupLabel(_ group: DesktopGroup, members: [SessionSummary]) -> some View {
+        let path = Self.splitProject(group, members: members)
+        let project = SessionPresentation.projectName(cwd: path)
+        Group {
+            if group.collapsed {
+                collapsedGroupLabel(group, members: members, project: project)
+            } else {
+                expandedGroupLabel(group, members: members, project: project)
+            }
+        }
+        .lineLimit(1)
+        .help(Text(verbatim: ([path] + members.map { SessionPresentation.displayTitle(for: $0) })
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")))
+    }
+
+    private func collapsedGroupLabel(
+        _ group: DesktopGroup, members: [SessionSummary], project: String
+    ) -> some View {
+        HStack(alignment: .top, spacing: Space.xs * interfaceScale) {
+            splitSymbol(paneCount: members.count)
+                .interfaceFrame(height: MacSidebarMetrics.titleLineHeight, alignment: .center)
+            VStack(alignment: .leading, spacing: MacSidebarMetrics.lineSpacing * interfaceScale) {
+                HStack(spacing: Space.xs * interfaceScale) {
+                    groupTitle(group, project: project)
+                    Spacer(minLength: Space.xs * interfaceScale)
+                    attentionSummary(DesktopSidebarProjection.attentionSummary(members))
+                        .fixedSize()
+                    if let newest = members.max(by: { $0.mtime < $1.mtime }) {
+                        TimelineView(.periodic(from: .now, by: 60)) { context in
+                            Text(verbatim: MacSidebarMetrics.compactTime(for: newest, now: context.date))
+                                .interfaceFont(.subheadline.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                        .fixedSize()
+                    }
+                }
+                .interfaceFrame(height: MacSidebarMetrics.titleLineHeight)
+                HStack(spacing: Space.xs * interfaceScale) {
+                    HStack(spacing: 2 * interfaceScale) {
+                        ForEach(members) { member in
+                            RuntimeGlyph(runtimeID: member.runtime, size: MacSidebarMetrics.glyph(.small))
+                        }
+                    }
+                    .accessibilityHidden(true)
+                    Text(project.isEmpty ? "mac.group.members \(members.count)"
+                         : "mac.group.split_members \(members.count)")
+                        .interfaceFont(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .truncationMode(.tail)
+                }
+            }
+        }
+        .interfacePadding(.vertical, MacSidebarMetrics.rowPadding)
+        .interfaceFrame(height: MacSidebarMetrics.rowHeight)
+        .accessibilityElement(children: .combine)
+    }
+
+    private func expandedGroupLabel(
+        _ group: DesktopGroup, members: [SessionSummary], project: String
+    ) -> some View {
+        HStack(spacing: Space.xs * interfaceScale) {
+            splitSymbol(paneCount: members.count)
+            groupTitle(group, project: project)
+            if !project.isEmpty {
+                Text("mac.group.split")
+                    .interfaceFont(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize()
+            }
+            Spacer(minLength: Space.xs * interfaceScale)
+            Text(verbatim: members.count.formatted())
+                .interfaceFont(.subheadline.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .accessibilityLabel(Text("mac.group.members \(members.count)"))
+                .fixedSize()
+        }
+        .interfacePadding(.vertical, MacSidebarMetrics.rowPadding)
+        .interfaceFrame(height: MacSidebarMetrics.compactRowHeight)
+    }
+
+    /// Pin mark and the project as the split's title; "Split view" without one.
+    private func groupTitle(_ group: DesktopGroup, project: String) -> some View {
         HStack(spacing: Space.xs * interfaceScale) {
             if group.pinned {
                 Image(systemName: "pin.fill")
@@ -316,29 +402,26 @@ struct MacSidebar: View {
                     .foregroundStyle(.secondary)
                     .accessibilityLabel(Text("sessions.section.pinned"))
             }
-            Image(systemName: Self.splitSymbol(paneCount: members.count))
-                .foregroundStyle(Palette.accent)
-                .accessibilityHidden(true)
-            Text("mac.group.split")
-                .interfaceFont(.subheadline.weight(.semibold))
-                .fixedSize()
-            let project = SessionPresentation.projectName(cwd: Self.splitProject(group, members: members))
-            if !project.isEmpty {
-                Text(verbatim: "· \(project)")
-                    .interfaceFont(.subheadline)
-                    .truncationMode(.tail)
+            Group {
+                if project.isEmpty {
+                    Text("mac.group.split")
+                } else {
+                    Text(verbatim: project)
+                }
             }
-            Spacer(minLength: Space.xs * interfaceScale)
-            groupTrailing(group, members: members)
-                .fixedSize()
+            .interfaceFont(.body.weight(.semibold))
+            .foregroundStyle(.primary)
+            .truncationMode(.tail)
         }
-        .foregroundStyle(.secondary)
-        .lineLimit(1)
-        .interfacePadding(.vertical, MacSidebarMetrics.rowPadding)
-        .interfaceFrame(height: MacSidebarMetrics.compactRowHeight)
-        .help(Text(verbatim: ([Self.splitProject(group, members: members)] + members.map { SessionPresentation.displayTitle(for: $0) })
-            .filter { !$0.isEmpty }
-            .joined(separator: "\n")))
+    }
+
+    private func splitSymbol(paneCount: Int) -> some View {
+        Image(systemName: Self.splitSymbol(paneCount: paneCount))
+            .resizable()
+            .scaledToFit()
+            .foregroundStyle(Palette.accent)
+            .interfaceFrame(width: MacSidebarMetrics.glyph(rowSize), height: MacSidebarMetrics.glyph(rowSize))
+            .accessibilityHidden(true)
     }
 
     /// The split's project; older layouts without one use the first member's.
@@ -355,33 +438,13 @@ struct MacSidebar: View {
         }
     }
 
-    @ViewBuilder
-    private func groupTrailing(_ group: DesktopGroup, members: [SessionSummary]) -> some View {
-        if group.collapsed {
-            HStack(spacing: Space.sm * interfaceScale) {
-                HStack(spacing: 2 * interfaceScale) {
-                    ForEach(members) { member in
-                        RuntimeGlyph(runtimeID: member.runtime, size: MacSidebarMetrics.glyph(.small))
-                    }
-                }
-                .accessibilityElement()
-                .accessibilityLabel(Text("mac.group.members \(members.count)"))
-                attentionSummary(DesktopSidebarProjection.attentionSummary(members))
-            }
-        } else {
-            Text(verbatim: members.count.formatted())
-                .interfaceFont(.subheadline.monospacedDigit())
-                .accessibilityLabel(Text("mac.group.members \(members.count)"))
-        }
-    }
-
     private func attentionSummary(_ summary: [(SessionPresentation.StatusMarker, Int)]) -> some View {
         HStack(spacing: Space.sm * interfaceScale) {
             ForEach(summary, id: \.0) { marker, count in
                 HStack(spacing: 3 * interfaceScale) {
                     Circle()
                         .fill(MacSidebarMetrics.color(for: marker))
-                        .interfaceFrame(width: 6, height: 6)
+                        .interfaceFrame(width: 7, height: 7)
                     Text(verbatim: count.formatted())
                         .interfaceFont(.subheadline.monospacedDigit())
                 }

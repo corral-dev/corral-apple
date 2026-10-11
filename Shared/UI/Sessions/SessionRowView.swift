@@ -101,26 +101,24 @@ struct SessionRowView: View {
         }
     }
 
+    /// The project reads first on the meta line: primary semibold over the
+    /// secondary time (Mac design: Collapsed split and project prominence).
     @ViewBuilder
     private var projectLabel: some View {
         let project = SessionPresentation.projectName(from: session)
-        if project == "~" {
-            Text("sessions.project.home")
-                .interfaceFont(Typography.sessionMeta)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-        } else if project.isEmpty {
-            Text("sessions.project.unknown")
-                .interfaceFont(Typography.sessionMeta)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-        } else {
-            Text(project)
-                .interfaceFont(Typography.sessionMeta)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
+        Group {
+            if project == "~" {
+                Text("sessions.project.home")
+            } else if project.isEmpty {
+                Text("sessions.project.unknown")
+            } else {
+                Text(project)
+            }
         }
+        .interfaceFont(Typography.sessionMeta.weight(.semibold))
+        .foregroundStyle(.primary)
+        .lineLimit(1)
+        .truncationMode(.tail)
     }
 
     /// Activity dot plus the independent red unread dot. Both can show at

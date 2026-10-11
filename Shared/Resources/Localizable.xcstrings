@@ -1687,6 +1687,23 @@
         }
       }
     },
+    "mac.group.split_members %lld": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Split view · %lld sessions"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "分屏 · %lld 个会话"
+          }
+        }
+      }
+    },
     "mac.machine_settings": {
       "extractionState": "manual",
       "localizations": {

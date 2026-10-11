@@ -30,14 +30,16 @@ struct MacSidebarFilters: View {
                 Divider().interfaceFrame(width: 1, height: 16)
                 HStack(spacing: 4 * interfaceScale) {
                     ForEach(SessionRuntimeFilter.ordered.filter { $0 != .all }, id: \.self) { runtime in
-                        MacQuickFilterButton(selected: runtimes.contains(runtime), sidebar: true, labelWidth: 18) {
+                        MacQuickFilterButton(selected: runtimes.contains(runtime), sidebar: true, labelWidth: 20) {
                             if let logo = Palette.runtimeLogoName(runtime.rawValue) {
                                 Image(runtime == .claude && runtimes.contains(runtime) ? "RuntimeClaudeMonochrome" : logo)
                                     .resizable()
                                     .renderingMode(runtime == .claude && runtimes.contains(runtime) ? .template : .original)
                                     .scaledToFit()
-                                    .interfaceFrame(width: 14, height: 18)
-                                    .environment(\.colorScheme, logoScheme(selected: runtimes.contains(runtime)))
+                                    .interfaceFrame(width: 18, height: 18)
+                                    // Claude's selected mark is template-tinted with onAccent, which must
+                                    // resolve in the real scheme; only the artwork variants flip.
+                                    .environment(\.colorScheme, runtime == .claude ? colorScheme : logoScheme(selected: runtimes.contains(runtime)))
                             }
                         } action: {
                             SessionListFiltering.toggle(runtime, all: .all, in: &runtimes)

@@ -214,7 +214,12 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
         }
     }
 
-    private var anyTextView: NSTextView? { blocks.lazy.compactMap(\.view).first }
+    /// Any view attached to this network: they all share one selection. The
+    /// containers are the ground truth (rows realize views on demand, so the
+    /// first container often has none); registered views are the fallback.
+    private var anyTextView: NSTextView? {
+        layout.textContainers.lazy.compactMap(\.textView).first ?? blocks.lazy.compactMap(\.view).first
+    }
 
     /// Tracks a press-and-drag that began on `origin` until the button is
     /// released. AppKit's own cross-container tracking only reaches a block

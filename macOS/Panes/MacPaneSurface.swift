@@ -71,7 +71,7 @@ final class MacPaneSurfaceCache {
 
     final class Entry {
         let lifetime = MacPaneLifetime()
-        let view = NSHostingView(rootView: AnyView(EmptyView()))
+        let view = MacPaneHostingView(rootView: AnyView(EmptyView()))
         var configuration: MacPaneSurface.Configuration?
         var lease = 0
         /// Conversation data retained with the native pane, including when
@@ -165,6 +165,30 @@ final class MacPaneSurfaceCache {
     #endif
 }
 
+/// A dormant pane keeps its hosting root for an instant return, but laying
+/// out what nobody can see cost about a third of each warm switch (measured
+/// 2026-10-11). Layout is deferred while hidden and runs once on reveal.
+class MacPaneHostingView: NSHostingView<AnyView> {
+    private var deferredLayout = false
+
+    override func layout() {
+        if isHidden {
+            deferredLayout = true
+            return
+        }
+        super.layout()
+    }
+
+    override var isHidden: Bool {
+        didSet {
+            if !isHidden, deferredLayout {
+                deferredLayout = false
+                needsLayout = true
+            }
+        }
+    }
+}
+
 /// Native hosting boundary with bounded dormant mounts. Equivalent inputs
 /// keep the root intact; hidden mounts suspend watches and retire responders.
 struct MacPaneSurface: NSViewRepresentable {
@@ -221,6 +245,15 @@ struct MacPaneSurface: NSViewRepresentable {
         weak var workspace: MacWorkspace?
         weak var entry: MacPaneSurfaceCache.Entry?
         var key = ""
+
+        /// Dormant mounts stay in the window at their last frame (often under
+        /// the visible pane) and must never take its clicks. Doing this in
+        /// AppKit instead of SwiftUI hit-testing modifiers keeps a switch
+        /// from re-inserting every mounted host into the window.
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            guard let entry, entry.lifetime.isPresented, !entry.view.isHidden else { return nil }
+            return super.hitTest(point)
+        }
 
         override func layout() {
             super.layout()

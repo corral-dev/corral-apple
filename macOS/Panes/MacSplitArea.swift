@@ -73,8 +73,6 @@ private struct MacRetainedPanes: View {
                 }
                 .modifier(PaneSlot(shift: workspace.paneShifts[key] ?? 0,
                                    leaving: workspace.leavingPanes[key] != nil))
-                .allowsHitTesting(visible)
-                .accessibilityHidden(!visible)
                 .layoutValue(key: MacRetainedPaneKey.self, value: key)
             }
         }
