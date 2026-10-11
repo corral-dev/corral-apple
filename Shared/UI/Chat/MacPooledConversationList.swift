@@ -169,7 +169,12 @@ struct MacPooledConversationList: NSViewRepresentable {
         /// This runs after the delegate callbacks, so it is not reentrant.
         override func layout() {
             super.layout()
-            if coordinator?.applyPendingHeights() == true {
+            guard let coordinator else { return }
+            // Visible rows measured at another geometry (column still resizing,
+            // zoom, a pane revealed at a new width) re-measure here, after the
+            // columns have settled, then their corrections apply in this pass.
+            coordinator.revalidateVisibleRows()
+            if coordinator.applyPendingHeights() {
                 super.layout()
             }
         }
@@ -376,11 +381,13 @@ struct MacPooledConversationList: NSViewRepresentable {
         /// Measure the displayed row; corrections apply after the delegate
         /// returns (changing heights inside it is a reentrant table operation).
         private func recordMeasuredHeight(of cell: PooledRowCell, id: String, cellWidth: CGFloat) {
-            let current = geometry
+            // Measure at, and record, the width the cell actually gets. The
+            // table's own width runs ahead of its column while it resizes; a
+            // height keyed to one but measured at the other never re-measures.
+            var current = geometry
+            current.width = cellWidth > 80 ? cellWidth : current.width
             if let entry = heightEntries[id], entry.measured, entry.geometry == current { return }
-            // Measure at the width the cell will actually get, not the table's.
-            let width = cellWidth > 80 ? cellWidth : current.width
-            guard let height = cell.fittingHeight(width: width) else { return }
+            guard let height = cell.fittingHeight(width: current.width) else { return }
             let previous = heightEntries[id]?.height
             heightEntries[id] = HeightEntry(geometry: current, height: height, measured: true)
             if previous.map({ abs($0 - height) > 0.5 }) ?? true {
@@ -397,6 +404,24 @@ struct MacPooledConversationList: NSViewRepresentable {
                 self.heightFlushScheduled = false
                 self.flushHeights()
             }
+        }
+
+        /// Re-renders visible rows whose recorded height belongs to another
+        /// geometry; their cells measure again on creation.
+        func revalidateVisibleRows() {
+            guard let table, !isApplyingHeights else { return }
+            var stale = IndexSet()
+            for index in visibleRowIndexes() where rows.indices.contains(index) {
+                var expected = geometry
+                let cellWidth = table.frameOfCell(atColumn: 0, row: index).width
+                expected.width = cellWidth > 80 ? cellWidth : expected.width
+                guard let entry = heightEntries[rows[index].id], entry.measured, entry.geometry == expected else {
+                    stale.insert(index)
+                    continue
+                }
+            }
+            guard !stale.isEmpty else { return }
+            table.reloadData(forRowIndexes: stale, columnIndexes: IndexSet(integer: 0))
         }
 
         /// Applies measured corrections inside the table's layout pass.

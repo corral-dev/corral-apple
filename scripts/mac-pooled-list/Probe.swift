@@ -311,6 +311,14 @@ struct PooledListProbe {
         pump(host)
         checkVisibleRows("Settled fast scroll")
 
+        // Width changes (window resize, a pane revealed at another width, the
+        // prompts card taking its margin) re-measure what is on screen.
+        for width in [420.0, 760.0, 600.0] {
+            window.setContentSize(NSSize(width: width, height: 800))
+            pump(host)
+            checkVisibleRows("Resized to \(Int(width))")
+        }
+
         // Another conversation in the same list starts at its latest edge.
         state.source = NSObject()
         state.messages = (1...80).map { index in

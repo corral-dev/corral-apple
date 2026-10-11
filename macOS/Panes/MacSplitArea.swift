@@ -119,7 +119,11 @@ private struct MacRetainedPaneLayout: Layout {
         var empty: Void = ()
         equal.placeSubviews(in: bounds, proposal: proposal, subviews: subviews[indices], cache: &empty)
         let count = indices.count
-        if count > 0 {
+        // Only real placements are remembered for dormant panes. SwiftUI also
+        // places this layout in degenerate measuring passes (seen: 220 x 0);
+        // remembering those shrank every pane as it went dormant, so each
+        // return reflowed the whole conversation from a collapsed size.
+        if count > 0, bounds.width > 0, bounds.height > 0 {
             let paneWidth = max(0, (bounds.width - CGFloat(count - 1)) / CGFloat(count))
             var x: CGFloat = 0
             for (slot, index) in indices.enumerated() {

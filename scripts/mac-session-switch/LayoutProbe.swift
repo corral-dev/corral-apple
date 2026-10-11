@@ -47,15 +47,25 @@ struct RetainedLayoutProbeView: View {
     try? await Task.sleep(for: .milliseconds(60))
     let a = model.views["a"]!
     let b = model.views["b"]!
-    let sizes = [a.frame.size, b.frame.size]
-    let frames = [a.convert(a.bounds, to: view), b.convert(b.bounds, to: view)]
-    precondition(sizes[0].width > 0 && sizes[1].width > 0)
+    precondition(a.frame.width > 0 && b.frame.width > 0)
+    // Baseline: the geometry a and b keep once they first go dormant. The
+    // pre-switch frames are not a baseline: measuring passes may have placed
+    // the visible slots at a degenerate size (seen: 220 x 0).
+    var sizes: [CGSize] = []
+    var frames: [CGRect] = []
     for index in 0..<12 {
         model.visible = index.isMultiple(of: 2) ? ["c", "d"] : ["a", "b"]
         model.roster = model.visible + (index.isMultiple(of: 2) ? ["a", "b"] : ["c", "d"])
         await Task.yield()
         view.layoutSubtreeIfNeeded()
         try? await Task.sleep(for: .milliseconds(20))
+        guard index.isMultiple(of: 2) else { continue }
+        if sizes.isEmpty {
+            sizes = [a.frame.size, b.frame.size]
+            frames = [a.convert(a.bounds, to: view), b.convert(b.bounds, to: view)]
+            precondition(sizes.allSatisfy { $0.width >= MacSplitArea.paneMinimum && $0.height > 0 },
+                         "dormant native slots must keep a real measured size, not a measuring pass (\(sizes))")
+        }
         precondition(a.frame.size == sizes[0] && b.frame.size == sizes[1],
                      "roster changes must not reflow hidden native slots")
         precondition(a.convert(a.bounds, to: view) == frames[0]
