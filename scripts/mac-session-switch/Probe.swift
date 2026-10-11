@@ -4,6 +4,7 @@ import SwiftUI
 
 // The fixture substitutes only transport/product inputs, not the native cache.
 @MainActor final class ConversationStore {
+    var clientIdentity: ObjectIdentifier? { nil }
     var messages: [Message] = []
     var stops = 0
     var stopContinuation: CheckedContinuation<Void, Never>?
@@ -15,12 +16,15 @@ import SwiftUI
 }
 struct Message { var text: String? }
 enum ConversationHistoryBudget { static let maxOfficialMessagesPerSession = 400 }
-struct SessionSummary { let key: String }
+struct SessionSummary: Equatable { let key: String }
 @MainActor final class SessionListStore {}
-@MainActor @Observable final class AppModel {}
+@MainActor @Observable final class AppModel {
+    var clientIdentity: ObjectIdentifier? { nil }
+}
 @MainActor @Observable final class MacWorkspace {
     let paneSurfaces = MacPaneSurfaceCache()
     var paneFrames: [String: CGRect] = [:]
+    var focusedKey: String?
     enum PaneMode { case chat, terminal }
     func mode(for key: String) -> PaneMode { .chat }
 }
@@ -29,6 +33,8 @@ struct MacPaneView: View {
     let metadataStore: SessionListStore?
     var allowsClose = true
     var autoFocusComposer = false
+    var retainedStore: ConversationStore? = nil
+    var retainedBodySize: CGSize = .zero
     var body: some View { Text(session.key) }
 }
 extension EnvironmentValues {
@@ -85,7 +91,6 @@ struct Probe {
         precondition(cache.entry(for: "a") === a, "visible entries cannot be evicted")
 
         let terminal = cache.entry(for: "terminal")
-        terminal.keepDormant = false
         cache.present(terminal)
         cache.suspend(terminal, key: "terminal", lease: terminal.lease)
         precondition(cache.entry(for: "terminal") !== terminal)
@@ -101,21 +106,19 @@ struct Probe {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 300),
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        let focus = cache.entry(for: "focus")
-        focus.view.rootView = AnyView(TextField("Draft", text: .constant("draft")))
-        window.contentView?.addSubview(focus.view)
-        focus.view.frame = window.contentView?.bounds ?? .zero
-        cache.present(focus)
-        let responder = NSTextView()
-        focus.view.addSubview(responder)
+        window.title = "Corral"
+        window.orderFront(nil)
+        let responder = NSTextView(frame: NSRect(x: 0, y: 0, width: 100, height: 100))
+        window.contentView?.addSubview(responder)
         window.makeFirstResponder(responder)
-        cache.suspend(focus, key: "focus", lease: focus.lease, keepingMounted: true)
+        MacPaneSurfaceCache.retireResponder(in: CGRect(x: 0, y: 0, width: 500, height: 300))
         precondition(window.firstResponder !== responder)
-        precondition(focus.view.window === window && focus.view.isHidden)
+        window.orderOut(nil)
         cache.reset()
         await a.lifetime.waitForSuspension()
         precondition(!a.lifetime.isPresented)
         precondition(cache.entry(for: "a") !== a, "host switch must release every surface")
+        await exerciseRetainedLayout()
         print("PASS native surfaces: reuse, stale lease, unwatch ordering, dormant bound, terminal/large release, responder retirement, host reset")
     }
 }

@@ -114,11 +114,13 @@ struct MacRootView: View {
                     .navigationSplitViewColumnWidth(min: 260 * interfaceScale, ideal: 310 * interfaceScale, max: 440 * interfaceScale)
             }
         } detail: {
-            GeometryReader { geometry in
-                detail
-                    .modifier(MacZoomContent())
-                    .frame(width: geometry.size.width, height: geometry.size.height)
-            }
+            // Fill the detail column directly. The previous GeometryReader
+            // measured the column and then pinned the child to that exact size,
+            // forcing a second layout pass over every pane (and every chat row)
+            // on each window-resize step. The column already sizes this content.
+            detail
+                .modifier(MacZoomContent())
+                .interfaceFrame(maxWidth: .infinity, maxHeight: .infinity)
             .navigationSplitViewColumnWidth(min: CGFloat(paneCount) * MacSplitArea.paneMinimum, ideal: 760)
             .toolbar { detailToolbar }
         }

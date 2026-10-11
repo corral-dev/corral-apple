@@ -7,3 +7,51 @@ fp:6dfda34c5fdc9aea
 fp:635aefe0acf219d0
 fp:f7b55bd408ebea90
 fp:265676b24802b5b7
+
+# Publication review 2026-10-10: exact findings only, never blanket paths.
+# docs/design/MACOS_CLIENT_DESIGN.md: Nonsecret document anchor/path or shell expression; individually reviewed.
+fp:0fcb3e6b15ecd40b
+# Shared/Core/Models/HostModels.swift: LAN hint format example; no deployed host.
+fp:27c4498be2fa99b4
+# docs/AGENT_TASK_ROUTING_GUIDE.md: Nonsecret document anchor/path or shell expression; individually reviewed.
+fp:349f398340868f37
+# Shared/Core/Protocol/PairingPayload.swift: Pairing hint format examples; no deployed host.
+fp:34c224db250fefc5
+# docs/troubleshooting/TROUBLESHOOTING_INDEX.md: Nonsecret document anchor/path or shell expression; individually reviewed.
+fp:5aa19d90ec5f8e4f
+# Shared/Core/Protocol/PairingPayload.swift: Pairing hint format examples; no deployed host.
+fp:5c06bc387fa3b0b4
+# docs/UI_DESIGN_KNOWLEDGE_BASE.md: Nonsecret document anchor/path or shell expression; individually reviewed.
+fp:6420fc6a07145515
+# docs/design/MACOS_CLIENT_DESIGN.md: Nonsecret document anchor/path or shell expression; individually reviewed.
+fp:7f201be64751d029
+# docs/PERFORMANCE_KNOWLEDGE_BASE.md: Nonsecret document anchor/path or shell expression; individually reviewed.
+fp:80fb2040891b07b0
+# AGENTS.md: Nonsecret document anchor/path or shell expression; individually reviewed.
+fp:87d9090457ac5b13
+# Tests/LanDiscoveryTests.swift: Deterministic LAN discovery fixtures; retaining private-address semantics is required.
+fp:98954f18a882f4d8
+# docs/AGENT_TASK_ROUTING_GUIDE.md: Nonsecret document anchor/path or shell expression; individually reviewed.
+fp:9b8e56bf373b221d
+# docs/design/MACOS_CLIENT_DESIGN.md: Nonsecret document anchor/path or shell expression; individually reviewed.
+fp:ab136ead07851594
+# Tests/LanDiscoveryTests.swift: Deterministic LAN discovery fixtures; retaining private-address semantics is required.
+fp:ae5c3de6523acb34
+# docs/UI_DESIGN_KNOWLEDGE_BASE.md: Nonsecret document anchor/path or shell expression; individually reviewed.
+fp:b2b47c9bf2b37b1b
+# docs/UI_DESIGN_KNOWLEDGE_BASE.md: Nonsecret document anchor/path or shell expression; individually reviewed.
+fp:b2e5942cca18138b
+# docs/AGENT_TASK_ROUTING_GUIDE.md: Nonsecret document anchor/path or shell expression; individually reviewed.
+fp:c4d713135db17516
+# Tests/LanDiscoveryTests.swift: Deterministic LAN discovery fixtures; retaining private-address semantics is required.
+fp:c918beae7a0223d9
+# Tests/LanDiscoveryTests.swift: Deterministic LAN discovery fixtures; retaining private-address semantics is required.
+fp:d625d91d5d074946
+# docs/AGENT_TASK_ROUTING_GUIDE.md: Nonsecret document anchor/path or shell expression; individually reviewed.
+fp:dd7bd8cc57d9c7a1
+# Tests/LanDiscoveryTests.swift: Deterministic LAN discovery fixtures; retaining private-address semantics is required.
+fp:df3ea1821ac8a122
+# docs/AGENT_TASK_ROUTING_GUIDE.md: Nonsecret document anchor/path or shell expression; individually reviewed.
+fp:e0857a01eddf6d54
+# docs/UI_DESIGN_KNOWLEDGE_BASE.md: Nonsecret document anchor/path or shell expression; individually reviewed.
+fp:e55bfa8769dfe112

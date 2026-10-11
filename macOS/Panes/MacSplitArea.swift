@@ -37,8 +37,9 @@ struct MacSplitArea: View {
     }
 }
 
-/// Keep recent panes in the same SwiftUI/native hierarchy. An invisible slot
-/// retains its last size; collapsing it would discard its lazy text rows.
+/// Keep at most four dormant native hosts at their last measured geometry.
+/// Hidden hosts keep reading/composer state, suspend watches and never own
+/// focus or hit targets. Eviction releases their data and hosting roots.
 private struct MacRetainedPanes: View {
     @Environment(MacWorkspace.self) private var workspace
     let keys: [String]
@@ -56,7 +57,7 @@ private struct MacRetainedPanes: View {
             ForEach(roster, id: \.self) { key in
                 let visible = keys.contains(key)
                 HStack(spacing: 0) {
-                    Divider().frame(width: keys.firstIndex(of: key).map { $0 > 0 ? 1 : 0 } ?? 0)
+                    Divider().frame(width: (keys.firstIndex(of: key) ?? 0) > 0 ? 1 : 0)
                     Group {
                         if ProjectShell.isShellKey(key) {
                             MacShellPane(shellKey: key)
@@ -76,7 +77,16 @@ private struct MacRetainedPanes: View {
                 .layoutValue(key: MacRetainedPaneKey.self, value: key)
             }
         }
-        .onChange(of: keys, initial: true) { _, _ in recent = roster }
+        .onChange(of: keys, initial: true) { _, _ in
+            let retained = workspace.paneSurfaces.retainedKeys(visible: keys, previous: recent) {
+                !ProjectShell.isShellKey($0) && feed.listStore.session(for: $0) != nil
+                    && workspace.mode(for: $0) == .chat
+            }
+            for key in recent where !retained.contains(key) {
+                workspace.paneSurfaces.evict(key)
+            }
+            recent = retained
+        }
     }
 }
 
@@ -90,6 +100,10 @@ private struct MacRetainedPaneLayout: Layout {
     let visibleKeys: [String]
     struct Cache { var sizes: [String: CGSize] = [:] }
     func makeCache(subviews: Subviews) -> Cache { Cache() }
+    func updateCache(_ cache: inout Cache, subviews: Subviews) {
+        let keys = Set(subviews.map { $0[MacRetainedPaneKey.self] })
+        cache.sizes = cache.sizes.filter { keys.contains($0.key) }
+    }
     private var equal: EqualPaneLayout { EqualPaneLayout(minimumWidth: MacSplitArea.paneMinimum) }
 
     private func visibleIndices(_ subviews: Subviews) -> [Int] {

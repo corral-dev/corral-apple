@@ -16,7 +16,7 @@ The native Apple client is to become Corral's headline product, ahead of its ope
 4. **Split panes**: several sessions visible and operable at once.
 5. **Free switching between chat mode and terminal (TUI) mode** for every session.
 
-Features that weaken these points need an explicit owner trade-off. Public presentation follows the [presentation guide](../https://github.com/corral-dev/corral/blob/main/docs/PUBLIC_PRESENTATION_GUIDE.md). The [Apple client repository](https://github.com/corral-dev/corral-apple) now publishes a self-build beta for iPhone and Mac; public App Store and TestFlight downloads are not available.
+Features that weaken these points need an explicit owner trade-off. Public presentation follows the [presentation guide](https://github.com/corral-dev/corral/blob/main/docs/PUBLIC_PRESENTATION_GUIDE.md). The [Apple client repository](https://github.com/corral-dev/corral-apple) now publishes a self-build beta for iPhone and Mac; public App Store and TestFlight downloads are not available.
 
 ## Route
 

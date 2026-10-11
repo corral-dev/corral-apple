@@ -32,6 +32,7 @@ struct SessionDetailView: View {
         onDidCreateSession: ((SessionSummary) -> Void)? = nil
     ) {
         self.injectedStore = injectedStore
+        _conversationStore = State(initialValue: injectedStore)
         self.composerFocusRequest = composerFocusRequest
         self.onComposerFocusChange = onComposerFocusChange
         self.scrollRequest = scrollRequest

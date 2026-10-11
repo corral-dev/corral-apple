@@ -9,7 +9,7 @@ struct MacSidebarFilters: View {
     @State private var choices: [SessionProjectOption] = []
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 2) {
             MacFilterChoices {
                 ForEach(SessionRuntimeFilter.ordered, id: \.self) { runtime in
                     MacQuickFilterButton(selected: runtime == .all ? runtimes.isEmpty : runtimes.contains(runtime)) {
@@ -62,7 +62,7 @@ struct MacSidebarFilters: View {
                     Image(systemName: "ellipsis")
                         .interfaceFont(.body.weight(.medium))
                         .foregroundStyle(.secondary)
-                        .interfaceFrame(width: 28, height: MacSidebarMetrics.rowHeight)
+                        .interfaceFrame(width: 28, height: MacSidebarMetrics.filterHeight)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -120,7 +120,7 @@ private struct MacQuickFilterButton<Content: View>: View {
         .buttonBorderShape(.capsule)
         .controlSize(.small)
         .tint(selected ? Palette.accent : Color.secondary)
-        .interfaceFrame(height: MacSidebarMetrics.rowHeight)
+        .interfaceFrame(height: MacSidebarMetrics.filterHeight)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 

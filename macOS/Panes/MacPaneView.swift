@@ -17,9 +17,20 @@ struct MacPaneView: View {
 
     @State private var store: ConversationStore?
     @State private var bodySize: CGSize = .zero
+    @State private var paneFrame: CGRect = .zero
 
-    private var isFocused: Bool { workspace.focusedKey == session.key }
-    private var isReady: Bool { appModel.connectionState == .connected && appModel.client != nil }
+    init(session: SessionSummary, metadataStore: SessionListStore?, allowsClose: Bool = true,
+         autoFocusComposer: Bool = false, retainedStore: ConversationStore? = nil,
+         retainedBodySize: CGSize = .zero) {
+        self.session = session
+        self.metadataStore = metadataStore
+        self.allowsClose = allowsClose
+        self.autoFocusComposer = autoFocusComposer
+        _store = State(initialValue: retainedStore)
+        _bodySize = State(initialValue: retainedBodySize)
+    }
+
+    private var isFocused: Bool { lifetime?.isFocused ?? (workspace.focusedKey == session.key) }
     private var mode: MacWorkspace.PaneMode { workspace.mode(for: session.key) }
 
     // MARK: - Focus guidance (design: Visual guidance pass)
@@ -29,8 +40,9 @@ struct MacPaneView: View {
 
     /// Another visible pane holds the focus, so this composer steps back.
     private var composerRecedes: Bool {
-        guard hasPeers, !isFocused, let focused = workspace.focusedKey else { return false }
-        return visiblePaneKeys.contains(focused)
+        guard hasPeers, !isFocused else { return false }
+        if let lifetime { return lifetime.hasFocusedPeer }
+        return workspace.focusedKey.map { visiblePaneKeys.contains($0) } ?? false
     }
 
     // MARK: - Prompts card (design: Prompts card)
@@ -106,11 +118,17 @@ struct MacPaneView: View {
                 .interfaceFrame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color(.systemGroupedBackground))
                 .overlay(alignment: .topTrailing) { promptsCard }
-                .onGeometryChange(for: CGSize.self) { $0.size } action: { bodySize = $0 }
+                .onGeometryChange(for: CGSize.self) { $0.size } action: {
+                    bodySize = $0
+                    workspace.paneSurfaces.existingEntry(for: session.key)?.bodySize = $0
+                }
         }
         .onGeometryChange(for: CGRect.self) { proxy in
             proxy.frame(in: .global)
         } action: { frame in
+            paneFrame = frame
+            // A retained hosting view has its own global coordinate space;
+            // its native mount publishes the window-relative frame.
             if lifetime == nil { workspace.paneFrames[session.key] = frame }
         }
         .onAppear { prepareStore() }
@@ -121,33 +139,15 @@ struct MacPaneView: View {
         .task { await MacPromptJumpInspection.run(key: session.key, workspace: workspace) { prompts } }
         .task { await MacCopyInspection.run(key: session.key, workspace: workspace) }
         #endif
-        // Subscribe only on a ready connection, and again whenever the app
-        // replaces its client (reconnect to the machine): a store started on a
-        // client that is not connected yet never recovers on its own.
-        .task(id: PaneConnectionKey(sessionKey: session.key, client: appModel.clientIdentity,
-                                   ready: isReady && (lifetime?.isPresented ?? true))) {
-            guard isReady, lifetime?.isPresented ?? true else { return }
-            await lifetime?.waitForSuspension()
-            guard !Task.isCancelled, lifetime?.isPresented ?? true else { return }
-            if let store, store.clientIdentity != appModel.clientIdentity {
-                await store.stop()
-                self.store = nil
+        .background {
+            MacPaneConnection(sessionKey: session.key, lifetime: lifetime, store: store,
+                              prepareStore: { prepareStore() }, resetStore: { store = nil }) {
+                workspace.paneFrames[session.key] =
+                    workspace.paneSurfaces.existingEntry(for: session.key)?.lastFrame ?? paneFrame
+                metadataStore?.markReadLocally(key: session.key)
             }
-            guard let store = prepareStore() else { return }
-            async let readMark: Void = store.markRead()
-            await store.start()
-            // The data plane can still be attaching right after connect; a
-            // first load that hit that window retries instead of parking an error.
-            for attempt in 1...4 where store.loadError != nil && !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(400 * attempt))
-                await store.retry()
-            }
-            await readMark
         }
         .onAppear { metadataStore?.markReadLocally(key: session.key) }
-        .onChange(of: lifetime?.isPresented) { _, presented in
-            if presented == true { metadataStore?.markReadLocally(key: session.key) }
-        }
         .onDisappear {
             guard lifetime == nil else { return }
             workspace.paneFrames[session.key] = nil
@@ -173,6 +173,7 @@ struct MacPaneView: View {
                     scrollRequest: workspace.scrollRequests[session.key],
                     onDidCreateSession: { created in workspace.openCreated(created, asPane: true) }
                 )
+                .environment(\.macConversationTextDocument, workspace.paneSurfaces.entry(for: session.key).textDocument())
                 .id(ObjectIdentifier(store))
                 .environment(\.composerRecedes, composerRecedes)
                 .animation(MacMotion.state, value: composerRecedes)
@@ -196,10 +197,13 @@ struct MacPaneView: View {
     @discardableResult
     private func prepareStore() -> ConversationStore? {
         if let store {
+            lifetime?.bind(store)
             #if DEBUG
             if MacSessionSwitchInspection.enabled {
                 MacSessionSwitchInspection.stores[session.key] = store
-                MacSessionSwitchInspection.preparationMs[session.key] = 0
+                if MacSessionSwitchInspection.preparationMs[session.key] == nil {
+                    MacSessionSwitchInspection.preparationMs[session.key] = 0
+                }
             }
             #endif
             return store
@@ -207,6 +211,25 @@ struct MacPaneView: View {
         #if DEBUG
         let preparationStart = ContinuousClock.now
         #endif
+        let entry = workspace.paneSurfaces.entry(for: session.key)
+        let currentIdentity = appModel.client.map(ObjectIdentifier.init)
+        // Rebuilds reuse the retained conversation when it still belongs to
+        // the current connection; a replaced client gets a fresh store so the
+        // pane resubscribes instead of idling on a dead connection.
+        if let retained = entry.store,
+           retained.clientIdentity == currentIdentity || appModel.client == nil {
+            store = retained
+            lifetime?.bind(retained)
+            #if DEBUG
+            if MacSessionSwitchInspection.enabled {
+                MacSessionSwitchInspection.stores[session.key] = retained
+                if MacSessionSwitchInspection.preparationMs[session.key] == nil {
+                    MacSessionSwitchInspection.preparationMs[session.key] = 0
+                }
+            }
+            #endif
+            return retained
+        }
         let hostID = appModel.selectedHost?.hostID ?? appModel.connectedHostID ?? ""
         let created = ConversationStore(
             sessionKey: session.key,
@@ -221,6 +244,7 @@ struct MacPaneView: View {
             }
         }
         store = created
+        entry.store = created
         lifetime?.bind(created)
         #if DEBUG
         if MacSessionSwitchInspection.enabled {
@@ -475,4 +499,44 @@ struct PaneConnectionKey: Hashable {
 
 extension ConversationStore {
     var clientIdentity: ObjectIdentifier? { boundClient.map(ObjectIdentifier.init) }
+}
+
+/// Keep subscription observation outside the expensive conversation layout.
+private struct MacPaneConnection: View {
+    @Environment(AppModel.self) private var appModel
+    let sessionKey: String
+    let lifetime: MacPaneLifetime?
+    let store: ConversationStore?
+    let prepareStore: () -> ConversationStore?
+    let resetStore: () -> Void
+    let onPresented: () -> Void
+
+    private var isReady: Bool { appModel.connectionState == .connected && appModel.client != nil }
+
+    var body: some View {
+        Color.clear
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+            .task(id: PaneConnectionKey(sessionKey: sessionKey, client: appModel.clientIdentity,
+                                        ready: isReady && (lifetime?.isPresented ?? true))) {
+                guard isReady, lifetime?.isPresented ?? true else { return }
+                await lifetime?.waitForSuspension()
+                guard !Task.isCancelled, lifetime?.isPresented ?? true else { return }
+                if let store, store.clientIdentity != appModel.clientIdentity {
+                    await store.stop()
+                    resetStore()
+                }
+                guard let owned = prepareStore() else { return }
+                async let readMark: Void = owned.markRead()
+                await owned.start()
+                for attempt in 1...4 where owned.loadError != nil && !Task.isCancelled {
+                    try? await Task.sleep(for: .milliseconds(400 * attempt))
+                    await owned.retry()
+                }
+                await readMark
+            }
+            .onChange(of: lifetime?.isPresented) { _, presented in
+                if presented == true { onPresented() }
+            }
+    }
 }

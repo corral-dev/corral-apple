@@ -127,8 +127,8 @@ final class MacWorkspace {
     /// `takeKeys` nil infers it: a mouse click on a sidebar row moves the caret
     /// into the opened pane, arrow-key browsing keeps focus in the sidebar.
     func open(_ key: String, sessions: [SessionSummary], takeKeys: Bool? = nil) {
-        showingBoard = false
-        pendingEntrances = [:]
+        if showingBoard { showingBoard = false }
+        if !pendingEntrances.isEmpty { pendingEntrances = [:] }
         defer { if takeKeys ?? Self.selectionCameFromPointer { requestKeyFocus(key) } }
         if paneKeys.contains(key) {
             focus(key)
@@ -279,10 +279,12 @@ final class MacWorkspace {
     }
 
     /// Navigation replaces the split in one step: drop exits and glides.
+    /// Assigning an equal value still notifies Observation and walks the whole
+    /// retained hierarchy, so only touch state that actually changes.
     private func cancelSplitMotion() {
         glideSerial += 1
-        paneShifts = [:]
-        leavingPanes = [:]
+        if !paneShifts.isEmpty { paneShifts = [:] }
+        if !leavingPanes.isEmpty { leavingPanes = [:] }
     }
 
     /// The closed pane stays in its slot while it fades out, then leaves the

@@ -24,9 +24,38 @@ final class ConversationStore {
     }
 
     private func refreshTimeline() {
-        timelineItems = ConversationMessagePolicy.timelineItems(
+        userPromptsCacheSeqs = nil
+        let next = ConversationMessagePolicy.timelineItems(
             from: visibleMessages, preserving: timelineItems
         )
+        // Switching panes re-evaluates bodies without new data; assigning an
+        // equal array still notifies Observation and rebuilds every row.
+        let timelineChanged = next != timelineItems
+        if timelineChanged {
+            timelineItems = next
+        }
+        #if DEBUG
+        if timelineChanged {
+            ConversationStore.timelineRebuilds &+= 1
+        } else {
+            ConversationStore.timelineSkips &+= 1
+        }
+        #endif
+        refreshRunningToolFlag()
+    }
+
+    /// Whether any message carries a running non-question tool. ChatView reads
+    /// this per body evaluation; scanning all tools there repeats O(messages)
+    /// work on every layout pass, so keep it beside the timeline projection.
+    private(set) var hasRunningTool = false
+
+    private func refreshRunningToolFlag() {
+        let next = messages.contains {
+            ($0.tools ?? []).contains { $0.status == "running" && $0.kind != "question" }
+        }
+        if next != hasRunningTool {
+            hasRunningTool = next
+        }
     }
     private(set) var prompts: [SessionPrompt] = []
     private(set) var questionSubmissionState: NativeQuestionSubmissionState?
@@ -95,20 +124,59 @@ final class ConversationStore {
 
     /// Host list of every human prompt in the session (`session.userPrompts`).
     /// History is paged, but Your prompts covers the whole session.
-    private var sessionPrompts: [RichMessage] = []
+    private var sessionPrompts: [RichMessage] = [] {
+        didSet { userPromptsCacheSeqs = nil }
+    }
     private var sessionPromptsGeneration = 0
     private var sessionPromptsTask: Task<Void, Never>?
 
     /// Your prompts, oldest first: the host's full list merged with loaded
     /// messages (loaded text wins); only the loaded part on hosts without the list.
+    /// Bodies read this several times per layout pass; the string-heavy filter
+    /// runs only when its inputs actually change (seq-keyed fast path first).
+    @ObservationIgnored private var userPromptsCacheSeqs: (loaded: [Int], session: [Int], usable: Bool)?
+    @ObservationIgnored private var userPromptsCacheValue: [RichMessage] = []
     var userPrompts: [RichMessage] {
         let usable = forkMessages == nil
             && (sessionPromptsGeneration == 0 || generation == 0 || sessionPromptsGeneration == generation)
-        return ConversationMessagePolicy.userPrompts(
-            loaded: visibleMessages,
+        let loaded = visibleMessages
+        // Integer fast path: unchanged seqs reuse the filtered result without
+        // re-trimming and re-scanning every message body.
+        let loadedSeqs = loaded.map(\.seq)
+        let sessionSeqs = usable ? sessionPrompts.map(\.seq) : []
+        if let key = userPromptsCacheSeqs, key.loaded == loadedSeqs,
+           key.session == sessionSeqs, key.usable == usable {
+            #if DEBUG
+            ConversationStore.promptsHits &+= 1
+            #endif
+            return userPromptsCacheValue
+        }
+        let value = ConversationMessagePolicy.userPrompts(
+            loaded: loaded,
             session: usable ? sessionPrompts : []
         )
+        userPromptsCacheSeqs = (loadedSeqs, sessionSeqs, usable)
+        userPromptsCacheValue = value
+        #if DEBUG
+        ConversationStore.promptsRecomputes &+= 1
+        #endif
+        return value
     }
+
+    #if DEBUG
+    /// Warm-switch diagnostics: how often cached projections actually reuse
+    /// their filtered results instead of re-scanning message bodies.
+    static var timelineRebuilds = 0
+    static var timelineSkips = 0
+    static var promptsHits = 0
+    static var promptsRecomputes = 0
+    static func resetSwitchCounters() {
+        timelineRebuilds = 0
+        timelineSkips = 0
+        promptsHits = 0
+        promptsRecomputes = 0
+    }
+    #endif
 
     var supportsCommandReceipts: Bool {
         client?.supportsCommandReceipts == true
@@ -254,12 +322,20 @@ final class ConversationStore {
         guard let client else {
             // Offline / no client: keep cached tail visible; surface a soft error only if empty.
             if visibleMessages.isEmpty {
-                loadError = String(localized: String.LocalizationValue("error.not_connected"))
+                let message = String(localized: String.LocalizationValue("error.not_connected"))
+                if loadError != message {
+                    loadError = message
+                }
             }
             return
         }
-        isLoading = visibleMessages.isEmpty
-        loadError = nil
+        let needsLoading = visibleMessages.isEmpty
+        if isLoading != needsLoading {
+            isLoading = needsLoading
+        }
+        if loadError != nil {
+            loadError = nil
+        }
 
         // 先挂订阅再发 watch，避免服务端首批推送落在订阅登记之前被丢掉。
         ensureEventSubscription(client)
@@ -268,7 +344,9 @@ final class ConversationStore {
         guard lifecycleRevision == revision, !hasStopped, !Task.isCancelled else { return }
         await reconcilePendingCommands(client)
         guard lifecycleRevision == revision, !hasStopped, !Task.isCancelled else { return }
-        isLoading = false
+        if isLoading {
+            isLoading = false
+        }
         persistTail()
     }
 
@@ -326,7 +404,9 @@ final class ConversationStore {
     /// Host-confirmed attention. Working/waiting take over from the provisional cue;
     /// an idle signal clears it only after the grace window (an earlier one predates the send).
     private func applyAuthoritativeAttention(_ value: AttentionKind, now: Date = Date()) {
-        attention = value
+        if value != attention {
+            attention = value
+        }
         guard let since = provisionalWorkingSince else { return }
         switch value {
         case .working, .waiting:
@@ -572,10 +652,12 @@ final class ConversationStore {
                   requestRevision == snapshotRevision else { return }
             if attentionRevision == stateRevision {
                 if let current = watch.attention { applyAuthoritativeAttention(current) }
-                if let current = watch.live { isLive = current }
+                if let current = watch.live, current != isLive { isLive = current }
             }
             applySnapshot(watch)
-            loadError = nil
+            if loadError != nil {
+                loadError = nil
+            }
             refreshSessionPrompts(client)
             await loadPrompts()
             guard !hasStopped, lifecycle == lifecycleRevision,
@@ -586,7 +668,10 @@ final class ConversationStore {
                   requestRevision == snapshotRevision, !Task.isCancelled else { return }
             // 已有缓存时保留画面，只露出错误提示。
             if visibleMessages.isEmpty {
-                loadError = error.localizedDescription
+                let message = error.localizedDescription
+                if loadError != message {
+                    loadError = message
+                }
             }
         }
     }
@@ -605,12 +690,24 @@ final class ConversationStore {
             incomingGeneration: watch.generation,
             resume: watch.resume
         )
-        messages = applied.messages
-        oldestSequence = applied.oldestSequence
-        newestSequence = applied.newestSequence
-        hasMoreHistory = applied.hasMoreHistory
-        generation = applied.generation
-        if watch.messages.contains(where: { $0.seq > 0 }) {
+        // Warm re-watch with identical tails must not invalidate rows: equal
+        // assignments still notify Observation and rebuild the timeline.
+        if applied.messages != messages {
+            messages = applied.messages
+        }
+        if applied.oldestSequence != oldestSequence {
+            oldestSequence = applied.oldestSequence
+        }
+        if applied.newestSequence != newestSequence {
+            newestSequence = applied.newestSequence
+        }
+        if applied.hasMoreHistory != hasMoreHistory {
+            hasMoreHistory = applied.hasMoreHistory
+        }
+        if applied.generation != generation {
+            generation = applied.generation
+        }
+        if forkMessages != nil, watch.messages.contains(where: { $0.seq > 0 }) {
             forkMessages = nil
         }
     }
@@ -648,18 +745,30 @@ final class ConversationStore {
             else { return }
             merge(page.messages)
             if page.oldestSeq > 0 {
-                oldestSequence = page.oldestSeq
+                if page.oldestSeq != oldestSequence {
+                    oldestSequence = page.oldestSeq
+                }
             } else {
-                oldestSequence = oldestOfficialSeq
+                let floored = oldestOfficialSeq
+                if floored != oldestSequence {
+                    oldestSequence = floored
+                }
             }
-            hasMoreHistory = page.hasMore
-            loadError = nil
+            if page.hasMore != hasMoreHistory {
+                hasMoreHistory = page.hasMore
+            }
+            if loadError != nil {
+                loadError = nil
+            }
             persistTail()
         } catch is CancellationError {
             return
         } catch {
             guard !Task.isCancelled, !hasStopped, lifecycle == lifecycleRevision else { return }
-            loadError = error.localizedDescription
+            let message = error.localizedDescription
+            if loadError != message {
+                loadError = message
+            }
         }
     }
 
@@ -690,8 +799,12 @@ final class ConversationStore {
                 )
                 try Task.checkCancellation()
                 guard !self.hasStopped, lifecycle == self.lifecycleRevision else { return }
-                self.sessionPrompts = response.prompts
-                self.sessionPromptsGeneration = response.generation
+                if response.prompts != self.sessionPrompts {
+                    self.sessionPrompts = response.prompts
+                }
+                if response.generation != self.sessionPromptsGeneration {
+                    self.sessionPromptsGeneration = response.generation
+                }
             } catch {
                 // Keep the previous list; Your prompts falls back to loaded messages.
                 return
@@ -777,7 +890,10 @@ final class ConversationStore {
         if nextRequestID != questionSubmissionState?.requestID {
             questionSubmissionState = nil
         }
-        prompts = newPrompts.filter { $0.requestID == nextRequestID }
+        let filtered = newPrompts.filter { $0.requestID == nextRequestID }
+        if filtered != prompts {
+            prompts = filtered
+        }
     }
 
     private func extractOptionsFromMessages() {
@@ -869,19 +985,32 @@ final class ConversationStore {
         else { return }
         attentionRevision += 1
         applyAuthoritativeAttention(summary.attention)
-        isLive = summary.live
+        if summary.live != isLive {
+            isLive = summary.live
+        }
         onSessionMetadata?(summary, SessionListStore.revision(from: data))
     }
 
     private func merge(_ incoming: [RichMessage]) {
         let beforeIDs = Set(messages.compactMap(\.commandID))
-        messages = ConversationMessageMerge.combining(messages, with: incoming)
-        newestSequence = max(newestSequence, newestOfficialSeq)
+        let combined = ConversationMessageMerge.combining(messages, with: incoming)
+        if combined != messages {
+            messages = combined
+        }
+        let newest = max(newestSequence, newestOfficialSeq)
+        if newest != newestSequence {
+            newestSequence = newest
+        }
         let oldestOfficial = oldestOfficialSeq
         if oldestSequence == 0 {
-            oldestSequence = oldestOfficial
+            if oldestOfficial != oldestSequence {
+                oldestSequence = oldestOfficial
+            }
         } else if oldestOfficial > 0 {
-            oldestSequence = min(oldestSequence, oldestOfficial)
+            let floored = min(oldestSequence, oldestOfficial)
+            if floored != oldestSequence {
+                oldestSequence = floored
+            }
         }
         extractOptionsFromMessages()
         // Official transcript consumed a local echo — drop resolved pending metadata.
@@ -1040,13 +1169,15 @@ final class ConversationStore {
         // a just-loaded earlier page and make automatic loading fetch it forever.
         guard !messages.contains(where: { $0.seq > 0 && !retainedSeqs.contains($0.seq) }) else { return }
         // Keep in-memory cursors aligned with what was actually retained.
-        if snapshot.oldestSequence > 0 {
+        if snapshot.oldestSequence > 0, snapshot.oldestSequence != oldestSequence {
             oldestSequence = snapshot.oldestSequence
         }
-        if snapshot.newestSequence > 0 {
+        if snapshot.newestSequence > 0, snapshot.newestSequence != newestSequence {
             newestSequence = snapshot.newestSequence
         }
-        hasMoreHistory = snapshot.hasMoreHistory
+        if snapshot.hasMoreHistory != hasMoreHistory {
+            hasMoreHistory = snapshot.hasMoreHistory
+        }
     }
 
     /// Fetch tool bodies for merged activity cards (one or more host message seqs).

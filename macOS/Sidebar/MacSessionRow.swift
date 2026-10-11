@@ -132,8 +132,11 @@ enum MacSidebarMetrics {
     /// Vertical rhythm (design: Vertical rhythm, owner request 2026-10-08).
     static let lineSpacing: CGFloat = 2
     static let rowPadding: CGFloat = 4
-    /// One content height for sessions, split groups and the board entry.
+    /// Equal two-line session height; supporting entries remain compact.
     static let rowHeight: CGFloat = 52
+    static let compactRowHeight: CGFloat = 32
+    static let sectionHeight: CGFloat = 28
+    static let filterHeight: CGFloat = 28
 
     /// Follows the system sidebar icon size (General → Sidebar icon size).
     static func glyph(_ rowSize: SidebarRowSize) -> CGFloat {

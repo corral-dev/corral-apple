@@ -1,6 +1,40 @@
 #if os(macOS)
 import AppKit
 
+#if DEBUG
+/// Warm-switch diagnostics: do lazy text rows actually re-realize their native
+/// views when returning to a retained pane, or only re-measure? Reset before
+/// each inspected switch; the probe records the totals with its timing.
+/// Main-thread only by construction (AppKit representable + @MainActor stores).
+@MainActor
+enum MacTextRowSwitchCounters {
+    static var makes = 0
+    static var dismantles = 0
+    static var textSets = 0
+    static var docEarlyReturns = 0
+    static var docRenders = 0
+    static func reset() {
+        makes = 0
+        dismantles = 0
+        textSets = 0
+        docEarlyReturns = 0
+        docRenders = 0
+    }
+}
+#endif
+
+/// Uncapped Mac rows (the default: the conversation scrolls, not the bubble)
+/// host their text view directly instead of inside a per-row scroll wrapper.
+/// One `NSScrollView` + `NSClipView` pair per message laid out and drew on
+/// every switch; with 80 messages × 4 panes that is hundreds of nested
+/// scrollers for content that never scrolls itself. Wheel events forward to
+/// the conversation scroll view, matching the wrapper's non-scrolling path.
+final class MacDirectMessageTextView: NSTextView {
+    override func scrollWheel(with event: NSEvent) {
+        nextResponder?.scrollWheel(with: event)
+    }
+}
+
 /// One native text network per conversation. Each message is a separate text
 /// container, like a page in an AppKit document, with a shared selection.
 @MainActor
@@ -66,7 +100,15 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
         style: Style,
         render: (Source) -> NSAttributedString
     ) {
+        #if DEBUG
+        guard self.identity != identity || self.sources != sources || self.style != style else {
+            MacTextRowSwitchCounters.docEarlyReturns &+= 1
+            return
+        }
+        MacTextRowSwitchCounters.docRenders &+= 1
+        #else
         guard self.identity != identity || self.sources != sources || self.style != style else { return }
+        #endif
         let sameConversation = self.identity == identity
         if !sameConversation {
             measurements.removeAll()
@@ -147,10 +189,12 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
 
     /// Stable native members of one coordinated TextKit network. SwiftUI's
     /// lazy rows may retire and realize independently of the loaded messages.
+    /// Uncapped Mac rows host these views directly (no per-row scroll wrapper),
+    /// so they forward wheel events to the conversation scroll view themselves.
     func textView(for id: Int) -> NSTextView? {
         guard let block = byID[id] else { return nil }
         if let view = block.view { return view }
-        let view = NSTextView(frame: .zero, textContainer: block.container)
+        let view = MacDirectMessageTextView(frame: .zero, textContainer: block.container)
         block.view = view
         return view
     }

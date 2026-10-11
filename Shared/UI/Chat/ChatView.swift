@@ -34,6 +34,11 @@ struct ChatView: View {
     @Environment(\.timeZone) private var timeZone
     @Bindable var store: ConversationStore
     var runtimeID: String? = nil
+    /// Retained native text network from the Mac pane cache (nil outside Mac
+    /// panes, where the selection modifier owns a private document).
+    #if os(macOS)
+    @Environment(\.macConversationTextDocument) private var textDocument
+    #endif
     /// Host-decided sidebar dot; the activity footer follows it.
     var sessionMarker: SessionPresentation.StatusMarker? = nil
     var isConnected = true
@@ -230,7 +235,8 @@ struct ChatView: View {
             messages: items.compactMap { item in
                 if case .message(let message) = item { return message }
                 return nil
-            }
+            },
+            documentOverride: textDocument
         ))
         #endif
     }
@@ -248,9 +254,7 @@ struct ChatView: View {
     }
 
     private var hasRunningTool: Bool {
-        store.messages.flatMap { $0.tools ?? [] }.contains {
-            $0.status == "running" && $0.kind != "question"
-        }
+        store.hasRunningTool
     }
 
     private func submitQuestion(_ requestID: String, answers: [NativeQuestionAnswer]) {

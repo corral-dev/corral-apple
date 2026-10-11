@@ -69,4 +69,20 @@ final class SessionUserPromptsTests: XCTestCase {
         XCTAssertTrue(hello.capabilities.userPrompts)
         XCTAssertFalse(HostCapabilities.empty.userPrompts)
     }
+
+    func testPromptCacheUpdatesWhenTextOrRoleChangesAtSameSequence() throws {
+        let store = ConversationStore(sessionKey: "claude:corrected", client: nil, live: false)
+        func apply(_ text: String, role: String = "user") throws {
+            store.applySnapshot(try RemoteJSONDecoder.decode(SessionMessagesResponse.self, from: [
+                "messages": [["seq": 7, "role": role, "text": text]],
+                "generation": 1, "oldest_seq": 7, "newest_seq": 7,
+            ]))
+        }
+        try apply("Original prompt")
+        XCTAssertEqual(store.userPrompts.map(\.text), ["Original prompt"])
+        try apply("Corrected prompt")
+        XCTAssertEqual(store.userPrompts.map(\.text), ["Corrected prompt"])
+        try apply("Corrected prompt", role: "assistant")
+        XCTAssertTrue(store.userPrompts.isEmpty)
+    }
 }

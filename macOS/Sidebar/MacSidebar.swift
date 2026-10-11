@@ -112,7 +112,7 @@ struct MacSidebar: View {
                     .id(feed.host.id)
                     .modifier(MacZoomContent())
                     .interfacePadding(.horizontal, Space.md)
-                    .interfacePadding(.vertical, Space.xs)
+                    .interfacePadding(.vertical, Space.xs / 2)
             }
             .safeAreaBar(edge: .bottom, spacing: 0) {
                 HStack(spacing: Space.sm * interfaceScale) {
@@ -229,7 +229,7 @@ struct MacSidebar: View {
                         Text(verbatim: title(for: section))
                             .interfaceFont(.body.weight(.semibold))
                             .foregroundStyle(.primary)
-                            .interfaceFrame(height: MacSidebarMetrics.rowHeight)
+                            .interfaceFrame(height: MacSidebarMetrics.sectionHeight)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .contentShape(Rectangle())
                     }
@@ -238,8 +238,8 @@ struct MacSidebar: View {
             }
         }
         .listStyle(.sidebar)
-        .environment(\.defaultMinListRowHeight, MacSidebarMetrics.rowHeight * interfaceScale)
-        .environment(\.defaultMinListHeaderHeight, MacSidebarMetrics.rowHeight * interfaceScale)
+        .environment(\.defaultMinListRowHeight, MacSidebarMetrics.compactRowHeight * interfaceScale)
+        .environment(\.defaultMinListHeaderHeight, MacSidebarMetrics.sectionHeight * interfaceScale)
         // Keep scrolling rows legible beneath the native search and machine bars.
         .scrollEdgeEffectStyle(.hard, for: [.top, .bottom])
         #if DEBUG
@@ -295,7 +295,7 @@ struct MacSidebar: View {
             Image(systemName: "rectangle.split.2x2")
                 .foregroundStyle(Palette.accent)
         }
-        .interfaceFrame(height: MacSidebarMetrics.rowHeight)
+        .interfaceFrame(height: MacSidebarMetrics.compactRowHeight)
         .listRowSeparator(.visible, edges: .bottom)
         .listRowSeparatorTint(Color(nsColor: .separatorColor).opacity(0.5), edges: .bottom)
         .badge(active.count)
@@ -373,7 +373,7 @@ struct MacSidebar: View {
         }
         .lineLimit(1)
         .interfacePadding(.vertical, MacSidebarMetrics.rowPadding)
-        .interfaceFrame(height: MacSidebarMetrics.rowHeight)
+        .interfaceFrame(height: MacSidebarMetrics.compactRowHeight)
         .help(Text(verbatim: group.project))
     }
 

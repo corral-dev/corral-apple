@@ -25,7 +25,7 @@ Product behavior and ownership are authoritative in [UI design: conversation inp
 - `ComposerBar`: native focus on the mounted input, no fixed navigation-delay timer. Existing text/image send rules remain.
 - Remove `KeyboardLift`, its window selection/probe, merged height arithmetic, and arithmetic-only tests that merely endorsed that implementation.
 
-Platform background and invalid-geometry guidance: [iOS layout standard](../../../../_standards/workspace-docs/swift-docs/ios-spacing-layout-tokens.md#keyboard-ownership-and-invalid-geometry).
+Platform background and invalid-geometry guidance: iOS layout standard (maintainer reference, not distributed).
 
 ## Verification
 

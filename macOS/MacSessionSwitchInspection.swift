@@ -14,6 +14,13 @@ enum MacSessionSwitchInspection {
         ProcessInfo.processInfo.arguments.contains("-CorralInspectSessionSwitch")
     }
 
+    /// Skip the forced full-subtree layout/draw: measures the window's natural
+    /// next-frame work for visible rows only (user-perceived), not the worst
+    /// case of realizing every retained row.
+    static var noForce: Bool {
+        ProcessInfo.processInfo.arguments.contains("-CorralInspectSessionSwitchNoForce")
+    }
+
     static func run(feed: HostSessionFeed, workspace: MacWorkspace) async {
         guard enabled, !claimed else { return }
         claimed = true
@@ -39,6 +46,8 @@ enum MacSessionSwitchInspection {
                     stores[session.key] = nil
                     preparationMs[session.key] = nil
                 }
+                ConversationStore.resetSwitchCounters()
+                MacTextRowSwitchCounters.reset()
                 let clock = ContinuousClock()
                 let started = clock.now
                 let stall = MainThreadStallProbe()
@@ -52,6 +61,7 @@ enum MacSessionSwitchInspection {
                 }
                 let selectionMs = milliseconds(started.duration(to: clock.now))
                 var visible = false
+                var firstVisibleMs = -1.0
                 for _ in 0..<2000 {
                     if chosen.allSatisfy({ session in
                         let store = workspace.paneSurfaces.store(for: session.key) ?? stores[session.key]
@@ -59,8 +69,15 @@ enum MacSessionSwitchInspection {
                             && (workspace.paneFrames[session.key] != nil || workspace.paneSurfaces.isMounted(session.key))
                     }),
                        let content = NSApp.windows.first(where: { $0.title == "Corral" && $0.isVisible })?.contentView {
-                        content.layoutSubtreeIfNeeded()
-                        content.displayIfNeeded()
+                        // First paint gate (user-perceived): state is ready and the
+                        // window will draw visible rows on its next frame. The
+                        // forced full layout below measures the worst case, not
+                        // what the next display link actually draws.
+                        firstVisibleMs = milliseconds(started.duration(to: clock.now))
+                        if !noForce {
+                            content.layoutSubtreeIfNeeded()
+                            content.displayIfNeeded()
+                        }
                         visible = true
                         break
                     }
@@ -73,12 +90,22 @@ enum MacSessionSwitchInspection {
                 record["sessionIndex"] = index
                 record["panes"] = count
                 record["selectionMs"] = selectionMs
+                record["firstVisibleMs"] = firstVisibleMs
                 record["displayMs"] = displayMs
                 record["preparationMs"] = preparationMs[session.key] ?? -1
                 record["messages"] = chosen.reduce(0) {
                     $0 + ((workspace.paneSurfaces.store(for: $1.key) ?? stores[$1.key])?.messages.count ?? 0)
                 }
                 record["visible"] = visible
+                record["rowMakes"] = MacTextRowSwitchCounters.makes
+                record["rowDismantles"] = MacTextRowSwitchCounters.dismantles
+                record["rowTextSets"] = MacTextRowSwitchCounters.textSets
+                record["docEarlyReturns"] = MacTextRowSwitchCounters.docEarlyReturns
+                record["docRenders"] = MacTextRowSwitchCounters.docRenders
+                record["timelineRebuilds"] = ConversationStore.timelineRebuilds
+                record["timelineSkips"] = ConversationStore.timelineSkips
+                record["promptsHits"] = ConversationStore.promptsHits
+                record["promptsRecomputes"] = ConversationStore.promptsRecomputes
                 measurements.append(record)
                 save(measurements)
                 for session in chosen { stores[session.key] = nil }

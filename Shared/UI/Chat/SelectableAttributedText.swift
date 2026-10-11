@@ -497,27 +497,22 @@ private struct MacSelectableTextView: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    func makeNSView(context: Context) -> FadingTextScrollView {
-        let scroll = FadingTextScrollView()
-        scroll.drawsBackground = false
-        scroll.borderType = .noBorder
-        scroll.hasVerticalScroller = false
-        scroll.hasHorizontalScroller = false
-        scroll.autohidesScrollers = true
-        scroll.scrollerStyle = .overlay
-        scroll.verticalScrollElasticity = .none
+    /// The Mac shows full-height bubbles (no cap): the conversation owns
+    /// scrolling, so a per-row scroll wrapper is pure overhead. Only capped
+    /// rows keep the fading scroll container.
+    private var usesScrollWrapper: Bool { maxHeight != nil }
 
-        let container = selectionID.flatMap { document?.container(for: $0) }
-        let storage = container == nil ? NSTextStorage() : (document?.storage ?? NSTextStorage())
-        context.coordinator.textStorage = storage
+    private func makeConfiguredTextView(storage: NSTextStorage, container: NSTextContainer?) -> NSTextView {
         let textView: NSTextView
         if let selectionID, let existing = document?.textView(for: selectionID) {
             textView = existing
             // A replacement row can realize before the outgoing row dismantles.
             // AppKit keeps the view's original text network and selection.
             textView.removeFromSuperview()
-        } else {
+        } else if usesScrollWrapper {
             textView = Self.makeTextView(storage: storage)
+        } else {
+            textView = Self.makeTextView(storage: storage, direct: true)
         }
         // These flags are shared across the conversation's native text network.
         // Reassigning selectability while reattaching a lazy row can lay out all
@@ -527,8 +522,15 @@ private struct MacSelectableTextView: NSViewRepresentable {
         if textView.drawsBackground { textView.drawsBackground = false }
         if !textView.isRichText { textView.isRichText = true }
         if textView.textContainerInset != .zero { textView.textContainerInset = .zero }
-        if !textView.isVerticallyResizable { textView.isVerticallyResizable = true }
-        if textView.isHorizontallyResizable { textView.isHorizontallyResizable = false }
+        if usesScrollWrapper {
+            if !textView.isVerticallyResizable { textView.isVerticallyResizable = true }
+            if textView.isHorizontallyResizable { textView.isHorizontallyResizable = false }
+        } else {
+            // SwiftUI owns a direct row's frame (measured detached below);
+            // self-resizing would fight that layout on every reflow.
+            if textView.isVerticallyResizable { textView.isVerticallyResizable = false }
+            if textView.isHorizontallyResizable { textView.isHorizontallyResizable = false }
+        }
         let maximumSize = NSSize(
             width: CGFloat.greatestFiniteMagnitude,
             height: container == nil ? .greatestFiniteMagnitude : MacConversationTextDocument.initialCanvasHeight
@@ -536,26 +538,69 @@ private struct MacSelectableTextView: NSViewRepresentable {
         if textView.maxSize != maximumSize { textView.maxSize = maximumSize }
         if textView.autoresizingMask != [.width] { textView.autoresizingMask = [.width] }
         if textView.focusRingType != .none { textView.focusRingType = .none }
+        return textView
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        #if DEBUG
+        MacTextRowSwitchCounters.makes &+= 1
+        #endif
+        let container = selectionID.flatMap { document?.container(for: $0) }
+        let storage = container == nil ? NSTextStorage() : (document?.storage ?? NSTextStorage())
+        context.coordinator.textStorage = storage
+        let textView = makeConfiguredTextView(storage: storage, container: container)
+        guard usesScrollWrapper else {
+            apply(to: textView, scroll: nil, coordinator: context.coordinator)
+            return textView
+        }
+        let scroll = FadingTextScrollView()
+        scroll.drawsBackground = false
+        scroll.borderType = .noBorder
+        scroll.hasVerticalScroller = false
+        scroll.hasHorizontalScroller = false
+        scroll.autohidesScrollers = true
+        scroll.scrollerStyle = .overlay
+        scroll.verticalScrollElasticity = .none
+        // Reattaching a retained text view to a zero-sized clip view shrinks
+        // its width-tracking container to zero and invalidates shared glyphs.
+        // Preserve native geometry until SwiftUI supplies the actual row frame.
+        scroll.frame.size = textView.frame.size
         scroll.documentView = textView
-        apply(to: scroll, coordinator: context.coordinator)
+        apply(to: textView, scroll: scroll, coordinator: context.coordinator)
         return scroll
     }
 
-    func updateNSView(_ scroll: FadingTextScrollView, context: Context) {
-        apply(to: scroll, coordinator: context.coordinator)
+    func updateNSView(_ nsView: NSView, context: Context) {
+        if let scroll = nsView as? FadingTextScrollView {
+            guard let textView = scroll.documentView as? NSTextView else { return }
+            apply(to: textView, scroll: scroll, coordinator: context.coordinator)
+        } else if let textView = nsView as? NSTextView {
+            apply(to: textView, scroll: nil, coordinator: context.coordinator)
+        }
     }
 
-    static func dismantleNSView(_ scroll: FadingTextScrollView, coordinator: Coordinator) {
-        scroll.onMoreBelowChange = nil
-        if let view = scroll.documentView as? NSTextView, view.enclosingScrollView === scroll {
-            MacConversationTextDocument.retireTextView(view)
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        #if DEBUG
+        MacTextRowSwitchCounters.dismantles &+= 1
+        #endif
+        if let scroll = nsView as? FadingTextScrollView {
+            scroll.onMoreBelowChange = nil
+            if let view = scroll.documentView as? NSTextView, view.enclosingScrollView === scroll {
+                MacConversationTextDocument.retireTextView(view)
+            }
+        } else if let view = nsView as? NSTextView {
+            // A replacement row may already have reattached this view; only
+            // retire focus for a view that actually left the hierarchy.
+            if view.superview == nil || view.window == nil {
+                MacConversationTextDocument.retireTextView(view)
+            }
         }
         coordinator.textStorage = nil
     }
 
     /// Side-effect free measurement with a detached layout; the scroll mode switch
     /// is deferred so layout never re-enters (same rule as the iOS host).
-    func sizeThatFits(_ proposal: ProposedViewSize, nsView: FadingTextScrollView, context: Context) -> CGSize? {
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSView, context: Context) -> CGSize? {
         guard let width = proposal.width, width.isFinite, width > 0 else { return nil }
         let coordinator = context.coordinator
         let ns = converted(coordinator)
@@ -579,50 +624,58 @@ private struct MacSelectableTextView: NSViewRepresentable {
             }
         }
         // Uncapped (the Mac default) and already unscrolled: nothing to update.
-        guard scrolling || nsView.hasVerticalScroller else { return result }
+        guard let scroll = nsView as? FadingTextScrollView, scrolling || scroll.hasVerticalScroller else { return result }
         DispatchQueue.main.async {
-            if nsView.hasVerticalScroller != scrolling {
-                nsView.hasVerticalScroller = scrolling
+            if scroll.hasVerticalScroller != scrolling {
+                scroll.hasVerticalScroller = scrolling
             }
-            nsView.refreshEdgeFade()
+            scroll.refreshEdgeFade()
         }
         return result
     }
 
-    private func apply(to scroll: FadingTextScrollView, coordinator: Coordinator) {
-        guard let textView = scroll.documentView as? NSTextView else { return }
+    private func apply(to textView: NSTextView, scroll: FadingTextScrollView?, coordinator: Coordinator) {
         let ns = converted(coordinator)
         let fingerprint = Fingerprint(string: ns.string, fontSize: font.pointSize, foreground: foreground, tint: tint)
         if selectionID.flatMap({ document?.container(for: $0) }) == nil, coordinator.fingerprint != fingerprint {
             let isFirstFill = coordinator.fingerprint == nil
             let previous = textView.selectedRange()
             textView.textStorage?.setAttributedString(ns)
+            #if DEBUG
+            MacTextRowSwitchCounters.textSets &+= 1
+            #endif
             if previous.length > 0, NSMaxRange(previous) <= ns.length {
                 textView.setSelectedRange(previous)
             }
             coordinator.fingerprint = fingerprint
-            if isFirstFill {
+            if isFirstFill, let scroll {
                 // A capped bubble starts at its first line (the document view is flipped).
                 scroll.contentView.scroll(to: .zero)
                 scroll.reflectScrolledClipView(scroll.contentView)
             }
         }
-        textView.linkTextAttributes = [
+        let linkAttributes: [NSAttributedString.Key: Any] = [
             .foregroundColor: tint,
             .underlineStyle: NSUnderlineStyle.single.rawValue,
             .cursor: NSCursor.pointingHand,
         ]
-        textView.selectedTextAttributes = [
+        if !(textView.linkTextAttributes.map { NSDictionary(dictionary: $0).isEqual(to: linkAttributes) } ?? false) {
+            textView.linkTextAttributes = linkAttributes
+        }
+        let selectionAttributes: [NSAttributedString.Key: Any] = [
             .backgroundColor: NSColor.selectedTextBackgroundColor,
         ]
+        if !NSDictionary(dictionary: textView.selectedTextAttributes).isEqual(to: selectionAttributes) {
+            textView.selectedTextAttributes = selectionAttributes
+        }
         // The Mac shows full-height bubbles (no cap): there is nothing to fade
         // and no hidden tail to report. Skipping the layer/mask work here keeps
         // fast flings from paying per-row CoreAnimation setup per update.
-        if maxHeight != nil {
+        if maxHeight != nil, let scroll {
             scroll.onMoreBelowChange = onMoreBelowChange
             scroll.refreshEdgeFade()
-        } else if scroll.onMoreBelowChange != nil {
-            scroll.onMoreBelowChange = nil
+        } else if scroll?.onMoreBelowChange != nil {
+            scroll?.onMoreBelowChange = nil
         }
     }
 
@@ -631,13 +684,16 @@ private struct MacSelectableTextView: NSViewRepresentable {
     /// sizing with `boundingRect` also ran up to ~60 pt taller than the view's
     /// own layout on long Markdown replies. Both showed as a blank band under a
     /// reply (2026-10-05). One contiguous engine both measures and draws.
-    private static func makeTextView(storage: NSTextStorage) -> NSTextView {
+    private static func makeTextView(storage: NSTextStorage, direct: Bool = false) -> NSTextView {
         let layout = NSLayoutManager()
         storage.addLayoutManager(layout)
         let container = NSTextContainer(size: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
         container.lineFragmentPadding = 0
         container.widthTracksTextView = true
         layout.addTextContainer(container)
+        if direct {
+            return MacDirectMessageTextView(frame: .zero, textContainer: container)
+        }
         return NSTextView(frame: .zero, textContainer: container)
     }
 
@@ -710,6 +766,9 @@ extension EnvironmentValues {
 struct MacConversationTextSelection: ViewModifier {
     let identity: ObjectIdentifier
     let messages: [RichMessage]
+    /// Retained document from the pane cache. Nil outside Mac panes (previews,
+    /// layout tests), where the modifier keeps owning a private one.
+    var documentOverride: MacConversationTextDocument? = nil
     @Environment(\.sessionTextScale) private var sessionTextScale
     @Environment(\.interfaceScale) private var interfaceScale
     @State private var document = MacConversationTextDocument()
@@ -723,6 +782,7 @@ struct MacConversationTextSelection: ViewModifier {
         let style = MacConversationTextDocument.Style(
             font: font, foreground: .labelColor, userForeground: NSColor(Palette.userBubbleForeground)
         )
+        let document = documentOverride ?? document
         // This updates AppKit reference objects only, never SwiftUI state. The
         // identity/source/style gate makes ordinary view updates a no-op.
         document.update(identity: identity, sources: sources, style: style) { source in
