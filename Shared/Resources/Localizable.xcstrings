@@ -3339,6 +3339,40 @@
         }
       }
     },
+    "session.new.quick": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quick Start"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "快捷启动"
+          }
+        }
+      }
+    },
+    "session.new.quick.remove": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove from Quick Start"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "从快捷启动中移除"
+          }
+        }
+      }
+    },
     "session.new.recent": {
       "extractionState": "manual",
       "localizations": {

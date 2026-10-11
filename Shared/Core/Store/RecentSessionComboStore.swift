@@ -14,17 +14,15 @@ struct RecentSessionCombo: Codable, Sendable, Equatable, Identifiable, Hashable 
         let runtime = (runtimeName?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap {
             $0.isEmpty ? nil : $0
         } ?? runtimeID
-        let projectRaw = projectName?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let project: String
-        if let projectRaw, !projectRaw.isEmpty {
-            project = projectRaw
-        } else if projectPath.isEmpty {
-            // Store stays nonisolated for background I/O; localize at the call site.
-            project = "—"
-        } else {
-            project = (projectPath as NSString).lastPathComponent
+        return "\(runtime) · \(projectLabel)"
+    }
+
+    var projectLabel: String {
+        if let name = projectName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+            return name
         }
-        return "\(runtime) · \(project)"
+        // Store stays nonisolated for background I/O; localize at the call site.
+        return projectPath.isEmpty ? "—" : (projectPath as NSString).lastPathComponent
     }
 }
 

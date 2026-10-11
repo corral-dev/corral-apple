@@ -32,7 +32,7 @@ struct NewSessionSheet: View {
         }
         .hapticScope(hapticScope)
         .task { await loadOptions() }
-        .onAppear { recentCombos = RecentSessionComboStore.load(hostID: host.hostID) }
+        .onAppear { loadRecentCombos() }
     }
 
     #if os(iOS)
@@ -88,9 +88,10 @@ struct NewSessionSheet: View {
     private var canStart: Bool { options.canCreate }
 
     #if os(macOS)
-    /// A desktop dialog in the quick filters' form: one row of assistant
-    /// capsules, one row of recent-project capsules with More for the whole
-    /// catalog, then the action. Selections are single-choice.
+    /// A desktop dialog in the quick filters' form: a Quick Start row of
+    /// one-click combinations, one row of assistant capsules, one row of
+    /// recent-project capsules with More for the whole catalog, then the
+    /// action. Assistant and project selections are single-choice.
     private var macContent: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("session.new.title")
@@ -98,6 +99,22 @@ struct NewSessionSheet: View {
                 .interfacePadding(.horizontal, Space.xl)
                 .interfacePadding(.top, Space.xl)
                 .interfacePadding(.bottom, Space.lg)
+
+            if !recentCombos.isEmpty {
+                // Starts need no catalog, so this row does not wait for it.
+                VStack(alignment: .leading, spacing: Space.sm * interfaceScale) {
+                    macFieldLabel("session.new.quick")
+                    MacFilterChoices {
+                        ForEach(recentCombos) { quickStartButton($0) }
+                    }
+                }
+                .interfacePadding(.horizontal, Space.xl)
+                .interfacePadding(.bottom, Space.lg)
+                // Starting now and choosing-then-Start read as two zones; the
+                // rule is inset to the content edges, unlike the footer's.
+                Divider()
+                    .interfacePadding(.horizontal, Space.xl)
+            }
 
             VStack(alignment: .leading, spacing: Space.sm * interfaceScale) {
                 macFieldLabel("session.new.runtime")
@@ -166,6 +183,7 @@ struct NewSessionSheet: View {
             }
             .disabled(options.isLoading || isCreating)
             .interfacePadding(.horizontal, Space.xl)
+            .interfacePadding(.top, recentCombos.isEmpty ? 0 : Space.lg)
             .interfacePadding(.bottom, Space.xl)
 
             Divider()
@@ -173,6 +191,37 @@ struct NewSessionSheet: View {
         }
         .interfaceFrame(width: 560)
         .focusEffectDisabled()
+    }
+
+    /// An action, not a choice: it never shows a selected state, and a click
+    /// creates the remembered combination at once.
+    private func quickStartButton(_ combo: RecentSessionCombo) -> some View {
+        let runtime = combo.runtimeName ?? options.runtimes.first { $0.id == combo.runtimeID }?.name ?? combo.runtimeID
+        return MacQuickFilterButton(selected: false) {
+            if creatingComboID == combo.id {
+                ProgressView()
+                    .controlSize(.mini)
+                    .interfaceFrame(width: 16, height: 16)
+            } else if let logo = Palette.runtimeLogoName(combo.runtimeID) {
+                Image(logo)
+                    .resizable()
+                    .renderingMode(.original)
+                    .scaledToFit()
+                    .interfaceFrame(width: 16, height: 16)
+                    .accessibilityHidden(true)
+            }
+            Text(verbatim: combo.projectLabel)
+        } action: {
+            Task { await createFromCombo(combo) }
+        }
+        .disabled(isCreating)
+        .help(String(localized: "session.new.start_in \(runtime) \(combo.projectLabel)")
+            + (combo.projectPath.isEmpty ? "" : "\n" + (combo.projectPath as NSString).abbreviatingWithTildeInPath))
+        .accessibilityLabel(Text(combo.title))
+        .accessibilityHint(Text("session.new.recent.hint"))
+        .contextMenu {
+            Button("session.new.quick.remove", role: .destructive) { deleteCombo(combo) }
+        }
     }
 
     private func macFieldLabel(_ key: LocalizedStringKey) -> some View {
@@ -299,7 +348,7 @@ struct NewSessionSheet: View {
     #endif
 
     private func loadOptions() async {
-        recentCombos = RecentSessionComboStore.load(hostID: host.hostID)
+        loadRecentCombos()
         errorMessage = nil
         await options.load { method in
             guard let client = appModel.client, appModel.connectedHostID == host.hostID else {
@@ -331,6 +380,9 @@ struct NewSessionSheet: View {
         if ProcessInfo.processInfo.arguments.contains("-CorralInspectCreateSession") {
             await create()
         }
+        if ProcessInfo.processInfo.arguments.contains("-CorralInspectCreateRecentSession"), let combo = recentCombos.first {
+            await createFromCombo(combo)
+        }
         #endif
     }
 
@@ -344,7 +396,6 @@ struct NewSessionSheet: View {
         )
     }
 
-    #if os(iOS)
     /// One-tap create from a remembered combo. A stale combo (assistant or
     /// project removed on the host) surfaces the host error in the sheet
     /// instead of silently creating something else.
@@ -357,7 +408,6 @@ struct NewSessionSheet: View {
             comboID: combo.id
         )
     }
-    #endif
 
 
     @ViewBuilder
@@ -431,14 +481,20 @@ struct NewSessionSheet: View {
         }
     }
 
-    #if os(iOS)
-    /// Left-swipe delete on one recent row. State updates immediately so
-    /// the row vanishes without reopening the sheet; store write follows.
+    /// Removes one remembered combo (iPhone left swipe, Mac context menu).
+    /// State updates immediately so it vanishes without reopening the sheet;
+    /// the store write follows.
     private func deleteCombo(_ combo: RecentSessionCombo) {
         recentCombos.removeAll { $0.id == combo.id }
         RecentSessionComboStore.remove(hostID: host.hostID, comboID: combo.id)
     }
-    #endif
+
+    /// Combos remembered before a runtime went dormant stay on disk but never
+    /// surface as a start (active allowlist, as in the catalog).
+    private func loadRecentCombos() {
+        recentCombos = RecentSessionComboStore.load(hostID: host.hostID)
+            .filter { RuntimeEntry.activeIDs.contains($0.runtimeID.lowercased()) }
+    }
 }
 
 /// Pages pushed inside the New Session sheet (iPhone).

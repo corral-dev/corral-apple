@@ -122,7 +122,8 @@ struct MacPromptsCard: View {
                 Text(verbatim: Self.oneLine(prompt))
                     .interfaceFont(.body)
                     .foregroundStyle(.primary)
-                    .lineLimit(3)
+                    .lineLimit(4)
+                    .fixedSize(horizontal: false, vertical: true)
                     .multilineTextAlignment(.leading)
             }
             .interfacePadding(.horizontal, Space.sm + 2)
@@ -156,7 +157,7 @@ struct MacPromptsCard: View {
     }
 
     private static func oneLine(_ prompt: RichMessage) -> String {
-        String((prompt.text ?? "").prefix(400)).split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        (prompt.text ?? "").split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 
     /// `HH:mm` today, `MM-dd HH:mm` earlier; nothing when the history has no time.
