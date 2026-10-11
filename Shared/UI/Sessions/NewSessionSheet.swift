@@ -188,7 +188,7 @@ struct NewSessionSheet: View {
         let recent = Array(named.prefix(SessionListFiltering.recentLimit))
         guard !recent.contains(where: { $0.path == options.selectedProject }),
               let selected = options.projects.first(where: { $0.path == options.selectedProject }) else { return recent }
-        return [selected] + recent
+        return recent + [selected]
     }
 
     private var macFooter: some View {

@@ -495,13 +495,24 @@ final class SessionListFilteringTests: XCTestCase {
             ["codex:wait", "claude:work", "codex:recent", "codex:dual"]
         )
         XCTAssertEqual(
-            SessionListFiltering.apply(sessions: sessions, runtimes: [.codex], projects: [], activeOnly: true,
-                                       keeping: ["codex:open"]).map(\.key),
-            ["codex:wait", "codex:recent", "codex:open", "codex:dual"]
+            SessionListFiltering.apply(sessions: sessions, runtimes: [.codex], projects: [], activeOnly: true).map(\.key),
+            ["codex:wait", "codex:recent", "codex:dual"]
         )
         XCTAssertEqual(SessionListFiltering.activeCount(sessions: sessions), 4)
-        XCTAssertEqual(SessionListFiltering.activeCount(sessions: sessions, keeping: ["codex:open"]), 5)
+        XCTAssertEqual(SessionListFiltering.activeCount(sessions: [sessions[2], sessions[5]]), 0)
         XCTAssertEqual(SessionListFiltering.apply(sessions: sessions, runtimes: [], projects: []).count, 7)
+    }
+
+    func testExtraQuickChoicesAppendAndNeverMoveOnDeselection() {
+        let base = [SessionProjectOption(path: "/first", label: "First"),
+                    SessionProjectOption(path: "/second", label: "Second")]
+        let outside = SessionProjectOption(path: "/outside", label: "Outside")
+        let remembered = SessionListFiltering.appendingChoices(current: base, candidates: [base[1], outside])
+        XCTAssertEqual(remembered.map(\.path), ["/first", "/second", "/outside"])
+        XCTAssertEqual(SessionListFiltering.appendingChoices(current: remembered, candidates: []).map(\.path),
+                       remembered.map(\.path))
+        XCTAssertEqual(SessionListFiltering.appendingChoices(current: remembered, candidates: [outside]).map(\.path),
+                       remembered.map(\.path))
     }
 
     // MARK: - Helpers

@@ -4,13 +4,14 @@ import SwiftUI
 /// Native controls over the unfiltered host window; selections only narrow presentation.
 struct MacSidebarFilters: View {
     let sessions: [SessionSummary]
-    /// Sessions showing a status dot.
+    /// Sessions with waiting, working or recent activity; unread alone is excluded.
     let activeCount: Int
     @Binding var activeOnly: Bool
     @Binding var runtimes: Set<SessionRuntimeFilter>
     @Binding var projects: Set<SessionProjectFilter>
     @State private var showProjects = false
     @State private var choices: [SessionProjectOption] = []
+    @State private var extraChoices: [SessionProjectOption] = []
 
     @Environment(\.interfaceScale) private var interfaceScale
     @Environment(\.colorScheme) private var colorScheme
@@ -80,6 +81,7 @@ struct MacSidebarFilters: View {
         .onChange(of: sessions, initial: true) { _, next in
             choices = SessionListFiltering.reconcileChoices(current: choices, sessions: next)
         }
+        .onChange(of: projects, initial: true) { _, _ in rememberSelectedProjects() }
         .focusEffectDisabled()
         #if DEBUG
         .task(id: choices) {
@@ -92,6 +94,9 @@ struct MacSidebarFilters: View {
             } else if arguments.contains("-CorralInspectMultiFilters") {
                 runtimes = [.claude, .codex]
                 projects = Set(choices.prefix(2).map { .project(path: $0.path) })
+            }
+            if arguments.contains("-CorralInspectLastProjectFilter"), let last = choices.last {
+                projects = [.project(path: last.path)]
             }
             if arguments.contains("-CorralInspectAllFilters") {
                 activeOnly = true
@@ -130,22 +135,26 @@ struct MacSidebarFilters: View {
         .accessibilityLabel(option.path.isEmpty ? Text("sessions.filter.project.none") : Text(verbatim: option.label))
     }
 
-    /// Selected conditions lead the visible scope; surviving candidates keep their order.
+    /// Selection changes colors only; new More choices append and stay after deselection.
     private var projectRowOptions: [SessionProjectOption] {
-        let outside = selectedOutside
-        let chosen = choices.filter { projects.contains(.project(path: $0.path)) }
-        let candidates = choices.filter { !projects.contains(.project(path: $0.path)) }
-        let none = projects.contains(.noProject) ? [SessionProjectOption(path: "", label: "")] : []
-        return none + outside + chosen + candidates
+        let visible = Set(choices.map(\.path))
+        return choices + extraChoices.filter { !visible.contains($0.path) }
     }
 
-    private var selectedOutside: [SessionProjectOption] {
+    private func rememberSelectedProjects() {
         let visible = Set(choices.map(\.path))
-        return projects.compactMap { project in
-            guard case .project(let path) = project, !visible.contains(path) else { return nil }
-            return SessionListFiltering.option(for: path, sessions: sessions)
+        let candidates = projects.compactMap { project -> SessionProjectOption? in
+            switch project {
+            case .project(let path):
+                guard !visible.contains(path) else { return nil }
+                return SessionListFiltering.option(for: path, sessions: sessions)
+            case .noProject: return SessionProjectOption(path: "", label: "")
+            case .all: return nil
+            }
         }.sorted { $0.path < $1.path }
+        extraChoices = SessionListFiltering.appendingChoices(current: extraChoices, candidates: candidates)
     }
+
 }
 
 /// Native capsules; macOS `.bordered` ignores tint, so a selected choice is

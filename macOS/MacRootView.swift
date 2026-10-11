@@ -60,16 +60,19 @@ struct MacRootView: View {
         } message: {
             Text(verbatim: pairingError ?? "")
         }
+        // Presentation bindings are written back with `false` whenever the root
+        // re-renders; clearing an already-empty observable value still
+        // notifies, which cost every session switch an extra update pass.
         .alert(
             "mac.action.failed",
-            isPresented: Binding(get: { workspace.actionError != nil }, set: { if !$0 { workspace.actionError = nil } })
+            isPresented: Binding(get: { workspace.actionError != nil }, set: { if !$0, workspace.actionError != nil { workspace.actionError = nil } })
         ) {
             Button("action.ok", role: .cancel) { workspace.actionError = nil }
         } message: {
             Text(verbatim: workspace.actionError ?? "")
         }
         .alert("settings.notifications", isPresented: Binding(
-            get: { notifications.failure != nil }, set: { if !$0 { notifications.failure = nil } }
+            get: { notifications.failure != nil }, set: { if !$0, notifications.failure != nil { notifications.failure = nil } }
         )) {
             Button("action.ok", role: .cancel) { notifications.failure = nil }
         } message: { Text(verbatim: notifications.failure ?? "") }
@@ -169,7 +172,7 @@ struct MacRootView: View {
             "terminal.panel.close_running.title",
             isPresented: Binding(
                 get: { workspace.pendingTerminalClose != nil },
-                set: { if !$0 { workspace.pendingTerminalClose = nil } }
+                set: { if !$0, workspace.pendingTerminalClose != nil { workspace.pendingTerminalClose = nil } }
             ),
             presenting: workspace.pendingTerminalClose
         ) { shell in

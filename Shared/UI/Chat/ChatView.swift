@@ -168,17 +168,6 @@ struct ChatView: View {
         let latestID: String? = activity != nil
             ? "activity"
             : (store.prompts.isEmpty ? items.last?.id : "prompts")
-#if os(macOS)
-        return pooledList(items: items, separators: timeSeparators, activity: activity)
-            .modifier(MacConversationTextSelection(
-                identity: ObjectIdentifier(store),
-                messages: items.compactMap { item in
-                    if case .message(let message) = item { return message }
-                    return nil
-                },
-                documentOverride: textDocument
-            ))
-#else
         return ChatScrollView(
             scrollToLatestRequest: scrollToLatestRequest + promptSubmission,
             latestID: latestID,
@@ -200,12 +189,19 @@ struct ChatView: View {
                         .interfaceFrame(maxWidth: .infinity)
                 }
                 if store.hasMoreHistory {
+                    #if os(macOS)
+                    // Owner correction 2026-10-11: no Load earlier control on the
+                    // Mac. Reaching the top loads by itself; the reserved row only
+                    // shows progress and keeps its height so nothing shifts.
+                    ChatEarlierHistoryProgress(isLoading: store.isLoadingHistory)
+                    #else
                     ChatLoadEarlierButton(
                         pullProgress: loadEarlierPullProgress,
                         isLoading: store.isLoadingHistory
                     ) {
                         historyRequested = true
                     }
+                    #endif
                 }
             }
         ) {
@@ -262,95 +258,17 @@ struct ChatView: View {
                     .id("activity")
             }
         }
-#endif
+        #if os(macOS)
+        .modifier(MacConversationTextSelection(
+            identity: ObjectIdentifier(store),
+            messages: items.compactMap { item in
+                if case .message(let message) = item { return message }
+                return nil
+            },
+            documentOverride: textDocument
+        ))
+        #endif
     }
-
-#if os(macOS)
-    /// Pooled table path: one native list with a bounded reusable cell pool
-    /// instead of one SwiftUI node per message. Trailing cards ride as rows
-    /// so scroll anchors keep their meaning; the header stays fixed above.
-    @State private var pooledFollowsLatest = true
-    @State private var pooledLatestBump = 0
-
-    private func pooledList(items: [ConversationTimelineItem],
-                            separators: [String: Date],
-                            activity: ChatActivityState?) -> some View {
-        var rows = items.map(MacPooledRow.timeline)
-        if !store.prompts.isEmpty { rows.append(.prompts) }
-        if activity != nil { rows.append(.activity) }
-        var gaps: [String: CGFloat] = [:]
-        gaps.reserveCapacity(items.count)
-        for (index, item) in items.enumerated() {
-            gaps[item.id] = ChatTimelineRhythm.leadingGap(before: index, in: items)
-        }
-        return VStack(spacing: 0) {
-            if store.loadError != nil || store.hasMoreHistory {
-                HStack(spacing: Space.xs * interfaceScale) {
-                    if let loadError = store.loadError {
-                        Label(loadError, systemImage: "exclamationmark.triangle")
-                            .interfaceFont(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                    if store.hasMoreHistory {
-                        ChatLoadEarlierButton(
-                            pullProgress: nil,
-                            isLoading: store.isLoadingHistory
-                        ) {
-                            historyRequested = true
-                        }
-                    }
-                }
-                .interfaceFrame(maxWidth: .infinity)
-            }
-            MacPooledConversationList(
-                rows: rows,
-                separators: separators,
-                gaps: gaps,
-                prompts: store.prompts,
-                activity: activity,
-                runtimeID: runtimeID,
-                isConnected: isConnected,
-                isSending: isSending,
-                questionSubmissionState: store.questionSubmissionState,
-                onQuestionSubmit: submitQuestion,
-                onRetryMessage: onRetryMessage,
-                onNeedDetails: { await store.fetchToolDetails(sourceSeqs: $0) },
-                detailSourceID: ObjectIdentifier(store),
-                interfaceScale: interfaceScale,
-                sessionTextScale: sessionTextScale,
-                colorScheme: colorScheme,
-                document: textDocument,
-                onNeedEarlier: store.hasMoreHistory ? {
-                    let oldest = store.oldestSequence
-                    await store.loadEarlier()
-                    return store.oldestSequence < oldest
-                } : nil,
-                scrollToMessageID: $revealedMessageID,
-                scrollToLatestRequest: scrollToLatestRequest + promptSubmission + pooledLatestBump,
-                onFollowChange: { pooledFollowsLatest = $0 }
-            )
-            .interfaceFrame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .overlay(alignment: .bottomTrailing) {
-            if !pooledFollowsLatest {
-                Button { pooledLatestBump += 1 } label: {
-                    Image(systemName: "chevron.down")
-                        .interfaceFont(.body.weight(.semibold))
-                        .foregroundStyle(.primary)
-                        .interfaceFrame(width: TouchTarget.minimum, height: TouchTarget.minimum)
-                        .contentShape(Circle())
-                        .background(.bar, in: Circle())
-                        .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
-                }
-                .buttonStyle(PressableButtonStyle())
-                .accessibilityLabel(Text("chat.jump_to_latest"))
-                .interfacePadding(.trailing, Space.base)
-                .interfacePadding(.bottom, Space.sm)
-            }
-        }
-        .onAppear { pooledFollowsLatest = true }
-    }
-#endif
 
     /// 对话流底部的安静提示。loading 与空态走别的分支，这里只处理 messageList。
     private var activityState: ChatActivityState? {
@@ -382,6 +300,29 @@ struct ChatView: View {
 /// Quiet text control. Must not use the accent-tinted bordered capsule — that
 /// reads as another user bubble and collides with the first message.
 /// A stable icon slot avoids jumps; minimum height still permits Dynamic Type.
+#if os(macOS)
+/// Top row of a conversation with older history: empty at rest, a small
+/// progress indicator while the next page loads.
+private struct ChatEarlierHistoryProgress: View {
+    var isLoading: Bool
+
+    var body: some View {
+        ZStack {
+            if isLoading {
+                ProgressView()
+                    .interfaceControlSize(.small)
+                    .transition(.opacity)
+            }
+        }
+        .interfaceFrame(maxWidth: .infinity)
+        .interfaceFrame(height: ChatLoadEarlierLayout.height)
+        .accessibilityElement()
+        .accessibilityLabel(isLoading ? Text("chat.loading_earlier") : Text(""))
+        .accessibilityHidden(!isLoading)
+    }
+}
+#endif
+
 private struct ChatLoadEarlierButton: View {
     @Environment(\.interfaceScale) private var interfaceScale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion

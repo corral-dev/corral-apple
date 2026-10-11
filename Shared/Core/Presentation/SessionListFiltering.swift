@@ -206,6 +206,19 @@ enum SessionListFiltering {
         return next
     }
 
+    /// Remember extra quick choices in first-seen order, independently of selection.
+    static func appendingChoices(
+        current: [SessionProjectOption], candidates: [SessionProjectOption]
+    ) -> [SessionProjectOption] {
+        let labels = Dictionary(candidates.map { ($0.path, $0.label) }, uniquingKeysWith: { _, latest in latest })
+        var next = current.map { SessionProjectOption(path: $0.path, label: labels[$0.path] ?? $0.label) }
+        var seen = Set(current.map(\.path))
+        for candidate in candidates where seen.insert(candidate.path).inserted {
+            next.append(candidate)
+        }
+        return next
+    }
+
     /// Active quick filter membership: exactly the sessions that show an
     /// activity dot (waiting / working / recent). Red unread alone is not
     /// active — it is only an explanation of unseen messages and can coexist
@@ -214,13 +227,11 @@ enum SessionListFiltering {
         SessionPresentation.activityMarker(for: session) != nil
     }
 
-    /// Visible sessions in the Active dimension. `keeping` lists sessions open
-    /// in the workspace: opening an unread one marks it read, which must not
-    /// pull it out from under the reader.
-    static func activeCount(sessions: [SessionSummary], keeping: Set<String> = []) -> Int {
+    /// Unread-only and idle open panes never count as activity.
+    static func activeCount(sessions: [SessionSummary]) -> Int {
         sessions.reduce(0) { count, session in
             let counted = ActiveRuntimeVisibility.isListVisible(session)
-                && (isActive(session) || keeping.contains(session.key))
+                && isActive(session)
             return count + (counted ? 1 : 0)
         }
     }
@@ -232,12 +243,11 @@ enum SessionListFiltering {
         sessions: [SessionSummary],
         runtimes: Set<SessionRuntimeFilter>,
         projects: Set<SessionProjectFilter>,
-        activeOnly: Bool = false,
-        keeping: Set<String> = []
+        activeOnly: Bool = false
     ) -> [SessionSummary] {
         sessions.filter { session in
             ActiveRuntimeVisibility.isListVisible(session)
-                && (!activeOnly || isActive(session) || keeping.contains(session.key))
+                && (!activeOnly || isActive(session))
                 && (runtimes.isEmpty || runtimes.contains { $0.matches(session) })
                 && (projects.isEmpty || projects.contains { $0.matches(session) })
         }

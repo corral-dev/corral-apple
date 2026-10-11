@@ -146,6 +146,7 @@ struct SessionProjectFilterRow: View {
     let choices: [SessionProjectOption]
     /// Selected projects outside the snapshot, in stable path order.
     let selectedOutside: [SessionProjectOption]
+    @State private var extraChoices: [SessionProjectOption] = []
     let onMore: () -> Void
 
     var body: some View {
@@ -158,30 +159,14 @@ struct SessionProjectFilterRow: View {
                         select(.all)
                     }
                     .accessibilityLabel(Text("sessions.filter.all"))
-                    if selected.contains(.noProject) {
-                        SessionFilterChip(selected: true) {
-                            Text("sessions.filter.project.none")
-                        } action: {
-                            select(.noProject)
-                        }
-                        .accessibilityLabel(Text("sessions.filter.project.none"))
-                    }
-                    ForEach(selectedOutside, id: \.path) { outside in
-                        SessionFilterChip(selected: true) {
-                            projectChipText(for: outside)
-                        } action: {
-                            select(.project(path: outside.path))
-                        }
-                        .accessibilityLabel(Text(outside.label))
-                    }
-                    ForEach(choices, id: \.path) { option in
-                        let isSelected = selected.contains(.project(path: option.path))
+                    ForEach(rowOptions, id: \.path) { option in
+                        let isSelected = selected.contains(option.path.isEmpty ? .noProject : .project(path: option.path))
                         SessionFilterChip(selected: isSelected) {
                             projectChipText(for: option)
                         } action: {
-                            select(.project(path: option.path))
+                            select(option.path.isEmpty ? .noProject : .project(path: option.path))
                         }
-                        .accessibilityLabel(Text(option.label))
+                        .accessibilityLabel(option.path.isEmpty ? Text("sessions.filter.project.none") : Text(option.label))
                     }
                 }
             }
@@ -196,9 +181,14 @@ struct SessionProjectFilterRow: View {
             .accessibilityLabel(Text("sessions.filter.more"))
         }
         .padding(.horizontal, SessionListLayout.rowHorizontal)
+        .onChange(of: selected, initial: true) { _, _ in rememberSelectedProjects() }
+        .onChange(of: selectedOutside) { _, _ in rememberSelectedProjects() }
         #if DEBUG
         .task(id: choices) {
-            if ProcessInfo.processInfo.arguments.contains("-CorralInspectSelectedFilters"),
+            if ProcessInfo.processInfo.arguments.contains("-CorralInspectLastProjectFilter"),
+               let last = choices.last {
+                selected = [.project(path: last.path)]
+            } else if ProcessInfo.processInfo.arguments.contains("-CorralInspectSelectedFilters"),
                  selected.isEmpty, let first = choices.first {
                 selected = [.project(path: first.path)]
             } else if ProcessInfo.processInfo.arguments.contains("-CorralInspectMultiFilters"),
@@ -209,9 +199,22 @@ struct SessionProjectFilterRow: View {
         #endif
     }
 
+    private var rowOptions: [SessionProjectOption] {
+        let visible = Set(choices.map(\.path))
+        return choices + extraChoices.filter { !visible.contains($0.path) }
+    }
+
+    private func rememberSelectedProjects() {
+        var candidates = selectedOutside
+        if selected.contains(.noProject) { candidates.append(SessionProjectOption(path: "", label: "")) }
+        extraChoices = SessionListFiltering.appendingChoices(current: extraChoices, candidates: candidates)
+    }
+
     @ViewBuilder
     private func projectChipText(for option: SessionProjectOption) -> some View {
-        if option.label == "~" {
+        if option.path.isEmpty {
+            Text("sessions.filter.project.none")
+        } else if option.label == "~" {
             Text("sessions.project.home")
         } else {
             Text(option.label)

@@ -34,10 +34,8 @@ struct MacSidebar: View {
     private var sessions: [SessionSummary] { feed.listStore.windowSessions }
     private var filteredSessions: [SessionSummary] {
         SessionListFiltering.apply(sessions: sessions, runtimes: runtimeFilter, projects: projectFilter,
-                                   activeOnly: activeOnly, keeping: openKeys)
+                                   activeOnly: activeOnly)
     }
-    /// Sessions open in the workspace stay listed while Active is on.
-    private var openKeys: Set<String> { Set(workspace.paneKeys) }
     private var hasActiveScope: Bool {
         !filter.isEmpty || activeOnly || !runtimeFilter.isEmpty || !projectFilter.isEmpty
     }
