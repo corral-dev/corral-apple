@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Native controls over the unfiltered host window; selections only narrow presentation.
@@ -11,70 +12,50 @@ struct MacSidebarFilters: View {
     @State private var showProjects = false
     @State private var choices: [SessionProjectOption] = []
 
+    @Environment(\.interfaceScale) private var interfaceScale
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.controlActiveState) private var activeState
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            MacFilterChoices {
-                // Its own dimension: the runtime row's All leaves it alone.
-                MacQuickFilterButton(selected: activeOnly) {
+        VStack(alignment: .leading, spacing: 4 * interfaceScale) {
+            HStack(spacing: 4 * interfaceScale) {
+                MacQuickFilterButton(selected: activeOnly, sidebar: true) {
                     Text("sessions.filter.active")
-                    Text(verbatim: activeCount.formatted())
-                        .monospacedDigit()
-                        .opacity(0.75)
-                } action: {
-                    activeOnly.toggle()
-                }
+                    Text(verbatim: activeCount.formatted()).monospacedDigit().opacity(0.75)
+                } action: { activeOnly.toggle() }
+                .fixedSize()
                 .accessibilityLabel(Text("sessions.filter.active"))
                 .accessibilityValue(Text(verbatim: activeCount.formatted()))
-                Divider()
-                    .interfaceFrame(height: 16)
-                ForEach(SessionRuntimeFilter.ordered, id: \.self) { runtime in
-                    MacQuickFilterButton(selected: runtime == .all ? runtimes.isEmpty : runtimes.contains(runtime)) {
-                        if runtime == .all {
-                            Text("sessions.filter.all")
-                        } else {
+                .accessibilityIdentifier("corral.filter.active")
+                Divider().interfaceFrame(width: 1, height: 16)
+                HStack(spacing: 4 * interfaceScale) {
+                    ForEach(SessionRuntimeFilter.ordered.filter { $0 != .all }, id: \.self) { runtime in
+                        MacQuickFilterButton(selected: runtimes.contains(runtime), sidebar: true, labelWidth: 18) {
                             if let logo = Palette.runtimeLogoName(runtime.rawValue) {
-                                Image(logo)
+                                Image(runtime == .claude && runtimes.contains(runtime) ? "RuntimeClaudeMonochrome" : logo)
                                     .resizable()
-                                    .renderingMode(.original)
+                                    .renderingMode(runtime == .claude && runtimes.contains(runtime) ? .template : .original)
                                     .scaledToFit()
-                                    .interfaceFrame(width: 16, height: 16)
-                                    .accessibilityHidden(true)
+                                    .interfaceFrame(width: 14, height: 18)
+                                    .environment(\.colorScheme, logoScheme(selected: runtimes.contains(runtime)))
                             }
-                            Text(verbatim: Palette.runtimeDisplayName(runtime.rawValue))
+                        } action: {
+                            SessionListFiltering.toggle(runtime, all: .all, in: &runtimes)
                         }
-                    } action: {
-                        SessionListFiltering.toggle(runtime, all: .all, in: &runtimes)
+                        .accessibilityLabel(Text(verbatim: Palette.runtimeDisplayName(runtime.rawValue)))
+                        .help(Text(verbatim: Palette.runtimeDisplayName(runtime.rawValue)))
+                        .accessibilityIdentifier("corral.filter.runtime." + runtime.rawValue)
                     }
                 }
+                Spacer(minLength: 0)
             }
             .accessibilityLabel(Text("sessions.filter.runtime"))
-            HStack(spacing: Space.xs) {
+
+            HStack(spacing: 6 * interfaceScale) {
                 MacFilterChoices {
-                    MacQuickFilterButton(selected: projects.isEmpty) {
-                        Text("sessions.filter.all")
-                    } action: {
-                        projects.removeAll()
-                    }
-                    if projects.contains(.noProject) {
-                        MacQuickFilterButton(selected: true) {
-                            Text("sessions.filter.project.none")
-                        } action: {
-                            projects.remove(.noProject)
-                        }
-                    }
-                    ForEach(selectedOutside + choices, id: \.path) { option in
-                        MacQuickFilterButton(selected: projects.contains(.project(path: option.path))) {
-                            if option.label == "~" { Text("sessions.project.home") }
-                            else { Text(verbatim: option.label) }
-                        } action: {
-                            SessionListFiltering.toggle(.project(path: option.path), all: .all, in: &projects)
-                        }
-                        .help(Text(verbatim: option.path))
-                    }
+                    ForEach(projectRowOptions, id: \.path) { option in projectButton(option) }
                 }
-                Button {
-                    showProjects = true
-                } label: {
+                Button { showProjects = true } label: {
                     Image(systemName: "ellipsis")
                         .interfaceFont(.body.weight(.medium))
                         .foregroundStyle(.secondary)
@@ -110,9 +91,50 @@ struct MacSidebarFilters: View {
                 runtimes = [.claude, .codex]
                 projects = Set(choices.prefix(2).map { .project(path: $0.path) })
             }
+            if arguments.contains("-CorralInspectAllFilters") {
+                activeOnly = true
+                runtimes = Set(SessionRuntimeFilter.ordered.filter { $0 != .all })
+                projects = Set(choices.prefix(2).map { .project(path: $0.path) })
+            }
+            if arguments.contains("-CorralInspectDarkFilters") { NSApp.appearance = NSAppearance(named: .darkAqua) }
             if arguments.contains("-CorralInspectProjectPicker") { showProjects = true }
         }
         #endif
+    }
+
+    private func logoScheme(selected: Bool) -> ColorScheme {
+        guard selected else { return colorScheme }
+        #if DEBUG
+        if InspectionLaunchOptions.forcesKeyWindowControls { return colorScheme == .dark ? .light : .dark }
+        #endif
+        return activeState == .inactive ? colorScheme : (colorScheme == .dark ? .light : .dark)
+    }
+
+    private func projectButton(_ option: SessionProjectOption) -> some View {
+        let selected = option.path.isEmpty ? projects.contains(.noProject) : projects.contains(.project(path: option.path))
+        return MacQuickFilterButton(selected: selected, sidebar: true) {
+            Group {
+                if option.path.isEmpty { Text("sessions.filter.project.none") }
+                else if option.label == "~" { Text("sessions.project.home") }
+                else { Text(verbatim: option.label) }
+            }
+            .lineLimit(1).truncationMode(.tail)
+            .frame(maxWidth: 120 * interfaceScale)
+        } action: {
+            let choice: SessionProjectFilter = option.path.isEmpty ? .noProject : .project(path: option.path)
+            SessionListFiltering.toggle(choice, all: .all, in: &projects)
+        }
+        .help(Text(verbatim: option.path))
+        .accessibilityLabel(option.path.isEmpty ? Text("sessions.filter.project.none") : Text(verbatim: option.label))
+    }
+
+    /// Selected conditions lead the visible scope; surviving candidates keep their order.
+    private var projectRowOptions: [SessionProjectOption] {
+        let outside = selectedOutside
+        let chosen = choices.filter { projects.contains(.project(path: $0.path)) }
+        let candidates = choices.filter { !projects.contains(.project(path: $0.path)) }
+        let none = projects.contains(.noProject) ? [SessionProjectOption(path: "", label: "")] : []
+        return none + outside + chosen + candidates
     }
 
     private var selectedOutside: [SessionProjectOption] {
@@ -130,7 +152,10 @@ struct MacSidebarFilters: View {
 /// Shared with the New Session dialog.
 struct MacQuickFilterButton<Content: View>: View {
     @Environment(\.controlActiveState) private var activeState
+    @Environment(\.interfaceScale) private var interfaceScale
     let selected: Bool
+    var sidebar = false
+    var labelWidth: CGFloat? = nil
     @ViewBuilder let content: () -> Content
     let action: () -> Void
 
@@ -164,6 +189,7 @@ struct MacQuickFilterButton<Content: View>: View {
     private var button: some View {
         Button(action: action) {
             HStack(spacing: Space.xs) { content() }
+                .frame(width: labelWidth.map { $0 * interfaceScale })
                 .interfaceFont(.callout.weight(selected ? .semibold : .medium))
                 .foregroundStyle(labelColor)
                 .lineLimit(1)

@@ -229,6 +229,13 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
         let anchor = origin.characterIndexForInsertion(at: origin.convert(event.locationInWindow, from: nil))
         var current = anchor
         window.makeFirstResponder(origin)
+        #if DEBUG
+        Self.selectionTrace = [("anchor", anchor)]
+        if let clip = scrollView?.contentView {
+            Self.selectionTrace.append(("offDown", Int(clip.bounds.origin.y)))
+            Self.selectionTrace.append(("frDown", Int(origin.convert(origin.bounds, to: nil).minY)))
+        }
+        #endif
         func select(_ index: Int, stillSelecting: Bool) {
             current = index
             let range = NSRange(location: min(anchor, index), length: abs(index - anchor))
@@ -246,15 +253,41 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
             case .periodic:
                 // Holding still past an edge keeps scrolling, like native text.
                 guard let scrollView, Self.autoscroll(scrollView, toward: pointer) else { continue }
+                #if DEBUG
+                Self.selectionTrace.append(("scroll", Int(scrollView.contentView.bounds.origin.y)))
+                #endif
             default:
                 pointer = next.locationInWindow
-                select(characterIndex(at: pointer, in: window, anchor: anchor) ?? current, stillSelecting: false)
+                let routed = characterIndex(at: pointer, in: window, anchor: anchor)
+                #if DEBUG
+                Self.selectionTrace.append(("up", routed ?? -1))
+                if let clip = scrollView?.contentView {
+                    Self.selectionTrace.append(("offUp", Int(clip.bounds.origin.y)))
+                    Self.selectionTrace.append(("frUp", Int(origin.convert(origin.bounds, to: nil).minY)))
+                }
+                #endif
+                select(routed ?? current, stillSelecting: false)
                 return
             }
-            if next.type == .leftMouseDragged, let scrollView { Self.autoscroll(scrollView, toward: pointer) }
-            select(characterIndex(at: pointer, in: window, anchor: anchor) ?? current, stillSelecting: true)
+            if next.type == .leftMouseDragged, let scrollView {
+                if Self.autoscroll(scrollView, toward: pointer) {
+                    #if DEBUG
+                    Self.selectionTrace.append(("scroll", Int(scrollView.contentView.bounds.origin.y)))
+                    #endif
+                }
+            }
+            let routed = characterIndex(at: pointer, in: window, anchor: anchor)
+            #if DEBUG
+            Self.selectionTrace.append(("drag", routed ?? -1))
+            #endif
+            select(routed ?? current, stillSelecting: true)
         }
     }
+
+    #if DEBUG
+    /// Per-step routing trace of the in-progress drag inspection.
+    static var selectionTrace: [(String, Int)] = []
+    #endif
 
     /// The insertion index under a window point, resolved against the
     /// realized blocks of this conversation (top to bottom in reading order).
@@ -262,10 +295,12 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
     /// the near edge seen from the anchor; above or below every realized block
     /// it is the outermost realized boundary, which autoscroll then extends.
     func characterIndex(at point: CGPoint, in window: NSWindow, anchor: Int) -> Int? {
+        // Screen order, not document order: lazy rows realize top to bottom,
+        // but the network must not assume the source array stays that way.
         let realized = blocks.compactMap { block -> (Block, NSTextView, CGRect)? in
             guard let view = block.view, view.window === window, !view.isHiddenOrHasHiddenAncestor else { return nil }
             return (block, view, view.convert(view.bounds, to: nil))
-        }
+        }.sorted { $0.2.maxY > $1.2.maxY }
         guard let last = realized.last else { return nil }
         for (index, (block, view, frame)) in realized.enumerated() {
             if point.y > frame.maxY {
@@ -283,6 +318,40 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
         }
         return NSMaxRange(last.0.range)
     }
+
+    #if DEBUG
+    /// The storage range of the block currently hosting a realized view.
+    func range(of view: NSTextView) -> NSRange? {
+        blocks.first { $0.view === view }?.range
+    }
+
+    /// One-shot drag-routing diagnostics for the selection inspection: the
+    /// on-screen geometry of every realized block, the insertion index the
+    /// pointer resolves to, and what the shared routing returns for it.
+    func debugRoute(at point: CGPoint, in window: NSWindow) -> [String: Any] {
+        var blocksInfo: [[String: Any]] = []
+        let realized = blocks.compactMap { block -> (Block, NSTextView, CGRect)? in
+            guard let view = block.view, view.window === window, !view.isHiddenOrHasHiddenAncestor else { return nil }
+            return (block, view, view.convert(view.bounds, to: nil))
+        }
+        for (block, view, frame) in realized {
+            let local = view.convert(point, from: nil)
+            let contains = view.bounds.contains(local)
+            blocksInfo.append([
+                "range": "\(block.range)",
+                "frame": NSStringFromRect(frame),
+                "bounds": NSStringFromRect(view.bounds),
+                "flipped": view.isFlipped,
+                "visible": NSStringFromRect(view.convert(view.visibleRect, to: nil)),
+                "local": NSStringFromPoint(local),
+                "contains": contains,
+                "insertion": contains ? view.characterIndexForInsertion(at: local) : -1,
+            ])
+        }
+        return ["blockCount": blocks.count, "realized": blocksInfo,
+                "result": characterIndex(at: point, in: window, anchor: 0) ?? -1]
+    }
+    #endif
 
     /// Scrolls the conversation when the pointer is beyond its visible content
     /// (content insets exclude the toolbar and composer overlap). Returns

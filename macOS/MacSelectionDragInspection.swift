@@ -9,7 +9,6 @@ import AppKit
 @MainActor
 enum MacSelectionDragInspection {
     private static var workspace: MacWorkspace!
-    private static var key = ""
 
     private struct Block {
         let view: NSTextView
@@ -17,37 +16,40 @@ enum MacSelectionDragInspection {
         let frame: CGRect
     }
 
+    private enum EndKind { case firstLine, gapAbove, gapBelow }
+
     static func run(key: String, workspace: MacWorkspace) async {
         self.workspace = workspace
-        self.key = key
         guard ProcessInfo.processInfo.arguments.contains("-CorralInspectSelectionDrag"),
               ProcessInfo.processInfo.environment["CORRAL_INSPECTION_SESSION_KEY"] == key else { return }
         let output = URL(fileURLWithPath: "/tmp/corral-mac-selection-drag.json")
         for _ in 0..<60 {
             try? await Task.sleep(for: .milliseconds(250))
             guard let window = NSApp.windows.first(where: { $0.isVisible && $0.title == "Corral" }),
-                  let content = window.contentView, let pane = workspace.paneFrames[key] else { continue }
-            let blocks = linkedBlocks(in: content, pane: pane)
-            guard blocks.count >= 3 else { continue }
+                  let content = window.contentView, workspace.paneFrames[key] != nil else { continue }
             // Let the conversation settle at its resting position first.
             try? await Task.sleep(for: .seconds(2))
-            let settled = linkedBlocks(in: content, pane: pane)
-            guard settled.count >= 3 else { continue }
+            guard linkedBlocks(in: content, pane: workspace.paneFrames[key]!).count >= 3 else { continue }
             var results: [[String: Any]] = []
-            let upper = settled[0], middle = settled[1], lower = settled[2]
-            let cases: [(String, Block, CGPoint, Block, CGPoint)] = [
-                ("down-into-next", upper, firstLine(upper), middle, firstLine(middle)),
-                ("down-two-blocks", upper, firstLine(upper), lower, firstLine(lower)),
-                ("down-into-gap", upper, firstLine(upper), middle, gapAbove(middle)),
-                ("up-into-previous", middle, firstLine(middle), upper, firstLine(upper)),
-                ("up-two-blocks", lower, firstLine(lower), upper, firstLine(upper)),
-                ("up-into-gap", middle, firstLine(middle), upper, gapBelow(upper)),
+            // Offsets into a hit-verified triple (upper, middle, lower); the
+            // triple itself is resolved fresh inside each case.
+            let specs: [(String, Int, Int, EndKind)] = [
+                ("down-into-next", 0, 1, .firstLine),
+                ("down-two-blocks", 0, 2, .firstLine),
+                ("down-into-gap", 0, 1, .gapAbove),
+                ("up-into-previous", 1, 0, .firstLine),
+                ("up-two-blocks", 2, 0, .firstLine),
+                ("up-into-gap", 1, 0, .gapBelow),
+                // A press without travel must leave a caret, not a selection.
+                ("click-places-caret", 1, 1, .firstLine),
             ]
-            for (name, from, start, to, end) in cases {
-                results.append(await drag(name: name, window: window, content: content, pane: pane,
-                                          from: from, start: start, to: to, end: end))
+            for (name, fromOffset, toOffset, endKind) in specs {
+                results.append(await drag(name: name, window: window, content: content,
+                                          pane: workspace.paneFrames[key]!,
+                                          fromOffset: fromOffset, toOffset: toOffset, endKind: endKind))
             }
-            let report: [String: Any] = ["linkedVisibleBlocks": settled.count, "cases": results,
+            let report: [String: Any] = ["linkedVisibleBlocks": linkedBlocks(in: content, pane: workspace.paneFrames[key]!).count,
+                                         "cases": results,
                                          "allPassed": results.allSatisfy { ($0["passed"] as? Bool) == true }]
             if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
                 try? data.write(to: output)
@@ -57,11 +59,58 @@ enum MacSelectionDragInspection {
         try? "{\"error\":\"Fewer than three visible linked message blocks\"}".write(to: output, atomically: true, encoding: .utf8)
     }
 
+    /// Three consecutive blocks whose first lines all land on their own text
+    /// views. Rows under the toolbar or behind floating buttons fail this;
+    /// a real drag can only start on text the pointer can reach.
+    private static func anchorTriple(in blocks: [Block], content: NSView) -> (Block, Block, Block)? {
+        guard blocks.count >= 3 else { return nil }
+        for i in 0...(blocks.count - 3) {
+            let triple = (blocks[i], blocks[i + 1], blocks[i + 2])
+            let points = [firstLine(triple.0), firstLine(triple.1), firstLine(triple.2)]
+            let views = [triple.0.view, triple.1.view, triple.2.view]
+            let ok = zip(points, views).allSatisfy { hitTest($0, in: content) === $1 }
+            if ok { return triple }
+        }
+        return nil
+    }
+
+    private static func hitTest(_ windowPoint: CGPoint, in content: NSView) -> NSView? {
+        content.hitTest(content.superview?.convert(windowPoint, from: nil) ?? windowPoint)
+    }
+
     private static func drag(name: String, window: NSWindow, content: NSView, pane: CGRect,
-                             from: Block, start: CGPoint, to: Block, end: CGPoint) async -> [String: Any] {
-        from.view.setSelectedRange(NSRange(location: 0, length: 0))
+                             fromOffset: Int, toOffset: Int, endKind: EndKind) async -> [String: Any] {
+        func fail(_ reason: String) -> [String: Any] {
+            ["case": name, "passed": false, "error": reason]
+        }
+        guard let triple = anchorTriple(in: linkedBlocks(in: content, pane: pane), content: content) else {
+            return fail("no hit-verified triple")
+        }
+        let roles = [triple.0, triple.1, triple.2]
+        guard roles.indices.contains(fromOffset), roles.indices.contains(toOffset) else { return fail("bad offsets") }
+        // Fresh points: the live conversation reflows (streaming, focus), so
+        // anything computed before this case's settle sleep may be stale.
+        roles[fromOffset].view.setSelectedRange(NSRange(location: 0, length: 0))
         window.makeFirstResponder(nil)
         try? await Task.sleep(for: .milliseconds(300))
+        let fresh = linkedBlocks(in: content, pane: pane)
+        func refind(_ block: Block) -> Block? {
+            fresh.first { $0.view === block.view }
+        }
+        guard let from = refind(roles[fromOffset]), let to = refind(roles[toOffset]) else {
+            return fail("anchor recycled during settle")
+        }
+        guard hitTest(firstLine(from), in: content) === from.view else {
+            return fail("anchor covered after settle")
+        }
+        let start = firstLine(from)
+        let end: CGPoint = {
+            switch endKind {
+            case .firstLine: return firstLine(to)
+            case .gapAbove: return gapAbove(to)
+            case .gapBelow: return gapBelow(to)
+            }
+        }()
         let before = linkedBlocks(in: content, pane: pane).map(\.frame)
         let startIndex = characterIndex(in: from.view, window: start)
         let endIndex = characterIndex(in: to.view, window: end)
@@ -80,16 +129,22 @@ enum MacSelectionDragInspection {
         if let up = event(.leftMouseUp, end) { NSApp.postEvent(up, atStart: false) }
         let hit = content.hitTest(content.superview?.convert(start, from: nil) ?? start)
         let wasKey = window.isKeyWindow, wasActive = NSApp.isActive
+        var route: [String: Any] = [:]
+        if let document = from.view.layoutManager?.delegate as? MacConversationTextDocument {
+            let fromLocal = from.view.convert(start, from: nil)
+            let toLocal = to.view.convert(end, from: nil)
+            route = ["startInBounds": from.view.bounds.contains(fromLocal),
+                     "endInBounds": to.view.bounds.contains(toLocal),
+                     "startLocal": NSStringFromPoint(fromLocal),
+                     "endLocal": NSStringFromPoint(toLocal),
+                     "fromRange": "\(document.range(of: from.view) ?? NSRange(location: -1, length: 0))",
+                     "toRange": "\(document.range(of: to.view) ?? NSRange(location: -1, length: 0))",
+                     "startRoute": document.debugRoute(at: start, in: window),
+                     "endRoute": document.debugRoute(at: end, in: window)]
+        }
         if let down {
             // Reproduce the window's click path without activating the app
             // (NSApp/NSWindow delivery would bring a background app forward).
-            let steps = Set((ProcessInfo.processInfo.environment["CORRAL_INSPECTION_DRAG_STEPS"] ?? "")
-                .split(separator: ",").map(String.init))
-            if steps.contains("focus") { workspace.focus(key) }
-            if steps.contains("claim") {
-                DispatchQueue.main.async { [weak window] in workspace.claimKeysAfterClick(in: key, window: window) }
-            }
-            if steps.contains("responder"), let hit, hit.acceptsFirstResponder { window.makeFirstResponder(hit) }
             hit?.mouseDown(with: down)
         }
         var leftovers = 0
@@ -110,15 +165,34 @@ enum MacSelectionDragInspection {
                 "maxBlockShift": shift, "passed": passed,
                 "firstResponderIsMessage": window.firstResponder is NSTextView,
                 "hit": hit.map { String(describing: type(of: $0)) } ?? "nil", "hitIsStartBlock": hit === from.view,
-                "windowWasKey": wasKey, "appWasActive": wasActive, "leftoverEvents": leftovers]
+                "hitPath": hitPath(of: hit, under: content),
+                "windowWasKey": wasKey, "appWasActive": wasActive, "leftoverEvents": leftovers,
+                "trace": MacConversationTextDocument.selectionTrace.map { "\($0.0):\($0.1)" },
+                "route": route]
+    }
+
+    /// Superview chain over a hit view, naming whatever covers the text.
+    private static func hitPath(of hit: NSView?, under content: NSView) -> [String] {
+        var path: [String] = []
+        var current = hit
+        while let view = current, view !== content, path.count < 6 {
+            path.append(String(describing: type(of: view)))
+            current = view.superview
+        }
+        return path
     }
 
     /// Visible message blocks of one conversation network, top to bottom.
+    /// Only fully visible blocks qualify: a real drag can only start on seen
+    /// text, and the top rows slide under the toolbar where hit-testing lands
+    /// on the toolbar instead of the message.
     private static func linkedBlocks(in content: NSView, pane: CGRect) -> [Block] {
         let texts = descendants(content).compactMap { $0 as? NSTextView }.filter { text in
             guard !text.isEditable, text.isSelectable, text.layoutManager?.textContainers.count ?? 0 > 1 else { return false }
             let rect = text.convert(text.visibleRect, to: nil)
             guard rect.height > 30 else { return false }
+            // The whole row must be on screen, not just a visible sliver.
+            guard text.visibleRect.height >= text.bounds.height - 2 else { return false }
             return pane.contains(CGPoint(x: rect.midX, y: content.bounds.height - rect.maxY + 4))
                 && pane.contains(CGPoint(x: rect.midX, y: content.bounds.height - rect.minY - 4))
         }

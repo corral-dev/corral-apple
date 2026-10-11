@@ -7,20 +7,23 @@ struct ToolActivityView: View, Equatable {
     let tools: [ToolCall]
     let sourceSeqs: [Int]
     let runtimeID: String?
-    var store: ConversationStore? = nil
+    /// Detail fetch goes through this closure so the view never owns a store.
+    /// `nil` (previews, fixtures) means details stay as provided.
+    var onNeedDetails: (([Int]) async -> [ToolCall]?)? = nil
+    /// Identity of the detail source for equality: a replaced source must
+    /// re-resolve even when `tools` are identical.
+    var detailSourceID: ObjectIdentifier? = nil
     /// Explicit style inputs instead of environment (see MessageBubbleView):
     /// row equality must cover every dynamic input.
     var interfaceScale: CGFloat = 1
     var sessionTextScale: CGFloat = SessionTextSize.default.scale
     var colorScheme: ColorScheme = .light
 
-    /// `store` is compared by identity: content changes arrive through `tools`.
-    /// A replaced store (reconnect) must re-resolve even for identical tools.
     static func == (lhs: ToolActivityView, rhs: ToolActivityView) -> Bool {
         lhs.tools == rhs.tools
             && lhs.sourceSeqs == rhs.sourceSeqs
             && lhs.runtimeID == rhs.runtimeID
-            && lhs.store.map(ObjectIdentifier.init) == rhs.store.map(ObjectIdentifier.init)
+            && lhs.detailSourceID == rhs.detailSourceID
             && lhs.interfaceScale == rhs.interfaceScale
             && lhs.sessionTextScale == rhs.sessionTextScale
             && lhs.colorScheme == rhs.colorScheme
@@ -35,7 +38,8 @@ struct ToolActivityView: View, Equatable {
         tools: [ToolCall],
         sourceSeqs: [Int],
         runtimeID: String?,
-        store: ConversationStore? = nil,
+        onNeedDetails: (([Int]) async -> [ToolCall]?)? = nil,
+        detailSourceID: ObjectIdentifier? = nil,
         interfaceScale: CGFloat = 1,
         sessionTextScale: CGFloat = SessionTextSize.default.scale,
         colorScheme: ColorScheme = .light
@@ -43,7 +47,8 @@ struct ToolActivityView: View, Equatable {
         self.tools = tools
         self.sourceSeqs = sourceSeqs
         self.runtimeID = runtimeID
-        self.store = store
+        self.onNeedDetails = onNeedDetails
+        self.detailSourceID = detailSourceID
         self.interfaceScale = interfaceScale
         self.sessionTextScale = sessionTextScale
         self.colorScheme = colorScheme
@@ -231,12 +236,12 @@ struct ToolActivityView: View, Equatable {
         // Hover prefetch and popover presentation share one request.
         guard !isLoadingDetail else { return }
         detailError = nil
-        guard let store else { return }
+        guard let onNeedDetails else { return }
         let needsFetch = detailTools.contains(where: \.needsDetailFetch)
         guard needsFetch else { return }
         isLoadingDetail = true
         defer { isLoadingDetail = false }
-        if let fetched = await store.fetchToolDetails(sourceSeqs: sourceSeqs), !fetched.isEmpty {
+        if let fetched = await onNeedDetails(sourceSeqs), !fetched.isEmpty {
             detailTools = fetched
             if fetched.contains(where: \.needsDetailFetch) {
                 detailError = String(localized: String.LocalizationValue("chat.tool.detail_unavailable"))

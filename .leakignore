@@ -1,17 +1,9 @@
 # Test fixtures use example LAN addresses
 rule:internal-endpoint:CorralTests/**
 rule:internal-endpoint:**/RemoteCryptoTests.swift
-rule:internal-endpoint:Tests/LanDiscoveryTests.swift
 fp:0b490c426e8d6d53
 fp:98984cdc9cdc2d6f
 fp:6dfda34c5fdc9aea
 fp:635aefe0acf219d0
 fp:f7b55bd408ebea90
 fp:265676b24802b5b7
-fp:27c4498be2fa99b4
-fp:34c224db250fefc5
-fp:5c06bc387fa3b0b4
-fp:c918beae7a0223d9
-fp:d625d91d5d074946
-fp:ae5c3de6523acb34
-fp:df3ea1821ac8a122

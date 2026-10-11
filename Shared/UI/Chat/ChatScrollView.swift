@@ -261,7 +261,7 @@ private struct NativeChatScrollView<Header: View, Content: View>: View {
         .scrollIndicators(.hidden)
         #endif
         #if os(iOS)
-        .scrollDismissesKeyboard(.interactively)
+        .scrollDismissesKeyboard(.immediately)
         #endif
         #if os(macOS)
         .onReceive(NotificationCenter.default.publisher(for: NSTextView.didChangeSelectionNotification)) { notification in
@@ -516,7 +516,7 @@ private struct CompatibleChatScrollView<Header: View, Content: View>: View {
         .contentMargins(Space.base, for: .scrollContent)
         .scrollIndicators(.hidden)
         #if os(iOS)
-        .scrollDismissesKeyboard(.interactively)
+        .scrollDismissesKeyboard(.immediately)
         #endif
         // iOS 17 has no scroll-phase callback. Observe the vertical drag alongside
         // native scrolling, without replacing its gesture or scroll-position owner.
