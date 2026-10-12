@@ -42,6 +42,14 @@ The **Mac app** is a signed download. The **iPhone app** is a source beta: build
 
 ### Mac
 
+Install the signed Mac app with Homebrew:
+
+```bash
+brew install --cask x0c/tap/corral-mac
+```
+
+Open Corral from Applications. Update with `brew update` followed by `brew upgrade --cask x0c/tap/corral-mac`. To register an existing DMG installation, add `--adopt` to the install command. To replace it with the tap version, quit Corral and use `--force` instead; check the version first to avoid downgrading. Pairing and settings are preserved.
+
 Download the [signed Mac DMG](https://github.com/corral-dev/corral-apple/releases/latest) and drag Corral to Applications. It checks for updates hourly, downloads them in the background and installs them when you quit.
 
 To build from source instead, with Xcode and its command-line tools installed:

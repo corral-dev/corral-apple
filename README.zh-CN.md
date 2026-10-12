@@ -42,6 +42,14 @@
 
 ### Mac
 
+通过 Homebrew 安装已签名的 Mac 客户端：
+
+```bash
+brew install --cask x0c/tap/corral-mac
+```
+
+从「应用程序」打开 Corral。更新时先运行 `brew update`，再运行 `brew upgrade --cask x0c/tap/corral-mac`。已有 DMG 安装可在安装命令加 `--adopt`，交给 Homebrew 管理。若要用 tap 的版本覆盖安装，先退出 Corral，改用 `--force`；覆盖前确认版本，避免降级。配对和设置会保留。
+
 下载[已签名的 Mac DMG](https://github.com/corral-dev/corral-apple/releases/latest)，把 Corral 拖进「应用程序」。之后每小时检查一次更新，后台下载，并在退出时安装。
 
 如果想从源码构建，安装好 Xcode 及其命令行工具后运行：

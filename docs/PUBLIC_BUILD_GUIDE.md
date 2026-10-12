@@ -58,6 +58,18 @@ Public source export details that are easy to miss:
 
 The fresh public history excludes private signing identifiers, maintainer service endpoints, private planning and original private Git history. A whole-tree credential scan found no secrets. Exact leak-gate fingerprints cover only individually reviewed synthetic LAN fixtures, protocol-format examples, documentation paths/anchors and shell expressions. No file-wide or credential-rule exemption was added. Recheck changed findings before extending the list.
 
+## Homebrew distribution
+
+Owner requirement (2026-10-12): the native Mac client supports Homebrew installation and updates through `x0c/tap/corral-mac`, separate from the `x0c/tap/corral` host CLI. Reuse the existing official universal Developer ID-signed, notarized DMG. Pin its release version and SHA-256; keep macOS 26 as the minimum. Retain Sparkle updates and declare `auto_updates true`. Every successful official Mac publication must synchronize the Cask only after anonymous artifact verification, reject rollback and refuse a changed checksum for an already published version.
+
+Install with `brew install --cask x0c/tap/corral-mac`. Existing official DMG installations can be registered with `--adopt`; Homebrew's self-updating-app handling keeps the existing bundle. To explicitly replace an older DMG installation with the tap version, quit Corral and use `brew install --cask --force x0c/tap/corral-mac`. Verify the tap version before forced replacement to avoid downgrading a newer installed app. Do not combine `--adopt` and `--force`. Then run `brew update` and `brew upgrade --cask x0c/tap/corral-mac` for updates. Custom application locations need the same `--appdir` during registration.
+
+Maintainers can bootstrap or retry Cask publication independently with `python3 scripts/publish-mac-release.py --sync-homebrew-release mac-v<version>`. This checks the stable release metadata and anonymously downloads the immutable DMG before publishing. Normal Mac publication calls the same compare-and-swap path and records `homebrewCask` in its terminal receipt; an unchanged publication is a no-op. Credentials stay in the existing authenticated GitHub CLI.
+
+The Cask installs only `Corral.app`; it must not remove `~/.config/corral-mac/`, preferences or Keychain entries during installation, upgrades or uninstall, and has no `zap` stanza. Keep bundle/signing identity unchanged so existing pairing and preferences remain usable. Source builds remain a separate route.
+
+References: [Homebrew install/adopt/force](https://docs.brew.sh/Manpage#install-options-formulacask-), [self-updating Casks](https://docs.brew.sh/FAQ#how-does-brew-upgrade-handle-apps-that-update-themselves), and the inspected [Ghostty Cask](https://github.com/Homebrew/homebrew-cask/blob/master/Casks/g/ghostty.rb) for signed DMG, native app artifact, Sparkle livecheck and `auto_updates`. Reuse those declarations; omit its completions, manpages and data-removing `zap` because Corral does not require them.
+
 ## Official Mac updates
 
 The official Developer ID-signed Mac download is available in [Mac releases](https://github.com/corral-dev/corral-apple/releases/latest). It checks hourly by default, automatically downloads signed updates and installs at quit; Check for Updates offers immediate installation and relaunch. Update preferences live in Settings. Self-builds retain the builder's own identity and do not opt into replacement by official binaries.
