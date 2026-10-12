@@ -48,7 +48,20 @@
 brew install --cask x0c/tap/corral-mac
 ```
 
-从「应用程序」打开 Corral。更新时先运行 `brew update`，再运行 `brew upgrade --cask x0c/tap/corral-mac`。已有 DMG 安装可在安装命令加 `--adopt`，交给 Homebrew 管理。若要用 tap 的版本覆盖安装，先退出 Corral，改用 `--force`；覆盖前确认版本，避免降级。配对和设置会保留。
+已经安装官方 DMG？先登记到 Homebrew：
+
+```bash
+brew install --cask --adopt x0c/tap/corral-mac
+```
+
+从「应用程序」打开 Corral。登记后，用以下命令更新：
+
+```bash
+brew update
+brew upgrade --cask x0c/tap/corral-mac
+```
+
+内置更新仍然可用。当前 Homebrew 能识别比安装记录更新的应用，因此登记版本较旧不代表更新失败。安装时报“already an App”表示目标位置已有应用，请根据情况使用上面的接管或更新命令。不要把 `--force` 当作常规修复：它可能用 tap 的旧版本覆盖较新的应用。配对和设置会保留。详见 [Homebrew 对应用内更新的处理](https://docs.brew.sh/FAQ#how-does-brew-upgrade-handle-apps-that-update-themselves)。
 
 下载[已签名的 Mac DMG](https://github.com/corral-dev/corral-apple/releases/latest)，把 Corral 拖进「应用程序」。之后每小时检查一次更新，后台下载，并在退出时安装。
 

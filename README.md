@@ -48,7 +48,20 @@ Install the signed Mac app with Homebrew:
 brew install --cask x0c/tap/corral-mac
 ```
 
-Open Corral from Applications. Update with `brew update` followed by `brew upgrade --cask x0c/tap/corral-mac`. To register an existing DMG installation, add `--adopt` to the install command. To replace it with the tap version, quit Corral and use `--force` instead; check the version first to avoid downgrading. Pairing and settings are preserved.
+Already installed the official DMG? Register it with Homebrew:
+
+```bash
+brew install --cask --adopt x0c/tap/corral-mac
+```
+
+Open Corral from Applications. Once registered, update with:
+
+```bash
+brew update
+brew upgrade --cask x0c/tap/corral-mac
+```
+
+The built-in updater remains available. Current Homebrew can recognize an app newer than its installation record, so an older recorded version alone does not mean an update failed. An “already an App” install error means the destination is occupied; use the appropriate adoption or update command above. Do not use `--force` as a routine fix: it can replace a newer app with an older tap version. Pairing and settings are preserved. [How Homebrew handles self-updating apps](https://docs.brew.sh/FAQ#how-does-brew-upgrade-handle-apps-that-update-themselves).
 
 Download the [signed Mac DMG](https://github.com/corral-dev/corral-apple/releases/latest) and drag Corral to Applications. It checks for updates hourly, downloads them in the background and installs them when you quit.
 
