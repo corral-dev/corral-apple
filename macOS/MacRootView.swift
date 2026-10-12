@@ -353,6 +353,9 @@ struct MacRootView: View {
         await notifications.resolvePending(feed: current, workspace: workspace)
         #if DEBUG
         MacInspection.apply(feed: current, workspace: workspace)
+        if ProcessInfo.processInfo.arguments.contains("-CorralInspectPopupMenus") {
+            Task { await MacZoomInspection.inspectPopupMenus(zoom: zoom) }
+        }
         if MacSessionSwitchInspection.enabled {
             Task { await MacSessionSwitchInspection.run(feed: current, workspace: workspace) }
         }

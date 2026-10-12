@@ -6,6 +6,59 @@ import AppKit
 /// not WindowServer screenshots or proof of system chrome appearance.
 @MainActor
 enum MacZoomInspection {
+    /// Open the production menu through accessibility, without moving the
+    /// pointer or invoking any session action. Leave time for WindowServer capture.
+    static func inspectPopupMenus(zoom: MacInterfaceZoom) async {
+        let original = zoom.percentage
+        defer { zoom.setPercentage(original) }
+        let tracking = MacMenuTrackingInspection()
+        NotificationCenter.default.addObserver(tracking, selector: #selector(MacMenuTrackingInspection.started(_:)),
+                                              name: NSMenu.didBeginTrackingNotification, object: nil)
+        defer { NotificationCenter.default.removeObserver(tracking) }
+        for percentage in [100, 150] {
+            zoom.setPercentage(percentage)
+            await settle()
+            guard let content = NSApp.windows.first(where: { $0.title == "Corral" && $0.isVisible })?.contentView else { return }
+            var seen = Set<ObjectIdentifier>()
+            
+            func find(_ object: NSObject) -> NSObject? {
+                guard seen.insert(ObjectIdentifier(object)).inserted else { return nil }
+                if let popup = object as? NSPopUpButton, popup.title.isEmpty { return popup }
+                if (object as? any NSAccessibilityProtocol)?.accessibilityIdentifier() == "corral.session.actions" { return object }
+                let children = ((object as? any NSAccessibilityProtocol)?.accessibilityChildren() ?? []).compactMap { $0 as? NSObject }
+                for child in children { if let match = find(child) { return match } }
+                if let view = object as? NSView {
+                    for child in view.subviews { if let match = find(child) { return match } }
+                }
+                return nil
+            }
+            guard let control = find(content) else {
+                try? Data("menu control unavailable".utf8).write(to: URL(fileURLWithPath: "/tmp/corral-menu-inspection.txt"))
+                return
+            }
+            // Scheduled work runs inside AppKit's native menu tracking loop.
+            let timer = Timer(timeInterval: 8, repeats: false) { _ in
+                MainActor.assumeIsolated {
+                    let text = "\(percentage): tracking font=\(tracking.menu?.font.pointSize ?? 0), labels=\(tracking.menu?.items.map(\.title) ?? [])"
+                    try? Data(text.utf8).write(to: URL(fileURLWithPath: "/tmp/corral-menu-inspection-\(percentage).txt"))
+                    tracking.menu?.cancelTracking()
+                }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            RunLoop.main.add(timer, forMode: .eventTracking)
+            let pressed: Bool
+            if let button = control as? NSButton {
+                button.performClick(nil)
+                pressed = true
+            } else {
+                pressed = (control as? any NSAccessibilityProtocol)?.accessibilityPerformPress() ?? false
+            }
+            try? Data("\(percentage): pressed=\(pressed), font=\(tracking.menu?.font.pointSize ?? 0)".utf8).write(to: URL(fileURLWithPath: "/tmp/corral-menu-inspection.txt"))
+            timer.invalidate()
+            await settle()
+        }
+    }
+
     static func run(zoom: MacInterfaceZoom, workspace: MacWorkspace, feed: HostSessionFeed,
                     showSettings: @MainActor () -> Void) async {
         guard let path = ProcessInfo.processInfo.environment["CORRAL_INSPECTION_ZOOM_OUTPUT"] else { return }
@@ -215,6 +268,17 @@ enum MacZoomInspection {
     private static func write(_ result: [String: Any], to directory: URL) {
         guard let data = try? JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]) else { return }
         try? data.write(to: directory.appendingPathComponent("result.json"), options: .atomic)
+    }
+}
+@MainActor
+private final class MacMenuTrackingInspection: NSObject {
+    var menu: NSMenu?
+    @objc func started(_ notification: Notification) {
+        menu = notification.object as? NSMenu
+        var chain: [String] = []
+        var current = menu
+        while let node = current { chain.append("\(node.title): font=\(node.font.pointSize), main=\(node === NSApp.mainMenu)"); current = node.supermenu }
+        try? Data(chain.joined(separator: "\n").utf8).write(to: URL(fileURLWithPath: "/tmp/corral-menu-tracking-start.txt"))
     }
 }
 #endif

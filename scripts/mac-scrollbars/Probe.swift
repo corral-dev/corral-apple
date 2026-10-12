@@ -6,7 +6,13 @@ import Observation
 struct Probe {
     @MainActor
     static func main() {
+        // Same order as the app entry: the process preference precedes AppKit.
+        let preferenceInstalled = CommandLine.arguments.contains("-CorralProbeScrollerPreference")
+        if preferenceInstalled { MacScrollerPreference.install() }
         NSApplication.shared.setActivationPolicy(.prohibited)
+        if preferenceInstalled {
+            precondition(NSScroller.preferredScrollerStyle == .overlay, "Process scroller preference was not honored")
+        }
         check("chat content", ScrollView {
             LazyVStack { ForEach(0..<100) { Text("Message \($0)") } }
                 .nativeOverlayScrollers()
@@ -110,6 +116,9 @@ struct Probe {
         precondition(selections >= 40, "Native selection did not reach the SwiftUI binding")
         precondition(changes.count == 0, "Sidebar scroller style changed \(changes.count) times during List updates")
         precondition(scroll.scrollerStyle == NSScroller.preferredScrollerStyle)
+        if NSScroller.preferredScrollerStyle == .overlay {
+            precondition(scroll.contentView.frame.width >= scroll.bounds.width - 1, "Sidebar reserves a scrollbar column")
+        }
         print("PASS \(selections) native outline selections with row updates, preference notices and resize; List scroller style uncontested (preferred \(NSScroller.preferredScrollerStyle.rawValue))")
     }
 
