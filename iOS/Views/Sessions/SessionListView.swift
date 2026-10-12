@@ -52,6 +52,7 @@ struct SessionListView: View {
     @State private var inspectedSessionRoute: SessionRoute?
     /// Date disclosures survive navigation and updates for this host page.
     @State private var sectionExpansion: [String: Bool] = [:]
+    @State private var filteredSectionExpansion: [String: Bool] = [:]
     /// Quick-filter selections. They live in this view (one instance per host
     /// in the navigation stack, so state is host-scoped) and survive pushing
     /// a conversation and returning. Live updates, refreshes, and reconnects
@@ -259,8 +260,12 @@ struct SessionListView: View {
         )
         .modifier(SessionListSystemSearchPlacement())
         .onChange(of: listStore.searchQuery) { _, query in
+            filteredSectionExpansion.removeAll()
             scheduleRemoteSearch(query)
         }
+        .onChange(of: activeOnly) { _, _ in filteredSectionExpansion.removeAll() }
+        .onChange(of: runtimeFilter) { _, _ in filteredSectionExpansion.removeAll() }
+        .onChange(of: projectFilter) { _, _ in filteredSectionExpansion.removeAll() }
         .onChange(of: listStore.windowSessions, initial: true) { _, window in
             // Reconcile, never re-sort: existing choices keep their positions
             // while labels refresh and genuinely new identities append.
@@ -494,7 +499,7 @@ struct SessionListView: View {
     }
 
     private func isSectionExpanded(_ section: SessionListStore.Section) -> Bool {
-        if hasActiveScope { return true }
+        if hasActiveScope { return filteredSectionExpansion[section.id] ?? true }
         if let expanded = sectionExpansion[section.id] { return expanded }
         switch section {
         case .waiting, .pinned, .today: return true
@@ -515,16 +520,25 @@ struct SessionListView: View {
                 .foregroundStyle(Color(uiColor: .secondaryLabel))
                 .monospacedDigit()
         }
-        if !hasActiveScope && section.id != "waiting" {
-            DisclosureGroup(isExpanded: Binding(
+        if section.id != "waiting" {
+            let expansion = Binding(
                 get: { isSectionExpanded(section) },
-                set: { sectionExpansion[section.id] = $0 }
-            )) {
+                set: { expanded in
+                    if hasActiveScope { filteredSectionExpansion[section.id] = expanded }
+                    else { sectionExpansion[section.id] = expanded }
+                }
+            )
+            DisclosureGroup(isExpanded: expansion) {
                 EmptyView()
             } label: {
-                label
-                    .frame(maxWidth: .infinity, minHeight: TouchTarget.minimum, alignment: .leading)
-                    .contentShape(Rectangle())
+                Button {
+                    expansion.wrappedValue.toggle()
+                } label: {
+                    label
+                        .frame(maxWidth: .infinity, minHeight: TouchTarget.minimum, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(PressableButtonStyle(pressedScale: 1))
             }
             .accessibilityLabel(Text(title))
             .accessibilityValue(Text(count))

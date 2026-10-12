@@ -15,6 +15,7 @@ struct MacSidebar: View {
 
     @State private var filter = ""
     @State private var sectionExpansion: [String: Bool] = [:]
+    @State private var filteredSectionExpansion: [String: Bool] = [:]
     @State private var activeOnly = false
     @State private var runtimeFilter: Set<SessionRuntimeFilter> = []
     @State private var projectFilter: Set<SessionProjectFilter> = []
@@ -46,6 +47,9 @@ struct MacSidebar: View {
             .task {
                 #if DEBUG
                 await MacScrollbarInspection.runIfRequested()
+                if ProcessInfo.processInfo.arguments.contains("-CorralInspectDateDisclosures") {
+                    await inspectDateDisclosures()
+                }
                 if ProcessInfo.processInfo.arguments.contains("-CorralInspectSidebarGeometry") {
                     for _ in 0..<10 {
                         try? await Task.sleep(for: .seconds(1))
@@ -90,12 +94,17 @@ struct MacSidebar: View {
                 #endif
             }
             .searchable(text: $filter, placement: .sidebar, prompt: Text("mac.sidebar.filter"))
+            .onChange(of: filter) { _, _ in filteredSectionExpansion.removeAll() }
+            .onChange(of: activeOnly) { _, _ in filteredSectionExpansion.removeAll() }
+            .onChange(of: runtimeFilter) { _, _ in filteredSectionExpansion.removeAll() }
+            .onChange(of: projectFilter) { _, _ in filteredSectionExpansion.removeAll() }
             .onChange(of: feed.host.id) { _, _ in
                 filter = ""
                 activeOnly = false
                 runtimeFilter.removeAll()
                 projectFilter.removeAll()
                 sectionExpansion.removeAll()
+                filteredSectionExpansion.removeAll()
             }
             .safeAreaBar(edge: .top, spacing: 0) {
                 MacSidebarFilters(
@@ -206,12 +215,18 @@ struct MacSidebar: View {
                     DisclosureGroup(isExpanded: expansion(for: section)) {
                         EmptyView()
                     } label: {
-                        Text(verbatim: title(for: section))
-                            .interfaceFont(.body.weight(.semibold))
-                            .foregroundStyle(.primary)
-                            .interfaceFrame(height: MacSidebarMetrics.sectionHeight)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
+                        Button {
+                            toggleSection(section)
+                        } label: {
+                            Text(verbatim: title(for: section))
+                                .interfaceFont(.body.weight(.semibold))
+                                .foregroundStyle(.primary)
+                                .interfaceFrame(height: MacSidebarMetrics.sectionHeight)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("corral.date-section.\(section.id)")
                     }
                 }
             }
@@ -534,17 +549,24 @@ struct MacSidebar: View {
         )
     }
 
+    private func toggleSection(_ section: DesktopSidebarProjection.Section) {
+        expansion(for: section).wrappedValue.toggle()
+    }
+
     private func expansion(for section: DesktopSidebarProjection.Section) -> Binding<Bool> {
         Binding(
             get: {
-                if hasActiveScope { return true }
+                if hasActiveScope { return filteredSectionExpansion[section.id] ?? true }
                 if let expanded = sectionExpansion[section.id] { return expanded }
                 switch section.kind {
                 case .pinned, .bucket(.today): return true
                 case .bucket: return false
                 }
             },
-            set: { if !hasActiveScope { sectionExpansion[section.id] = $0 } }
+            set: { expanded in
+                if hasActiveScope { filteredSectionExpansion[section.id] = expanded }
+                else { sectionExpansion[section.id] = expanded }
+            }
         )
     }
 
@@ -570,6 +592,52 @@ struct MacSidebar: View {
     }
 
     #if DEBUG
+    /// Exercise production header actions with a project scope; never drive input.
+    private func inspectDateDisclosures() async {
+        for _ in 0..<40 where sessions.isEmpty { try? await Task.sleep(for: .milliseconds(250)) }
+        let paths = Dictionary(grouping: sessions, by: SessionListFiltering.directoryIdentity)
+        guard let path = paths.filter({ !$0.key.isEmpty }).max(by: { $0.value.count < $1.value.count })?.key else { return }
+        let previous = projectFilter
+        defer { projectFilter = previous }
+        projectFilter = [.project(path: path)]
+        try? await Task.sleep(for: .milliseconds(500))
+        let sections = DesktopSidebarProjection.sections(
+            sessions: filteredSessions, layout: sidebarLayout, filter: filter, order: &orderBox.order
+        )
+        func inventory() -> [NSObject] {
+            guard let root = NSApp.windows.first(where: { $0.title == "Corral" })?.contentView else { return [] }
+            var seen = Set<ObjectIdentifier>()
+            func walk(_ object: NSObject) -> [NSObject] {
+                guard seen.insert(ObjectIdentifier(object)).inserted else { return [] }
+                let children = ((object as? any NSAccessibilityProtocol)?.accessibilityChildren() ?? []).compactMap { $0 as? NSObject }
+                return [object] + children.flatMap(walk) + ((object as? NSView)?.subviews.flatMap(walk) ?? [])
+            }
+            return walk(root)
+        }
+        func rowCount() -> Int { inventory().compactMap { $0 as? NSOutlineView }.first?.numberOfRows ?? -1 }
+        var outcomes: [[String: Any]] = []
+        for section in sections {
+            let before = expansion(for: section).wrappedValue
+            let beforeRows = rowCount()
+            toggleSection(section)
+            try? await Task.sleep(for: .milliseconds(300))
+            let collapsed = !expansion(for: section).wrappedValue
+            let afterRows = rowCount()
+            toggleSection(section)
+            try? await Task.sleep(for: .milliseconds(300))
+            outcomes.append(["section": section.id, "initialExpanded": before,
+                             "collapsed": collapsed,
+                             "expanded": expansion(for: section).wrappedValue,
+                             "rowsBefore": beforeRows, "rowsCollapsed": afterRows, "rowsExpanded": rowCount()])
+        }
+        let evidence: [String: Any] = ["projectScoped": hasActiveScope, "matchedSessions": filteredSessions.count,
+                                      "ordinaryOverridesUnchanged": sectionExpansion.isEmpty, "outcomes": outcomes,
+                                      "actionRoute": "same production title-button callback; physical/AX click not exercised"]
+        if let data = try? JSONSerialization.data(withJSONObject: evidence, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: URL(fileURLWithPath: "/tmp/corral-date-disclosures.json"), options: .atomic)
+        }
+    }
+
     /// Read mounted native row geometry; no pointer, key or host-data actions.
     private func recordSidebarGeometry() {
         func descendants(_ view: NSView) -> [NSView] {

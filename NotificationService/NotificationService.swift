@@ -25,8 +25,11 @@ final class NotificationService: UNNotificationServiceExtension {
             if let title = payload["title"] as? String, !title.isEmpty {
                 content.title = title
             }
-            if let body = payload["body"] as? String, !body.isEmpty {
-                content.body = body
+            if let body = payload["body"] as? String {
+                let kind = payload["kind"] as? String ?? ""
+                let fallback = ["completed", "aborted", "waiting"].contains(kind)
+                    ? String(localized: String.LocalizationValue("notification.\(kind)")) : content.body
+                content.body = NotificationPreview.body(body, fallback: fallback)
             }
             if let key = payload["key"] as? String {
                 content.userInfo["session_key"] = key

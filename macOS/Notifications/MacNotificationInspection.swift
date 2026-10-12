@@ -6,6 +6,10 @@ import UserNotifications
 @MainActor enum MacNotificationInspection {
     static func run(feed: HostSessionFeed, workspace: MacWorkspace) async {
         let notifications = MacNotifications.shared
+        if ProcessInfo.processInfo.arguments.contains("-CorralNotificationPreviewOnly") {
+            await inspectPreview(notifications: notifications, feed: feed)
+            return
+        }
         await notifications.setEnabled(true)
         let center = UNUserNotificationCenter.current()
         var report: [String: Any] = ["authorization": notifications.authorization.rawValue,
@@ -29,6 +33,25 @@ import UserNotifications
         if let data = try? JSONSerialization.data(withJSONObject: report, options: [.sortedKeys, .prettyPrinted]) {
             try? data.write(to: URL(fileURLWithPath: "/tmp/corral-mac-notifications.json"), options: .atomic)
         }
+    }
+
+    private static func inspectPreview(notifications: MacNotifications, feed: HostSessionFeed) async {
+        let source = "已发布 **[0.3.24 / 3042](https://github.com/NeatMacApps/NeatWebApp/releases/tag/v0.3.24)**，并覆盖安装到本机。"
+        let session = SessionSummary(key: "notification-preview-inspection", title: "Notification preview",
+            lastAgent: source, completionID: UUID().uuidString)
+        let center = UNUserNotificationCenter.current()
+        await notifications.deliver(session, kind: "completed", hostID: feed.host.hostID)
+        try? await Task.sleep(for: .seconds(2))
+        let matching = await center.deliveredNotifications().filter {
+            $0.request.content.userInfo["session_key"] as? String == session.key
+        }
+        let report: [String: Any] = ["source": source, "bodies": matching.map { $0.request.content.body },
+            "enabled": notifications.enabled, "authorization": notifications.authorization.rawValue,
+            "failure": notifications.failure as Any? ?? NSNull()]
+        if let data = try? JSONSerialization.data(withJSONObject: report, options: [.sortedKeys, .prettyPrinted]) {
+            try? data.write(to: URL(fileURLWithPath: "/tmp/corral-mac-notification-preview.json"), options: .atomic)
+        }
+        center.removeDeliveredNotifications(withIdentifiers: matching.map { $0.request.identifier })
     }
 }
 #endif

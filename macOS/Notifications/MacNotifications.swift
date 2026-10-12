@@ -127,7 +127,7 @@ final class MacNotifications: NSObject, UNUserNotificationCenterDelegate {
         let content = UNMutableNotificationContent()
         content.title = String(localized: String.LocalizationValue("notification.\(kind.rawValue)"))
         content.subtitle = session.title.isEmpty ? "Corral" : session.title
-        content.body = session.lastAgent.isEmpty ? content.title : session.lastAgent
+        content.body = NotificationPreview.body(session.lastAgent, fallback: content.title)
         content.sound = .default
         content.categoryIdentifier = kind == .waiting ? "CORRAL_WAITING" : "CORRAL_COMPLETION"
         content.userInfo = ["host_id": hostID, "session_key": session.key]

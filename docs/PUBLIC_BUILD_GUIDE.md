@@ -58,6 +58,8 @@ Public source export details that are easy to miss:
 
 ## Publication privacy verification
 
+Prepared release recovery (2026-10-12): a pinned checkout must not try to push an older `main` over newer concurrent commits when the prepared source is already published. Fetch remote `main` and verify that it contains the exact prepared `sourceCommit`; in that case push only the immutable release tag. If that source is not yet remote, require local `main` to contain it before pushing the branch and tag normally. Never force a branch/tag, discard concurrent commits, or treat an unpublished source as delivered. Mac 0.3.82 encountered this after documentation and another task advanced remote `main`; Git ancestry distinguishes successful source publication from an actual missing source.
+
 The fresh public history excludes private signing identifiers, maintainer service endpoints, private planning and original private Git history. A whole-tree credential scan found no secrets. Exact leak-gate fingerprints cover only individually reviewed synthetic LAN fixtures, protocol-format examples, documentation paths/anchors and shell expressions. No file-wide or credential-rule exemption was added. Recheck changed findings before extending the list.
 
 ## Homebrew distribution
@@ -90,3 +92,5 @@ The official Developer ID-signed Mac download is available in [Mac releases](htt
 ## Generated signing configuration
 
 XcodeGen generates the iPhone and notification-extension property lists from `project.yml`. Both `info.properties` mappings must declare `CorralKeychainAccessGroup: $(AppIdentifierPrefix)$(CORRAL_KEYCHAIN_GROUP)`. Keeping that key only in a pre-generated plist loses it during regeneration; the Keychain adapter then correctly refuses to access any group. Verify both generated property lists after running XcodeGen, and compare the built values with the matching entitlements before device signing.
+
+A public-source merge may advance `main` after preparation while retaining exactly the same full Git tree. Resume may push that descendant main, but the release tag and assets remain bound to the original prepared public commit. Verify both ancestry and full tree identity; any changed file still invalidates the prepared public identity. Never rewrite a published tag or retarget prepared application bytes to resolve publication contention.
