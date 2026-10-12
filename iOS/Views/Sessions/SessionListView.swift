@@ -173,12 +173,14 @@ struct SessionListView: View {
                             sectionHeader(section)
                                 .textCase(nil)
                         }
+                        .listSectionSeparator(.hidden, edges: .bottom)
                     }
                 }
                 .listStyle(.plain)
                 .contentMargins(.top, Space.sm, for: .scrollContent)
                 .contentMargins(.bottom, Self.searchBarClearance, for: .scrollContent)
-                .listSectionSpacing(.compact)
+                .listSectionSpacing(Space.sm)
+                .environment(\.defaultMinListHeaderHeight, SessionListLayout.sectionHeaderHeight)
                 .scrollDismissesKeyboard(.interactively)
                 .refreshable {
                     await refreshSessions(showLoading: false)
@@ -531,19 +533,16 @@ struct SessionListView: View {
             DisclosureGroup(isExpanded: expansion) {
                 EmptyView()
             } label: {
-                Button {
-                    expansion.wrappedValue.toggle()
-                } label: {
-                    label
-                        .frame(maxWidth: .infinity, minHeight: TouchTarget.minimum, alignment: .leading)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(PressableButtonStyle(pressedScale: 1))
+                label
             }
+            .disclosureGroupStyle(SessionDateDisclosureStyle())
+            .listRowInsets(SessionListLayout.sectionHeaderInsets)
             .accessibilityLabel(Text(title))
             .accessibilityValue(Text(count))
         } else {
             label
+                .frame(maxWidth: .infinity, minHeight: SessionListLayout.sectionHeaderHeight, alignment: .leading)
+                .listRowInsets(SessionListLayout.sectionHeaderInsets)
         }
     }
 
@@ -764,6 +763,30 @@ struct SessionListView: View {
     }
 }
 
+/// Date sections are quiet dividers. The list's default disclosure style draws a
+/// full row with a primary-weight chevron; this public `DisclosureGroupStyle`
+/// keeps the native expansion binding while the whole compact header row toggles
+/// and the chevron stays small and tertiary.
+private struct SessionDateDisclosureStyle: DisclosureGroupStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Button {
+            configuration.isExpanded.toggle()
+        } label: {
+            HStack(spacing: Space.xs) {
+                configuration.label
+                Spacer(minLength: Space.xs)
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(Color(uiColor: .tertiaryLabel))
+                    .rotationEffect(.degrees(configuration.isExpanded ? 90 : 0))
+            }
+            .frame(maxWidth: .infinity, minHeight: SessionListLayout.sectionHeaderHeight, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PressableButtonStyle(pressedScale: 1))
+    }
+}
+
 /// 列表页边距：行文字左缘=分组标题左缘=分隔线左端；图标不吃这层边距。
 /// nonisolated：纯布局常量，被 Sendable 的 alignmentGuide 闭包引用。
 nonisolated enum SessionListLayout {
@@ -776,6 +799,11 @@ nonisolated enum SessionListLayout {
     /// Vertical padding belongs to SessionRowView; this layer adds only side margins.
     static var rowInsets: EdgeInsets {
         EdgeInsets(top: 0, leading: rowHorizontal, bottom: 0, trailing: rowHorizontal)
+    }
+    /// Date headers are compact dividers; the full-width row stays the toggle target.
+    static let sectionHeaderHeight: CGFloat = 32
+    static var sectionHeaderInsets: EdgeInsets {
+        EdgeInsets(top: 4, leading: rowHorizontal, bottom: 0, trailing: rowHorizontal)
     }
 }
 

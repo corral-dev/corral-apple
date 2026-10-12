@@ -262,7 +262,12 @@ struct ComposerBar: View {
         } label: {
             Image(systemName: stop ? "stop.fill" : "arrow.up")
                 .contentTransition(.symbolEffect(.replace))
-                .interfaceFont(.body.weight(.bold))
+                // Stop sits one step below the send-arrow size: subheadline
+                // (15pt) keeps the square at ~0.39 of the 32pt circle
+                // (footnote ~0.34 read too small, body ~0.45 too chunky;
+                // measured 2026-10-12). A text style, so Mac interface zoom
+                // scales it exactly like the arrow.
+                .interfaceFont(stop ? .subheadline.weight(.bold) : .body.weight(.bold))
                 .foregroundStyle(active ? Palette.onAccent : Color.secondary)
                 .interfaceFrame(width: Self.sendVisual, height: Self.sendVisual)
                 .background(Circle().fill(fill))
