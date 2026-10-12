@@ -84,7 +84,7 @@ One-command public build: `bash scripts/build-public-client.sh mac`. It preserve
 
 ## Hard constraints (product behavior)
 
-1. **The phone never resizes a hosted pane (never sends `screen.resize`)**: phone and desktop look at the same tmux pane; resizing would squeeze the desktop. The Mac terminal view joins sizing like a TUI window under the "widest viewer wins" rule (`terminal.*`, see the Mac design doc Terminal view rebuild).
+1. **The phone's chat/snapshot mirror never resizes a hosted pane (never sends `screen.resize`)**: phone and desktop look at the same tmux pane; a mirror resize would squeeze the desktop. Clients showing the agent's native terminal (the Mac terminal view, and a future phone agent-terminal mode) size together with TUI windows under the most-recently-used-client rule (owner decision 2026-10-12, superseding widest-viewer-wins; `terminal.*` carries `active`, see the Mac design doc [Terminal size follows the client in use](docs/design/MACOS_CLIENT_DESIGN.md#terminal-size-follows-the-client-in-use-owner-decision-2026-10-12)).
 2. Event streams must be **multicast**: session list, conversation and terminal can subscribe simultaneously; no single-consumer message stealing.
 3. The push ciphertext field name is **`corral`** (base64); the plaintext development-machine identifier field is **`host_id`**, used by the notification extension to fetch the public key.
 4. The notification extension compiles its own encryption and Keychain sources; it must not link the main app binary.

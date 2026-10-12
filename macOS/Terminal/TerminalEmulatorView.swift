@@ -40,9 +40,10 @@ struct TerminalEmulator: NSViewRepresentable {
 }
 
 /// Hosts the emulator at the host's grid. Reports the grid this pane fits at
-/// the base font so the host can size the shared pane; when another desktop
-/// viewer is wider or taller the font shrinks to fit (to 9 pt), and whatever
-/// still does not fit is cropped right and top, keeping the agent's input row.
+/// the base font so the host can size the shared pane to the viewer the user
+/// used last; while another viewer's larger grid is in charge the font shrinks
+/// to fit (to 9 pt), and whatever still does not fit is cropped right and top,
+/// keeping the agent's input row.
 final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
     private var interfaceScale: CGFloat = 1
     private var baseSize: CGFloat { TerminalAppearance.baseSize * interfaceScale }
@@ -55,6 +56,7 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
     private var fontSize = TerminalAppearance.baseSize
     var onManualScroll: (@MainActor @Sendable () -> Void)?
     private var readScrollMonitor: Any?
+    private var frontObservers: [NSObjectProtocol] = []
 
     init() {
         terminal = StreamTerminalView(frame: .zero, font: TerminalAppearance.font(size: TerminalAppearance.baseSize))
@@ -99,6 +101,7 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
         self.stream = stream
         grid = nil
         stream.sink = self
+        stream.isInFront = { [weak self] in self?.isInFront ?? false }
         stream.updateTheme(palette.theme)
         needsLayout = true
         observeReadScrollIfNeeded()
@@ -192,7 +195,34 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
     }
     #endif
 
+    /// The window the user is looking at: the host pane follows this view.
+    private var isInFront: Bool { NSApp.isActive && window?.isKeyWindow == true }
+
+    /// Coming back to this window (it becomes key, or the app is activated
+    /// with it key) takes the shared agent grid back from the TUI or another view.
+    private func observeFront() {
+        frontObservers.forEach(NotificationCenter.default.removeObserver)
+        frontObservers = []
+        guard let window else { return }
+        let claim: @Sendable (Notification) -> Void = { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.isInFront else { return }
+                self.stream?.claimSize()
+            }
+        }
+        frontObservers = [
+            NotificationCenter.default.addObserver(
+                forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main, using: claim
+            ),
+            NotificationCenter.default.addObserver(
+                forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main, using: claim
+            ),
+        ]
+    }
+
     func unbind() {
+        frontObservers.forEach(NotificationCenter.default.removeObserver)
+        frontObservers = []
         removeReadScrollMonitor()
         onManualScroll = nil
         stream?.sink = nil
@@ -218,6 +248,7 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
         super.viewDidMoveToWindow()
         removeReadScrollMonitor()
         observeReadScrollIfNeeded()
+        observeFront()
         // SwiftTerm's renderer stays on CoreGraphics: its experimental Metal
         // path blocks the main thread ~0.4 s per terminal while it searches
         // every bundle for its shader library, and can present nothing.

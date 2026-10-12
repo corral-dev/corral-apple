@@ -25,9 +25,11 @@ struct TerminalTheme: Equatable, Sendable {
 /// panel and iPhone). A snapshot comes first, then output in sequence. A
 /// sequence gap asks the host for a fresh snapshot; the emulator never guesses.
 ///
-/// The view reports the grid it fits; the host sizes the tmux pane (agent
-/// panes: widest desktop viewer, TUI windows included; shells: the latest
-/// active viewer) and every resize arrives here as a new snapshot.
+/// The view reports the grid it fits; the host sizes the tmux pane to the
+/// viewer the user used most recently (TUI windows included for agent panes)
+/// and every resize arrives here as a new snapshot. Attach and resize say
+/// whether this view's window is in front; a background window only renews
+/// its size, and `claimSize()` takes the pane back when the window returns.
 @MainActor
 @Observable
 final class RemoteTerminalStream {
@@ -62,6 +64,9 @@ final class RemoteTerminalStream {
     @ObservationIgnored private var sentGrid: TerminalGrid?
     @ObservationIgnored private var resizeTask: Task<Void, Never>?
     @ObservationIgnored private var resizeGeneration = UUID()
+    /// Whether the hosting window is in front (Mac: key window of the active
+    /// app). Platforms without background windows keep the default.
+    @ObservationIgnored var isInFront: @MainActor () -> Bool = { true }
 
     init(sessionKey: String, client: RemoteClient) {
         self.sessionKey = sessionKey
@@ -132,6 +137,23 @@ final class RemoteTerminalStream {
     }
 
     func retry() { recover() }
+
+    /// The user came back to this view (its window became key): the host pane
+    /// takes this view's grid again. Typing claims it on the host by itself.
+    func claimSize() {
+        guard attached, let grid = wanted ?? sentGrid, let client else { return }
+        let mine = generation
+        var request = params(grid)
+        request["active"] = true
+        TerminalLifecycleQueue.enqueue(client: client, key: sessionKey) { [weak self] in
+            guard self?.isCurrent(mine) == true else { return }
+            do {
+                _ = try await client.call(WireProtocol.mTerminalResize, params: request)
+            } catch {
+                debugTrace("terminal size claim failed: \(error)")
+            }
+        }
+    }
 
     /// Every attach carries the colours; a change while attached is sent on its
     /// own, ordered with attach and resize. Hosts without `terminal.theme` ignore it.
@@ -281,7 +303,7 @@ final class RemoteTerminalStream {
     }
 
     private func params(_ grid: TerminalGrid) -> [String: Any] {
-        ["key": sessionKey, "cols": grid.cols, "rows": grid.rows]
+        ["key": sessionKey, "cols": grid.cols, "rows": grid.rows, "active": isInFront()]
     }
 
     // MARK: - Events
