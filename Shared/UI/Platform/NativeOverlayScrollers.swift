@@ -6,7 +6,8 @@ import SwiftUI
 extension View {
     /// Configure the enclosing native scroller after SwiftUI's current update.
     /// Attach inside ScrollView or Form content. List scrollers are left to
-    /// SwiftUI, which reverts this style inside its own update.
+    /// SwiftUI, which reverts this style inside its own update; on the Mac the
+    /// process scroller preference makes SwiftUI choose overlay itself.
     func nativeOverlayScrollers() -> some View {
         #if os(macOS)
         background {

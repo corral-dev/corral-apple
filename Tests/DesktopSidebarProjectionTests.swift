@@ -99,14 +99,22 @@ final class DesktopSidebarProjectionTests: XCTestCase {
         XCTAssertEqual(Set(result[0].items.map(\.id)), ["session:today", "session:live-old"])
     }
 
-    func testStableOrderKeepsShownRowsAndPutsNewcomersOnTop() {
+    func testStableOrderKeepsShownRowsAndInsertsOldNewcomersByTime() {
         var order = DesktopSidebarProjection.StableOrder()
         var sessions = [session("a", hoursAgo: 1), session("b", hoursAgo: 2)]
         _ = DesktopSidebarProjection.sections(sessions: sessions, layout: .empty, filter: "", order: &order, now: now, calendar: calendar)
         // b becomes newest by mtime; a new session c appears.
         sessions = [session("a", hoursAgo: 1), session("b", hoursAgo: 0.1), session("c", hoursAgo: 3)]
         let result = DesktopSidebarProjection.sections(sessions: sessions, layout: .empty, filter: "", order: &order, now: now, calendar: calendar)
-        XCTAssertEqual(result.first?.items.map(\.id), ["session:c", "session:a", "session:b"])
+        XCTAssertEqual(result.first?.items.map(\.id), ["session:a", "session:b", "session:c"])
+    }
+
+    func testNewSessionStillPrecedesExistingRows() {
+        var order = DesktopSidebarProjection.StableOrder()
+        let existing = [session("a", hoursAgo: 1), session("b", hoursAgo: 2)]
+        _ = DesktopSidebarProjection.sections(sessions: existing, layout: .empty, filter: "", order: &order, now: now, calendar: calendar)
+        let result = DesktopSidebarProjection.sections(sessions: existing + [session("new", hoursAgo: 0), session("empty", hoursAgo: 12, live: true)], layout: .empty, filter: "", order: &order, now: now, calendar: calendar)
+        XCTAssertEqual(result.first?.items.map(\.id), ["session:new", "session:a", "session:b", "session:empty"])
     }
 
     func testAttentionSummaryCountsUnreadIndependentlyFromActivity() {

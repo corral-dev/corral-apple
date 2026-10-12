@@ -3,6 +3,13 @@ import SwiftUI
 import UserNotifications
 
 @main
+enum CorralMacEntry {
+    static func main() {
+        MacScrollerPreference.install()
+        CorralMacApp.main()
+    }
+}
+
 struct CorralMacApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @State private var appModel = AppModel()

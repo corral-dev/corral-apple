@@ -65,21 +65,19 @@ enum DesktopSidebarProjection {
     /// Remembers first-seen positions so live updates never reshuffle rows.
     struct StableOrder: Equatable {
         private(set) var rank: [String: Int] = [:]
-        private var nextTop = 0
+        private var ids: [String] = []
+        private var firstSeenTime: [String: Double] = [:]
 
-        /// Assigns ranks to unseen ids: the initial batch in the given order,
-        /// later arrivals above everything already ranked.
-        mutating func register(_ ids: [String]) {
-            let unseen = ids.filter { rank[$0] == nil }
-            guard !unseen.isEmpty else { return }
-            if rank.isEmpty {
-                for (index, id) in unseen.enumerated() { rank[id] = index }
-                nextTop = -1
-            } else {
-                for id in unseen.reversed() {
-                    rank[id] = nextTop
-                    nextTop -= 1
-                }
+        /// Discovery can bring back an old session. Keep existing rows stable
+        /// and insert each unseen identity using its original effective time.
+        mutating func register(_ sessions: [SessionSummary]) {
+            for session in sessions where rank[session.key] == nil {
+                let index = ids.firstIndex {
+                    firstSeenTime[$0, default: 0] < session.mtime
+                } ?? ids.endIndex
+                ids.insert(session.key, at: index)
+                firstSeenTime[session.key] = session.mtime
+                rank = Dictionary(uniqueKeysWithValues: ids.enumerated().map { ($0.element, $0.offset) })
             }
         }
 
@@ -129,7 +127,7 @@ enum DesktopSidebarProjection {
         // First-seen order is per session (recency at that moment, newest first),
         // so a group formed later — or whose layout arrives after the first
         // render — sits where its members already were instead of jumping up.
-        order.register(visible.sorted { $0.mtime > $1.mtime }.map(\.key))
+        order.register(visible.sorted { $0.mtime > $1.mtime })
 
         var pinned: [(Double, Item)] = []
         var buckets: [Bucket: [Item]] = [:]
