@@ -196,13 +196,15 @@ struct MacSidebar: View {
         )
         return List(selection: selectionBinding) {
             ForEach(sections) { section in
-                Section(isExpanded: expansion(for: section)) {
-                    ForEach(section.items) { item in
-                        itemView(item)
+                Section {
+                    if expansion(for: section).wrappedValue {
+                        ForEach(section.items) { item in
+                            itemView(item)
+                        }
                     }
                 } header: {
-                    Button {
-                        expansion(for: section).wrappedValue.toggle()
+                    DisclosureGroup(isExpanded: expansion(for: section)) {
+                        EmptyView()
                     } label: {
                         Text(verbatim: title(for: section))
                             .interfaceFont(.body.weight(.semibold))
@@ -211,7 +213,6 @@ struct MacSidebar: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
                 }
             }
         }
@@ -536,11 +537,14 @@ struct MacSidebar: View {
     private func expansion(for section: DesktopSidebarProjection.Section) -> Binding<Bool> {
         Binding(
             get: {
+                if hasActiveScope { return true }
                 if let expanded = sectionExpansion[section.id] { return expanded }
-                if case .bucket(.older) = section.kind { return hasActiveScope }
-                return true
+                switch section.kind {
+                case .pinned, .bucket(.today): return true
+                case .bucket: return false
+                }
             },
-            set: { sectionExpansion[section.id] = $0 }
+            set: { if !hasActiveScope { sectionExpansion[section.id] = $0 } }
         )
     }
 

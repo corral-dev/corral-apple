@@ -475,6 +475,7 @@ struct MacPaneHeader: View {
         .fixedSize()
         .disabled(SessionActionsMenu.isReadonly(access: appModel.connectedAccess))
         .help(Text("session.actions.menu"))
+        .accessibilityIdentifier("corral.session.actions")
     }
 
     /// Activity dot first, then the independent red unread overlay.

@@ -40,6 +40,33 @@ struct Probe {
         precondition(MacInterfaceZoom(fileURL: parent.appendingPathComponent("zoom.json")).percentage == 110)
         print("PASS zoom bounds, normalization, persistent restart, corrupt fallback and save-failure recovery")
 
+        MacMenuTypography.shared.configure(zoom: zoom)
+        let popup = NSMenu(title: "Session")
+        let branch = popup.addItem(withTitle: "Continue with", action: nil, keyEquivalent: "")
+        let submenu = NSMenu(title: "Assistants")
+        submenu.font = .menuFont(ofSize: 10)
+        submenu.addItem(withTitle: "Codex", action: nil, keyEquivalent: "")
+        branch.submenu = submenu
+        let commands = NSMenu(title: "Menu bar")
+        let commandBranch = commands.addItem(withTitle: "Session", action: nil, keyEquivalent: "")
+        let commandMenu = NSMenu(title: "Session")
+        commandBranch.submenu = commandMenu
+        NSApp.mainMenu = commands
+        let commandSize = commandMenu.font.pointSize
+        for percentage in [80, 100, 120, 150] {
+            zoom.setPercentage(percentage)
+            NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: popup)
+            precondition(abs(popup.font.pointSize - max(14, 14 * zoom.scale)) < 0.01)
+            precondition(submenu.font.pointSize == popup.font.pointSize)
+            NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: commandMenu)
+            precondition(commandMenu.font.pointSize == commandSize)
+        }
+        let laterMenu = NSMenu(title: "New context menu")
+        NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: laterMenu)
+        precondition(laterMenu.font.pointSize == 21)
+        NSApp.mainMenu = nil
+        print("PASS popup/context/submenu fonts at 80/100/120/150%, late menus and native menu-bar isolation")
+
         let context = EnvironmentValues().fontResolutionContext
         let font = Font.body.monospaced().weight(.semibold).italic()
         let base = font.resolve(in: context)

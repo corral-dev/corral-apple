@@ -8,8 +8,50 @@ struct MacZoomScope: ViewModifier {
         content
             .environment(zoom)
             .environment(\.interfaceScale, zoom.scale)
-            .task { MacZoomKeyAlias.shared.configure(zoom: zoom) }
+            .task {
+                MacZoomKeyAlias.shared.configure(zoom: zoom)
+                MacMenuTypography.shared.configure(zoom: zoom)
+            }
             .onChange(of: zoom.percentage) { _, _ in MacZoomKeyAlias.shared.install() }
+    }
+}
+
+/// Native popup menus have their own AppKit font, independent of SwiftUI's
+/// content environment. Apply centrally when tracking begins so future menus
+/// and lazily created submenus use the same readable typography.
+@MainActor
+final class MacMenuTypography: NSObject {
+    static let shared = MacMenuTypography()
+    private weak var zoom: MacInterfaceZoom?
+    private var observing = false
+
+    func configure(zoom: MacInterfaceZoom) {
+        self.zoom = zoom
+        guard !observing else { return }
+        observing = true
+        NotificationCenter.default.addObserver(self, selector: #selector(menuWillTrack(_:)),
+                                              name: NSMenu.didBeginTrackingNotification, object: nil)
+    }
+
+    @objc private func menuWillTrack(_ notification: Notification) {
+        guard let menu = notification.object as? NSMenu else { return }
+        apply(to: menu)
+    }
+
+    func apply(to menu: NSMenu) {
+        // Preserve system menu-bar sizing, including all its descendants.
+        var root = menu
+        while let parent = root.supermenu { root = parent }
+        guard root !== NSApp.mainMenu else { return }
+        let font = NSFont.menuFont(ofSize: max(14, 14 * (zoom?.scale ?? 1)))
+        apply(font, to: menu)
+    }
+
+    private func apply(_ font: NSFont, to menu: NSMenu) {
+        menu.font = font
+        for item in menu.items {
+            if let submenu = item.submenu { apply(font, to: submenu) }
+        }
     }
 }
 

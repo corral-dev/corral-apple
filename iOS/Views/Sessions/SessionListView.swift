@@ -50,8 +50,8 @@ struct SessionListView: View {
     /// set this — only the `session.get` lookup may.
     @State private var missingNotificationKey: String?
     @State private var inspectedSessionRoute: SessionRoute?
-    /// Older-than-yesterday rows start collapsed so recent work stays on screen.
-    @State private var earlierExpanded = false
+    /// Date disclosures survive navigation and updates for this host page.
+    @State private var sectionExpansion: [String: Bool] = [:]
     /// Quick-filter selections. They live in this view (one instance per host
     /// in the navigation stack, so state is host-scoped) and survive pushing
     /// a conversation and returning. Live updates, refreshes, and reconnects
@@ -169,7 +169,7 @@ struct SessionListView: View {
                                 }
                             }
                         } header: {
-                            sectionHeader(section, expanded: expanded)
+                            sectionHeader(section)
                                 .textCase(nil)
                         }
                     }
@@ -493,20 +493,17 @@ struct SessionListView: View {
         !listStore.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    /// Search must reveal hits; only the Earlier bucket collapses by default.
-    /// An active runtime/project scope behaves like searching: matching rows
-    /// must not hide behind the collapsed Earlier disclosure.
     private func isSectionExpanded(_ section: SessionListStore.Section) -> Bool {
+        if hasActiveScope { return true }
+        if let expanded = sectionExpansion[section.id] { return expanded }
         switch section {
-        case .earlier:
-            return earlierExpanded || hasActiveScope
-        case .waiting, .pinned, .today, .yesterday:
-            return true
+        case .waiting, .pinned, .today: return true
+        case .yesterday, .earlier: return false
         }
     }
 
     @ViewBuilder
-    private func sectionHeader(_ section: SessionListStore.Section, expanded: Bool) -> some View {
+    private func sectionHeader(_ section: SessionListStore.Section) -> some View {
         let title = sectionTitle(section)
         let count = section.sessions.count.formatted()
         let label = HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
@@ -517,36 +514,20 @@ struct SessionListView: View {
                 .font(Typography.sessionMeta)
                 .foregroundStyle(Color(uiColor: .secondaryLabel))
                 .monospacedDigit()
-            if case .earlier = section, !hasActiveScope {
-                Spacer(minLength: Space.sm)
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.tertiary)
-                    .rotationEffect(.degrees(expanded ? 90 : 0))
-                    .accessibilityHidden(true)
-            }
         }
-        if case .earlier = section, !hasActiveScope {
-            Button {
-                withAnimation(reduceMotion ? nil : .snappy(duration: Motion.stateDuration)) {
-                    earlierExpanded.toggle()
-                }
+        if !hasActiveScope && section.id != "waiting" {
+            DisclosureGroup(isExpanded: Binding(
+                get: { isSectionExpanded(section) },
+                set: { sectionExpansion[section.id] = $0 }
+            )) {
+                EmptyView()
             } label: {
                 label
                     .frame(maxWidth: .infinity, minHeight: TouchTarget.minimum, alignment: .leading)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(PressableButtonStyle(pressedScale: 1))
             .accessibilityLabel(Text(title))
             .accessibilityValue(Text(count))
-            .accessibilityHint(
-                Text(
-                    expanded
-                        ? "sessions.section.collapse_hint"
-                        : "sessions.section.expand_hint"
-                )
-            )
-            .accessibilityAddTraits(.isButton)
         } else {
             label
         }
