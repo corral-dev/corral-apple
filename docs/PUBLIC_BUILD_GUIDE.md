@@ -64,7 +64,6 @@ Owner requirement (2026-10-12): the native Mac client supports Homebrew installa
 
 Install with `brew install --cask x0c/tap/corral-mac`. Existing official DMG installations can be registered with `--adopt`; Homebrew's self-updating-app handling keeps the existing bundle. To explicitly replace an older DMG installation with the tap version, quit Corral and use `brew install --cask --force x0c/tap/corral-mac`. Verify the tap version before forced replacement to avoid downgrading a newer installed app. Do not combine `--adopt` and `--force`. Then run `brew update` and `brew upgrade --cask x0c/tap/corral-mac` for updates. Custom application locations need the same `--appdir` during registration.
 
-Maintainers can bootstrap or retry Cask publication independently with `python3 scripts/publish-mac-release.py --sync-homebrew-release mac-v<version>`. This checks the stable release metadata and anonymously downloads the immutable DMG before publishing. Normal Mac publication calls the same compare-and-swap path and records `homebrewCask` in its terminal receipt; an unchanged publication is a no-op. Credentials stay in the existing authenticated GitHub CLI.
 
 The Cask installs only `Corral.app`; it must not remove `~/.config/corral-mac/`, preferences or Keychain entries during installation, upgrades or uninstall, and has no `zap` stanza. Keep bundle/signing identity unchanged so existing pairing and preferences remain usable. Source builds remain a separate route.
 

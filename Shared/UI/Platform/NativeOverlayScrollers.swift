@@ -5,7 +5,8 @@ import SwiftUI
 
 extension View {
     /// Configure the enclosing native scroller after SwiftUI's current update.
-    /// Attach inside scrolling content, including realized List/Form rows.
+    /// Attach inside ScrollView or Form content. List scrollers are left to
+    /// SwiftUI, which reverts this style inside its own update.
     func nativeOverlayScrollers() -> some View {
         #if os(macOS)
         background {
@@ -77,6 +78,10 @@ private final class NativeOverlayScrollerOwner: NSObject {
     private var updateScheduled = false
 
     static func attach(to scroll: NSScrollView) {
+        // SwiftUI's List coordinator re-applies the system scroller style
+        // during its graph update and retiles synchronously; contesting it
+        // reenters row hosting layout and aborts AttributeGraph.
+        guard !(scroll.documentView is NSTableView) else { return }
         let owner: NativeOverlayScrollerOwner
         if let existing = objc_getAssociatedObject(scroll, &associationKey) as? NativeOverlayScrollerOwner {
             owner = existing

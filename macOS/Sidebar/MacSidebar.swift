@@ -198,7 +198,7 @@ struct MacSidebar: View {
             ForEach(sections) { section in
                 Section(isExpanded: expansion(for: section)) {
                     ForEach(section.items) { item in
-                        itemView(item).nativeOverlayScrollers()
+                        itemView(item)
                     }
                 } header: {
                     Button {

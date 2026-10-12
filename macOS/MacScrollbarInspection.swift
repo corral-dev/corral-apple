@@ -13,22 +13,44 @@ enum MacScrollbarInspection {
         }
         guard let window = NSApp.windows.first(where: { $0.title == "Corral" }),
               let content = window.contentView,
-              let table = descendants(content).compactMap({ $0 as? NSOutlineView }).first else { return }
+              descendants(content).contains(where: { $0 is NSOutlineView }) else {
+            writeSidebarEvidence(["failure": "sidebar outline not mounted",
+                                  "windows": NSApp.windows.map(\.title)])
+            return
+        }
         let keys = workspace.paneKeys, focus = workspace.focusedKey
         let groups = workspace.layout.groups.map { "\($0.id):\($0.members.joined(separator: ","))" }
         defer { workspace.inspectionRestoreWorkspace(keys: keys, focus: focus) }
         var selected: Set<String> = []
         var attempts = 0
-        for _ in 0..<3 {
-            for row in 1..<min(table.numberOfRows, 18) {
+        var failure: String?
+        // SwiftUI owns List scroller style; a flip here means a contest. The
+        // list is rebuilt when its structure changes, so follow each instance.
+        let flips = StyleFlips()
+        var observations: [ObjectIdentifier: NSKeyValueObservation] = [:]
+        var markers = 0
+        defer { observations.values.forEach { $0.invalidate() } }
+        selection: for _ in 0..<3 {
+            for row in 1..<18 {
                 guard !Task.isCancelled else { return }
+                guard let table = descendants(content).compactMap({ $0 as? NSOutlineView }).first,
+                      let scroll = table.enclosingScrollView else {
+                    failure = "sidebar outline disappeared"
+                    break selection
+                }
+                if observations[ObjectIdentifier(scroll)] == nil {
+                    observations[ObjectIdentifier(scroll)] = flips.observe(scroll)
+                }
+                markers = max(markers, descendants(table).filter { $0 is NativeOverlayScrollerView }.count)
+                guard row < table.numberOfRows else { break selection }
                 // Public native selection posts the same notification as a
                 // sidebar click. No pointer or keyboard input is synthesized.
                 table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
                 try? await Task.sleep(for: .milliseconds(200))
-                guard let scroll = table.enclosingScrollView,
-                      scroll.scrollerStyle == .overlay,
-                      scroll.contentView.frame.width >= scroll.bounds.width - 1 else { return }
+                guard scroll.window == nil || scroll.scrollerStyle == NSScroller.preferredScrollerStyle else {
+                    failure = "sidebar left the system scroller style"
+                    break selection
+                }
                 attempts += 1
                 if let key = workspace.focusedKey { selected.insert(key) }
             }
@@ -37,12 +59,33 @@ enum MacScrollbarInspection {
             "pid": ProcessInfo.processInfo.processIdentifier,
             "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "",
             "attempts": attempts,
+            "failure": failure ?? NSNull(),
+            "preferredStyle": NSScroller.preferredScrollerStyle == .legacy ? "legacy" : "overlay",
             "distinctSessions": selected.count,
-            "sidebarMarkers": descendants(table).filter { $0 is NativeOverlayScrollerView }.count,
-            "sidebarOverlay": table.enclosingScrollView?.scrollerStyle == .overlay,
-            "sidebarHasReservedColumn": table.enclosingScrollView.map { $0.contentView.frame.width < $0.bounds.width - 1 } ?? true,
+            "sidebarInstances": observations.count,
+            "sidebarMarkers": markers,
+            "sidebarStyleFlips": flips.count,
             "hostLayoutUnchanged": groups == workspace.layout.groups.map { "\($0.id):\($0.members.joined(separator: ","))" },
         ]
+        writeSidebarEvidence(evidence)
+    }
+
+    /// AppKit re-sets the same style on preference notices; count real flips.
+    private final class StyleFlips {
+        var count = 0
+
+        func observe(_ scroll: NSScrollView) -> NSKeyValueObservation {
+            var last = scroll.scrollerStyle
+            return scroll.observe(\.scrollerStyle, options: []) { [self] scroll, _ in
+                MainActor.assumeIsolated {
+                    if scroll.scrollerStyle != last { count += 1 }
+                    last = scroll.scrollerStyle
+                }
+            }
+        }
+    }
+
+    private static func writeSidebarEvidence(_ evidence: [String: Any]) {
         if let data = try? JSONSerialization.data(withJSONObject: evidence, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: URL(fileURLWithPath: "/tmp/corral-sidebar-switches.json"), options: .atomic)
         }

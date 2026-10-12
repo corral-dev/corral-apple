@@ -11,9 +11,6 @@ struct Probe {
             LazyVStack { ForEach(0..<100) { Text("Message \($0)") } }
                 .nativeOverlayScrollers()
         }.scrollIndicators(.automatic))
-        check("sidebar list", List {
-            ForEach(0..<100) { Text("Session \($0)").nativeOverlayScrollers() }
-        }.listStyle(.sidebar))
         check("settings form", Form {
             ForEach(0..<100) { Text("Setting \($0)").nativeOverlayScrollers() }
         }.formStyle(.grouped))
@@ -63,10 +60,10 @@ struct Probe {
         tableScroll.documentView = table
         let tableMarker = NativeOverlayScrollerView()
         table.addSubview(tableMarker)
-        precondition(tableScroll.scrollerStyle == .legacy, "Table geometry changed synchronously")
+        tableMarker.applyOverlayStyle()
         pump()
-        precondition(tableScroll.scrollerStyle == .overlay, "Native table lost overlay styling")
-        print("PASS deferred geometry, repeated updates, detachment and native table overlay")
+        precondition(tableScroll.scrollerStyle == .legacy, "Native table scroller style was contested")
+        print("PASS deferred geometry, repeated updates, detachment and native tables left to SwiftUI")
     }
 
     @MainActor
@@ -84,24 +81,36 @@ struct Probe {
             preconditionFailure("Native sidebar outline was not mounted")
         }
         guard let scroll = table.enclosingScrollView else { preconditionFailure("Missing sidebar scroll view") }
+        precondition(scroll.scrollerStyle == NSScroller.preferredScrollerStyle, "Sidebar left the system scroller style")
+        // Under the legacy preference SwiftUI reverts any override inside its
+        // List update and retiles (the Mac 0.3.79 AttributeGraph abort).
+        let changes = StyleChanges()
+        changes.last = scroll.scrollerStyle
+        // AppKit re-sets the same style on preference notices; count real flips.
+        let observation = scroll.observe(\.scrollerStyle, options: []) { scroll, _ in
+            MainActor.assumeIsolated {
+                if scroll.scrollerStyle != changes.last { changes.count += 1 }
+                changes.last = scroll.scrollerStyle
+            }
+        }
+        defer { observation.invalidate() }
         var selections = 0
         for cycle in 0..<3 {
             for row in 1..<min(table.numberOfRows, 20) {
-                scroll.scrollerStyle = .legacy
                 NotificationCenter.default.post(name: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil)
                 table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+                state.revision += 1
                 RunLoop.main.run(until: Date().addingTimeInterval(0.025))
                 host.layoutSubtreeIfNeeded()
-                precondition(scroll.scrollerStyle == .overlay, "Sidebar reverted to a coarse scrollbar")
-                precondition(scroll.contentView.frame.width >= scroll.bounds.width - 1, "Sidebar reserves a scrollbar column")
                 if state.selection != nil { selections += 1 }
                 window.setContentSize(NSSize(width: 850 + cycle * 10, height: 550))
             }
         }
+        pump()
         precondition(selections >= 40, "Native selection did not reach the SwiftUI binding")
-        let sidebarMarkers = descendants(table).compactMap { $0 as? NativeOverlayScrollerView }
-        precondition(!sidebarMarkers.isEmpty, "Sidebar overlay configuration is missing")
-        print("PASS \(selections) native outline selections retaining overlay geometry during preference changes, detail replacement and resize")
+        precondition(changes.count == 0, "Sidebar scroller style changed \(changes.count) times during List updates")
+        precondition(scroll.scrollerStyle == NSScroller.preferredScrollerStyle)
+        print("PASS \(selections) native outline selections with row updates, preference notices and resize; List scroller style uncontested (preferred \(NSScroller.preferredScrollerStyle.rawValue))")
     }
 
     @MainActor
@@ -161,6 +170,13 @@ struct Probe {
 @MainActor @Observable
 private final class SidebarState {
     var selection: Int?
+    var revision = 0
+}
+
+@MainActor
+private final class StyleChanges {
+    var count = 0
+    var last = NSScroller.Style.overlay
 }
 
 private struct SidebarFixture: View {
@@ -171,9 +187,10 @@ private struct SidebarFixture: View {
             List(selection: Binding(get: { state.selection }, set: { state.selection = $0 })) {
                 Section("Sessions") {
                     ForEach(0..<40) { index in
-                        Text("Session \(index)")
+                        // The marker stays to prove List scrollers are left to SwiftUI.
+                        Text("Session \(index) · \(state.revision)")
                             .background(NativeSidebarSelection())
-                              .nativeOverlayScrollers()
+                            .nativeOverlayScrollers()
                             .tag(index)
                     }
                 }
