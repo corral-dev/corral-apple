@@ -355,6 +355,16 @@ private struct NativeChatScrollView<Header: View, Content: View>: View {
                 showLatest()
             }
         }
+        #if os(macOS)
+        .onChange(of: contentHeight) { _, newHeight in
+            // Replacing the loaded window (cached tail, then the host's newer
+            // window) leaves the lazy stack at an offset computed from
+            // estimated rows, with none realized there: the pane stays blank
+            // until the reader scrolls. Re-anchor once the real height lands.
+            guard followsLatest, !isUserScrolling, latestID != nil, newHeight > 0 else { return }
+            showLatest()
+        }
+        #endif
         #if os(iOS)
         .onChange(of: contentHeight) { oldHeight, newHeight in
             // First layout after async mount: onAppear can run before the lazy
