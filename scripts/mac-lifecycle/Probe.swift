@@ -64,6 +64,7 @@ struct RuntimeEntry: Decodable { var id: String; var isActive: Bool { true } }
     func applySessionEvent(_ session: SessionSummary) { sessions[session.key] = session }
     func rememberOpened(_ session: SessionSummary) { opened.insert(session.key) }
     func session(for key: String) -> SessionSummary? { sessions[key] }
+    func resolvedKey(_ key: String) -> String { key }
 }
 @MainActor final class HostSessionFeed { var listStore = SessionListStore() }
 @MainActor final class MacPaneSurfaceCache { func reset() {} }

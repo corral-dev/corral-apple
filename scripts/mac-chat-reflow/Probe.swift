@@ -5,6 +5,7 @@ import Observation
 @Observable @MainActor final class ReflowState {
     var scale: CGFloat = 1
     var jump: String?
+    var linked = false
 }
 
 /// Product text, layout and activity controls; only data/detail services are fixtures.
@@ -33,6 +34,15 @@ private struct ReflowScreen: View {
     }
 }
 
+private struct UpdatedTextScreen: View {
+    let state: ReflowState
+    var body: some View {
+        var text = AttributedString("Unchanged words with updated attributes")
+        if state.linked { text.link = URL(string: "https://example.com/updated") }
+        return SelectableAttributedText(attributed: text)
+    }
+}
+
 @main
 struct ReflowProbe {
     @MainActor static func main() {
@@ -41,9 +51,26 @@ struct ReflowProbe {
             return
         }
         NSApplication.shared.setActivationPolicy(.prohibited)
+        checkAttributeUpdate()
         checkConversation(count: 3)
         checkConversation(count: 120)
         print("PASS native capsule hit targets, short/long zoom and width reflow, drawn text ranges, history position and native selection")
+    }
+
+    @MainActor static func checkAttributeUpdate() {
+        let state = ReflowState()
+        let host = NSHostingView(rootView: UpdatedTextScreen(state: state))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 200),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = host
+        pump(host)
+        state.linked = true
+        pump(host)
+        let text = descendants(host).compactMap { $0 as? NSTextView }.first
+        precondition(text?.textStorage?.attribute(.link, at: 0, effectiveRange: nil) != nil,
+                     "Same-string attribute update never reached the drawn text storage")
     }
 
     @MainActor static func inspectWindow() {
@@ -101,6 +128,9 @@ struct ReflowProbe {
                 }
                 let glyphs = layout.glyphRange(forBoundingRect: text.visibleRect, in: container)
                 precondition(glyphs.length > 0, "Visible message has no drawable glyphs after reflow")
+                let used = layout.usedRect(for: container)
+                precondition(used.maxY <= text.bounds.height + 1,
+                             "Text exceeds allocated row: used=\(used) bounds=\(text.bounds) count=\(count) width=\(width) scale=\(scale)")
             }
             let lastVisible = texts.contains { text in
                 guard let container = text.textContainer, let layout = text.layoutManager else { return false }

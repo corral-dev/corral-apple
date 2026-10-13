@@ -198,6 +198,72 @@ struct TextSelectionProbe {
                 scroll.removeFromSuperview()
             }
         }
+        // Height is measured at the exact returned width, including paragraph
+        // origins and the shared network's terminating container break.
+        for indent in [0.0, 18, 40] {
+            for width in [220.0, 400, 760] {
+                let paragraph = NSMutableParagraphStyle()
+                paragraph.firstLineHeadIndent = indent
+                paragraph.headIndent = indent
+                paragraph.lineSpacing = 4
+                let measuredText = NSAttributedString(
+                    string: String(repeating: "Some 中文 words with wrapping. ", count: 12),
+                    attributes: [.font: style.font, .paragraphStyle: paragraph])
+                let measuredDoc = MacConversationTextDocument()
+                measuredDoc.update(identity: ObjectIdentifier(owner), sources: [
+                    .init(id: 1, text: measuredText.string, isUser: false),
+                    .init(id: 2, text: "Following", isUser: false)
+                ], style: style) { $0.id == 1 ? measuredText : NSAttributedString(string: $0.text, attributes: [.font: style.font]) }
+                let size = MacTextMeasurement().size(for: measuredText, font: style.font, width: width, hasFollowingBlock: true)
+                let measuredContainer = require(measuredDoc.container(for: 1), "missing measured container")
+                measuredContainer.size.width = size.width
+                measuredDoc.layout.ensureLayout(for: measuredContainer)
+                let drawn = measuredDoc.layout.usedRect(for: measuredContainer)
+                check(drawn.maxY <= size.height + 0.5 && abs(drawn.maxY - size.height) < 1,
+                      "Detached/live height mismatch: \(size) vs \(drawn), indent \(indent)")
+            }
+        }
+
+        let tallText = NSAttributedString(string: String(repeating: "Long line\n", count: 8000),
+                                          attributes: [.font: style.font])
+        let tallSize = MacTextMeasurement().size(for: tallText, font: style.font, width: 240, hasFollowingBlock: true)
+        check(tallSize.height > MacConversationTextDocument.initialCanvasHeight,
+              "Finite measurement canvas truncated a long message")
+
+        // Replacing a representable must leave the retired mount powerless:
+        // delayed layout/teardown cannot move or remove its replacement's text.
+        let oldMount = MacMessageTextMount(frame: NSRect(x: 0, y: 0, width: 500, height: 180))
+        let newMount = MacMessageTextMount(frame: NSRect(x: 0, y: 200, width: 300, height: 220))
+        root.addSubview(oldMount)
+        root.addSubview(newMount)
+        oldMount.attach(stable)
+        oldMount.layoutSubtreeIfNeeded()
+        check(stable.frame.size == oldMount.bounds.size, "initial text mount failed layout")
+        let selected = stable.selectedRange()
+        newMount.attach(stable)
+        newMount.layoutSubtreeIfNeeded()
+        let replacementFrame = stable.frame
+        oldMount.frame.size = NSSize(width: 90, height: 20)
+        oldMount.needsLayout = true
+        oldMount.layoutSubtreeIfNeeded()
+        oldMount.releaseTextView()
+        check(oldMount.textView == nil, "retired mount still owns replacement text")
+        check(stable.superview === newMount && stable.frame == replacementFrame,
+              "stale mount changed replacement text geometry or attachment")
+        check(stable.selectedRange() == selected, "reattachment cleared native selection")
+        newMount.frame.size = .zero
+        newMount.needsLayout = true
+        newMount.layoutSubtreeIfNeeded()
+        check(stable.frame == replacementFrame, "zero-sized placement collapsed text layout")
+        newMount.frame.size = NSSize(width: 450, height: 260)
+        newMount.needsLayout = true
+        newMount.layoutSubtreeIfNeeded()
+        check(stable.frame.size == newMount.bounds.size, "current mount did not reflow")
+        newMount.releaseTextView()
+        check(stable.superview == nil, "active mount did not retire its text")
+        oldMount.removeFromSuperview()
+        newMount.removeFromSuperview()
+
         weak var pruned: NSTextView?
         let bounded = MacConversationTextDocument()
         autoreleasepool {

@@ -37,4 +37,18 @@ Runtime verification on iOS 26.2 (iPhone 17) and iOS 27 (iPhone 13 Pro): the fou
 
 2026-09-30 observation: on the `Corral Keyboard Test` simulator (iOS 26.2), `testShortConversationStaysAtTopOverKeyboard` fails with "Runtime layout/input did not settle" (the software keyboard never rises) on both the committed code and the working tree, even after a simulator reboot; the other 187 tests pass. Treat it as a simulator keyboard environment issue until reproduced elsewhere; it is not evidence against scroll-follow changes.
 
+## Latest intermittently left under the keyboard (2026-10-13)
+
+Owner report on the iPhone: when the keyboard comes up, the messages sometimes stay where they were instead of rising above it.
+
+Runtime facts (iOS 27.1 simulator, iPhone 17 Pro Max, production `ChatScreen`/`ChatView`/`ComposerBar` in a real window): the keyboard does not change the conversation scroll view's bounds (956 pt); it raises `adjustedContentInset.bottom` from 151 to 464 pt, and `ScrollGeometry.containerSize` follows the inset-reduced viewport, so the existing container-height follow fires. Transcripts that overflow only once the keyboard is up, varied-height lazy rows, the Working cue and a reply arriving while the keyboard rises all landed on the latest message in every cycle.
+
+Reproduced defect: focusing the composer while a Your prompts jump was still settling. The focus request scrolled to latest, then the jump task's delayed final `scrollTo(message, .center)` ran and pulled the view back into history (latest message ~4000 pt below the composer, 2 of 3 cycles). Nothing cancelled the jump. Fix in `ChatScrollView.requestLatest()`: an explicit latest request bumps the jump generation, clears the fade, and the fade path re-checks the generation before moving.
+
+Same-family risk, not reproducible without touch synthesis (pointer/gesture automation is forbidden here): a request made while a fling still coasts. Coasting geometry used to clear `followsLatest`, so the keyboard inset that followed no longer re-pinned. The request now stays pending through coasting and lands when the scroll rests; a new drag withdraws it. Physical-phone confirmation of this path is outstanding.
+
+Delivery: iPhone 1.0.158 (168) from `f712cc8`, built from a clean clone of that commit; `ios-deliver` job `3ad1ab561a0b4af2a47b43e0` verified installation and launch on the owner's paired iPhone and uploaded to AppShelf; `devicectl` reads back 1.0.158 (168). A Debug build of the same commit launched with `-CorralInspectConversation -CorralInspectKeyboard` showed, on the phone, the newest reply fully above the composer with the Chinese keyboard and candidate bar up. The settling-jump case itself is covered by the simulator regression only; a human tap during a fling remains for the owner. Mac: the old `ChatScrollView` path had the same jump-settle race for the jump-to-latest button and send; this commit carries the shared fix, and the concurrent Mac native-table rewrite was told to keep the rule. The TUI has no Corral composer.
+
+Regression: `ChatKeyboardLayoutTests.testKeyboardRevealsLatestOnEveryCycle` (medium transcript, focus during a settling jump, focus after reading history, Working cue with a reply arriving mid-rise; three keyboard cycles each). Without the fix the settling-jump case fails; with it all cases pass on repeated runs.
+
 <!-- 该文档整理/压缩于 2026-09-29 -->

@@ -358,7 +358,7 @@ struct MacRootView: View {
             Task { await MacZoomInspection.inspectPopupMenus(zoom: zoom) }
         }
         if MacSessionSwitchInspection.enabled {
-            Task { await MacSessionSwitchInspection.run(feed: current, workspace: workspace) }
+            Task { await MacSessionSwitchInspection.run(feed: current, workspace: workspace, zoom: zoom) }
         }
         if ProcessInfo.processInfo.arguments.contains("-CorralInspectSidebarSwitches") {
             Task { await MacScrollbarInspection.inspectSidebarIfRequested(feed: current, workspace: workspace) }

@@ -26,7 +26,8 @@ final class ChatScrollMomentumTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(800))
         let scroll = try XCTUnwrap(descendants(window).compactMap { $0 as? UIScrollView }.max { $0.bounds.height < $1.bounds.height })
         fixture.target = "message-45"
-        try await Task.sleep(for: .milliseconds(500))
+        // Outlast the jump: glide plus its final settle (~0.55 s).
+        try await Task.sleep(for: .milliseconds(1200))
         let before = scroll.contentOffset.y
         fixture.first = 20
         try await Task.sleep(for: .milliseconds(700))

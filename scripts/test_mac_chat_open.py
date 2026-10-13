@@ -18,11 +18,12 @@ SOURCES = [
     "Shared/UI/Platform/PlatformSupport.swift", "Shared/UI/Platform/NativeOverlayScrollers.swift",
     "Shared/Core/Conversation/ChatHistoryPullState.swift", "Shared/UI/Chat/ChatScrollView.swift",
     "Shared/UI/Chat/MacConversationTextDocument.swift", "Shared/UI/Chat/SelectableAttributedText.swift",
+    "Shared/UI/Chat/ChatMarkdown.swift", "Shared/UI/Chat/MacMarkdownTable.swift",
     "Shared/UI/Chat/ToolActivityView.swift", "scripts/mac-chat-reflow/Support.swift",
     "scripts/mac-chat-open/Probe.swift",
 ]
 with tempfile.TemporaryDirectory(prefix="corral-mac-chat-open-") as directory:
     executable = str(Path(directory) / "probe")
-    subprocess.run(["swiftc", "-swift-version", "6", "-default-isolation", "MainActor", "-parse-as-library",
+    subprocess.run(["swiftc", "-swift-version", "6", "-default-isolation", "MainActor", "-parse-as-library", "-DCORRAL_REAL_MARKDOWN",
                     *[str(ROOT / path) for path in SOURCES], "-o", executable], check=True)
     subprocess.run([executable, *sys.argv[1:]], check=True)

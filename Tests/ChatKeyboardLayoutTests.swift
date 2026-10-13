@@ -70,7 +70,8 @@ final class ChatKeyboardLayoutTests: XCTestCase {
             // Programmatic history selection exercises the same production route
             // as selecting a prompt from the navigation sheet.
             fixture.targetID = "message-3"
-            try await settle()
+            // Outlast the jump: glide plus its final settle (~0.55 s).
+            try await Task.sleep(for: .milliseconds(1200))
             let scroll = conversationScroll
             let historyOffset = scroll.contentOffset.y
             await fixture.store.handle(RemoteEvent(channel: "session:keyboard-test", data: [
@@ -224,6 +225,83 @@ final class ChatKeyboardLayoutTests: XCTestCase {
 
     }
 
+    /// Keyboard returns to latest (owner requirement 2026-10-13): every time the
+    /// keyboard comes up, the newest content sits fully above the composer — for
+    /// a transcript that overflows only once the keyboard shrinks the viewport,
+    /// for a long one read from history (including focus while a Your prompts
+    /// jump is still settling), with the Working cue and a reply arriving while
+    /// the keyboard rises, and on every repeated cycle.
+    func testKeyboardRevealsLatestOnEveryCycle() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previousWindow = scene.windows.first(where: \.isKeyWindow)
+        for (scenario, count) in [("medium", 6), ("jumpSettling", 30), ("history", 30), ("streaming", 30)] {
+            let fixture = KeyboardFixture()
+            if scenario == "streaming" { fixture.marker = .working }
+            await fixture.store.handle(RemoteEvent(channel: "session:keyboard-test", data: [
+                "messages": (1...count).map {
+                    ["seq": $0, "role": $0.isMultiple(of: 2) ? "assistant" : "user",
+                     "text": "Reveal \($0). The newest message must clear the composer whenever the keyboard opens."
+                        + ($0 % 3 == 1 && $0 != count
+                           ? String(repeating: "\nA tall reply whose height a lazy stack can only estimate.", count: $0 % 5 * 4)
+                           : "")] as [String: Any]
+                }
+            ]))
+            let window = UIWindow(windowScene: scene)
+            window.rootViewController = UIHostingController(rootView: KeyboardFixtureView(fixture: fixture))
+            window.makeKeyAndVisible()
+            defer {
+                window.endEditing(true)
+                window.isHidden = true
+                window.rootViewController = nil
+                previousWindow?.makeKeyAndVisible()
+            }
+            try await waitUntil { self.editableInput(in: window) != nil }
+            try await settle()
+            let input = try XCTUnwrap(editableInput(in: window))
+            let restingInput = input.convert(input.bounds, to: window)
+            for cycle in 1...3 {
+                switch scenario {
+                case "jumpSettling":
+                    // Focus lands while the jump's delayed settle is still pending.
+                    fixture.targetID = "message-3"
+                    try await Task.sleep(for: .milliseconds(150))
+                case "history":
+                    fixture.targetID = "message-3"
+                    try await Task.sleep(for: .seconds(1.5))
+                default:
+                    break
+                }
+                XCTAssertTrue(input.becomeFirstResponder())
+                let latestSeq = scenario == "streaming" ? count + cycle : count
+                if scenario == "streaming" {
+                    try await Task.sleep(for: .milliseconds(60 * cycle))
+                    await fixture.store.handle(RemoteEvent(channel: "session:keyboard-test", data: [
+                        "message": ["seq": latestSeq, "role": "assistant",
+                                    "text": "Reveal \(latestSeq). A reply arriving " + String(repeating: "while the keyboard rises. ", count: 20)]
+                    ]))
+                }
+                try await waitUntil { input.convert(input.bounds, to: window).maxY < restingInput.maxY - 100 }
+                // Outlast the jump glide so a late settle would show.
+                try await Task.sleep(for: .seconds(1))
+                let surfaceTop = composerSurfaceRect(from: input, in: window).minY
+                let last = descendants(of: window).compactMap { $0 as? UITextView }
+                    .first { !$0.isEditable && $0.text.hasPrefix("Reveal \(latestSeq).") }
+                let lastRect = last.map { $0.convert($0.bounds, to: window) } ?? .null
+                print("KEYBOARD_REVEAL \(scenario) cycle=\(cycle) last=\(lastRect) surfaceTop=\(surfaceTop)")
+                capture(window, name: "reveal-\(scenario)-\(cycle)")
+                assertComposerIsAboveKeyboard(input, window: window)
+                XCTAssertNotNil(last, "\(scenario) cycle \(cycle): latest message is not realized")
+                XCTAssertLessThanOrEqual(lastRect.maxY, surfaceTop + 1,
+                                         "\(scenario) cycle \(cycle): latest message hidden behind the composer/keyboard")
+                XCTAssertGreaterThan(lastRect.minY, window.safeAreaInsets.top + 44,
+                                     "\(scenario) cycle \(cycle): latest message pushed under the navigation bar")
+                window.endEditing(true)
+                try await waitUntil { input.convert(input.bounds, to: window).maxY > restingInput.maxY - 5 }
+                try await settle()
+            }
+        }
+    }
+
     private func assertComposerIsAboveKeyboard(_ input: UIView, window: UIWindow,
                                              file: StaticString = #filePath, line: UInt = #line) {
         let inputRect = input.convert(input.bounds, to: window)
@@ -335,6 +413,7 @@ private final class KeyboardFixture {
     var attachments: [DraftImageAttachment] = []
     var targetID: String?
     var scrollToLatestRequest = 0
+    var marker: SessionPresentation.StatusMarker?
 
     func send(_ text: String) {
         _ = store.enqueueLocalUser(text)
@@ -348,9 +427,13 @@ private struct KeyboardFixtureView: View {
     var body: some View {
         NavigationStack {
             ChatScreen {
-                ChatView(store: fixture.store, scrollToLatestRequest: fixture.scrollToLatestRequest, scrollToMessageID: $fixture.targetID)
+                ChatView(store: fixture.store, sessionMarker: fixture.marker, scrollToLatestRequest: fixture.scrollToLatestRequest, scrollToMessageID: $fixture.targetID)
             } composer: {
-                ComposerBar(text: $fixture.text, attachments: $fixture.attachments) { text, _ in
+                // Same focus route as SessionDetailView: the keyboard coming up
+                // requests latest.
+                ComposerBar(text: $fixture.text, attachments: $fixture.attachments, onFocusChange: { focused in
+                    if focused { fixture.scrollToLatestRequest += 1 }
+                }) { text, _ in
                     fixture.send(text)
                 }
             }

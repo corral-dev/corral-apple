@@ -4,6 +4,7 @@ import Observation
 
 @Observable @MainActor final class OpenState {
     var messages: [RichMessage] = []
+    var scale: CGFloat = 1
     var jump: String?
 }
 
@@ -40,6 +41,7 @@ private struct OpenScreen: View {
                 }
             }
             .modifier(MacConversationTextSelection(identity: ObjectIdentifier(owner), messages: state.messages))
+            .environment(\.interfaceScale, state.scale)
         } else {
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -50,8 +52,9 @@ private struct OpenScreen: View {
 func makeMessages(_ range: ClosedRange<Int>) -> [RichMessage] {
     range.map { index in
         let repeats = [1, 3, 40, 6, 120, 2, 15][index % 7]
+        let markdown = index.isMultiple(of: 3) ? "\n\n## Heading 中文\n\n- **Bold** list entry\n- Second entry\n\n| Key | Description |\n|---|---|\n| 中文 | A longer cell that wraps across several lines in a narrow split pane |\n| Path | `some/path/file.swift` |\n\n```swift\nlet value = 123\nprint(value)\n```" : ""
         return RichMessage(seq: index,
-                           text: "Message \(index). " + String(repeating: "中文 conversation text with some words. ", count: repeats),
+                           text: "Message \(index). " + String(repeating: "中文 conversation text with some words. ", count: repeats) + markdown,
                            role: index.isMultiple(of: 2) ? "user" : "assistant")
     }
 }
@@ -98,20 +101,40 @@ struct OpenProbe {
         let steps: [(String, ClosedRange<Int>)] = [
             ("open", 1...150), ("append", 1...170), ("window", 90...260), ("prepend", 40...260),
         ]
-        for (name, range) in steps {
+        for (step, entry) in (steps + steps).enumerated() {
+            let (name, range) = entry
             if hidden { host.isHidden = true }
             state.messages = makeMessages(range)
+            state.scale = [1.0, 1.5, 0.8, 1.2][step % 4]
+            window.setContentSize(NSSize(width: step.isMultiple(of: 2) ? width : width * 0.7, height: 640))
             if hidden { pump(0.2); host.isHidden = false }
             pump(0.001)
             if drawnRows(host).latest != range.upperBound { transientFrames += 1 }
             // One display frame, then settled states.
-            for (delay, label) in [(0.016, "first frame"), (0.3, "settled"), (1.5, "later")] {
+            for (delay, label) in [(0.016, "first frame"), (0.3, "settled"), (0.5, "later")] {
                 pump(delay)
                 let rows = drawnRows(host)
+                checkFrames(host, tag: "\(tag) \(name) \(label)")
                 if rows.latest != range.upperBound {
                     failures.append("\(tag) \(name) \(label): drawn rows \(rows.count), latest \(rows.latest ?? -1), expected \(range.upperBound)")
                 }
             }
+        }
+    }
+
+    @MainActor static func checkFrames(_ host: NSView, tag: String) {
+        let texts = descendants(host).compactMap { $0 as? NSTextView }
+            .filter { !$0.visibleRect.isEmpty && !$0.isHiddenOrHasHiddenAncestor }
+        for text in texts {
+            guard let layout = text.layoutManager, let container = text.textContainer else { continue }
+            let used = layout.usedRect(for: container)
+            if used.maxY > text.bounds.height + 1 {
+                failures.append("\(tag): text overflows row: used=\(used.maxY) height=\(text.bounds.height)")
+            }
+        }
+        let frames = texts.map { $0.convert($0.bounds, to: host) }.sorted { $0.minY < $1.minY }
+        for pair in zip(frames, frames.dropFirst()) where pair.0.maxY > pair.1.minY + 1 {
+            failures.append("\(tag): overlapping text frames \(pair)")
         }
     }
 

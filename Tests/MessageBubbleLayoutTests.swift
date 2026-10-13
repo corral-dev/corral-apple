@@ -6,6 +6,43 @@ import XCTest
 
 @MainActor
 final class MessageBubbleLayoutTests: XCTestCase {
+    func testSameCharactersUpdateNativeLinkAttributes() throws {
+        let text = "Unchanged words with new link"
+        let host = UIHostingController(rootView: SelectableAttributedText(attributed: AttributedString(text)))
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 320, height: 200))
+        window.rootViewController = host
+        window.isHidden = false
+        defer { window.isHidden = true }
+        host.view.layoutIfNeeded()
+        var linked = AttributedString(text)
+        linked.link = URL(string: "https://example.com/updated")
+        host.rootView = SelectableAttributedText(attributed: linked)
+        host.view.setNeedsLayout()
+        host.view.layoutIfNeeded()
+        let textView = try XCTUnwrap(Self.descendants(of: host.view).compactMap { $0 as? UITextView }.first)
+        XCTAssertNotNil(textView.attributedText.attribute(.link, at: 0, effectiveRange: nil))
+    }
+
+    func testIndentedTextFitsItsFinalHuggingWidth() throws {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.firstLineHeadIndent = 40
+        paragraph.headIndent = 40
+        let native = NSAttributedString(string: String(repeating: "Some 中文 words with wrapping. ", count: 12),
+                                        attributes: [.paragraphStyle: paragraph])
+        let text = try AttributedString(native, including: \.uiKit)
+        let host = UIHostingController(rootView: SelectableAttributedText(attributed: text))
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 220, height: 2000))
+        window.rootViewController = host
+        window.isHidden = false
+        defer { window.isHidden = true }
+        let size = host.sizeThatFits(in: CGSize(width: 220, height: 2000))
+        host.view.frame = CGRect(origin: .zero, size: size)
+        host.view.layoutIfNeeded()
+        let textView = try XCTUnwrap(Self.descendants(of: host.view).compactMap { $0 as? UITextView }.first)
+        let drawn = textView.sizeThatFits(CGSize(width: textView.bounds.width, height: .greatestFiniteMagnitude))
+        XCTAssertEqual(textView.bounds.height, drawn.height, accuracy: 1)
+    }
+
     func testAssistantBubbleFillsContentWidthNotFixed300() {
         let text = String(repeating: "这段助手回复应该铺满内容区，左右只留对话页边距。", count: 6)
         let host = UIHostingController(

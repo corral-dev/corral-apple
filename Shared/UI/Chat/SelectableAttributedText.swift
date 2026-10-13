@@ -186,20 +186,13 @@ private struct SelectableTextView: UIViewRepresentable {
 
     private func apply(to view: UITextView, coordinator: Coordinator) {
         let ns = converted(coordinator)
-        let fingerprint = Fingerprint(
-            string: ns.string,
-            fontSize: font.pointSize,
-            foreground: foreground,
-            tint: tint,
-            maxHeight: maxHeight
-        )
-        if coordinator.fingerprint != fingerprint {
+        if coordinator.appliedText !== ns {
             let previous = view.selectedRange
             view.attributedText = ns
             if previous.length > 0, NSMaxRange(previous) <= ns.length {
                 view.selectedRange = previous
             }
-            coordinator.fingerprint = fingerprint
+            coordinator.appliedText = ns
         }
         view.linkTextAttributes = [
             .foregroundColor: tint,
@@ -249,10 +242,9 @@ private struct SelectableTextView: UIViewRepresentable {
         sizer.textContainer.lineFragmentPadding = 0
         sizer.textContainer.widthTracksTextView = true
         sizer.attributedText = ns
-        let fitted = sizer.sizeThatFits(constraint)
-        let height = ceil(max(fitted.height, used.height, font.lineHeight))
-        let hugged = ceil(max(used.width, 1))
-        return CGSize(width: min(hugged, proposalWidth), height: height)
+        let fittedWidth = min(ceil(max(used.maxX, 1)), proposalWidth)
+        let fitted = sizer.sizeThatFits(CGSize(width: fittedWidth, height: .greatestFiniteMagnitude))
+        return CGSize(width: fittedWidth, height: ceil(max(fitted.height, font.lineHeight)))
     }
 
     /// Conversion and measurement repeat for every layout pass and scroll-in of a
@@ -318,7 +310,7 @@ private struct SelectableTextView: UIViewRepresentable {
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {
-        var fingerprint: Fingerprint?
+        var appliedText: NSAttributedString?
         var source: Source?
         var converted: NSAttributedString?
         var sizes: [CGFloat: CGSize] = [:]
@@ -328,14 +320,6 @@ private struct SelectableTextView: UIViewRepresentable {
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
             (scrollView as? EdgeFadeTextView)?.refreshEdgeFade()
         }
-    }
-
-    struct Fingerprint: Equatable {
-        let string: String
-        let fontSize: CGFloat
-        let foreground: UIColor
-        let tint: UIColor
-        let maxHeight: CGFloat?
     }
 
     struct Source: Equatable {
@@ -365,6 +349,7 @@ struct SelectableAttributedText: View {
     @Environment(\.interfaceScale) private var interfaceScale
     @Environment(\.macConversationTextDocument) private var document
     @Environment(\.macMessageSelectionID) private var selectionID
+    @Environment(\.macRowMeasurement) private var measurementOnly
 
     var body: some View {
         MacSelectableTextView(
@@ -375,7 +360,8 @@ struct SelectableAttributedText: View {
             maxHeight: maxHeight,
             onMoreBelowChange: onMoreBelowChange,
             document: document,
-            selectionID: selectionID
+            selectionID: selectionID,
+            measurementOnly: measurementOnly
         )
         .accessibilityLabel(Text(String(attributed.characters)))
     }
@@ -468,12 +454,16 @@ private struct MacSelectableTextView: NSViewRepresentable {
     let onMoreBelowChange: ((Bool) -> Void)?
     var document: MacConversationTextDocument?
     var selectionID: Int?
+    /// Off-screen row measurement: size through the same detached TextKit
+    /// path, but never take the document-owned text view from a live row.
+    var measurementOnly = false
 
     /// Conversion to NSAttributedString and measurement are the cost of a
     /// window resize (SwiftUI measures each visible bubble several times per
     /// width), so both are cached until the text or its styling changes.
     final class Coordinator {
-        var fingerprint: Fingerprint?
+        var appliedText: NSAttributedString?
+        var hasFollowingBlock = false
         var source: Source?
         var converted: NSAttributedString?
         var sizes: [CGFloat: CGSize] = [:]
@@ -488,13 +478,6 @@ private struct MacSelectableTextView: NSViewRepresentable {
         let foreground: NSColor
     }
 
-    struct Fingerprint: Equatable {
-        let string: String
-        let fontSize: CGFloat
-        let foreground: NSColor
-        let tint: NSColor
-    }
-
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     /// The Mac shows full-height bubbles (no cap): the conversation owns
@@ -506,9 +489,6 @@ private struct MacSelectableTextView: NSViewRepresentable {
         let textView: NSTextView
         if let selectionID, let existing = document?.textView(for: selectionID) {
             textView = existing
-            // A replacement row can realize before the outgoing row dismantles.
-            // AppKit keeps the view's original text network and selection.
-            textView.removeFromSuperview()
         } else if usesScrollWrapper {
             textView = Self.makeTextView(storage: storage)
         } else {
@@ -536,7 +516,8 @@ private struct MacSelectableTextView: NSViewRepresentable {
             height: container == nil ? .greatestFiniteMagnitude : MacConversationTextDocument.initialCanvasHeight
         )
         if textView.maxSize != maximumSize { textView.maxSize = maximumSize }
-        if textView.autoresizingMask != [.width] { textView.autoresizingMask = [.width] }
+        let resizing: NSView.AutoresizingMask = usesScrollWrapper ? [.width] : []
+        if textView.autoresizingMask != resizing { textView.autoresizingMask = resizing }
         if textView.focusRingType != .none { textView.focusRingType = .none }
         return textView
     }
@@ -545,13 +526,16 @@ private struct MacSelectableTextView: NSViewRepresentable {
         #if DEBUG
         MacTextRowSwitchCounters.makes &+= 1
         #endif
+        if measurementOnly { return NSView() }
         let container = selectionID.flatMap { document?.container(for: $0) }
         let storage = container == nil ? NSTextStorage() : (document?.storage ?? NSTextStorage())
         context.coordinator.textStorage = storage
         let textView = makeConfiguredTextView(storage: storage, container: container)
         guard usesScrollWrapper else {
+            let mount = MacMessageTextMount()
+            mount.attach(textView)
             apply(to: textView, scroll: nil, coordinator: context.coordinator)
-            return textView
+            return mount
         }
         let scroll = FadingTextScrollView()
         scroll.drawsBackground = false
@@ -574,7 +558,8 @@ private struct MacSelectableTextView: NSViewRepresentable {
         if let scroll = nsView as? FadingTextScrollView {
             guard let textView = scroll.documentView as? NSTextView else { return }
             apply(to: textView, scroll: scroll, coordinator: context.coordinator)
-        } else if let textView = nsView as? NSTextView {
+        } else if let mount = nsView as? MacMessageTextMount,
+                  let textView = mount.textView, textView.superview === mount {
             apply(to: textView, scroll: nil, coordinator: context.coordinator)
         }
     }
@@ -588,12 +573,8 @@ private struct MacSelectableTextView: NSViewRepresentable {
             if let view = scroll.documentView as? NSTextView, view.enclosingScrollView === scroll {
                 MacConversationTextDocument.retireTextView(view)
             }
-        } else if let view = nsView as? NSTextView {
-            // A replacement row may already have reattached this view; only
-            // retire focus for a view that actually left the hierarchy.
-            if view.superview == nil || view.window == nil {
-                MacConversationTextDocument.retireTextView(view)
-            }
+        } else if let mount = nsView as? MacMessageTextMount {
+            mount.releaseTextView()
         }
         coordinator.textStorage = nil
     }
@@ -604,12 +585,17 @@ private struct MacSelectableTextView: NSViewRepresentable {
         guard let width = proposal.width, width.isFinite, width > 0 else { return nil }
         let coordinator = context.coordinator
         let ns = converted(coordinator)
+        let hasFollowingBlock = selectionID.map { document?.hasFollowingBlock($0) == true } ?? false
+        if coordinator.hasFollowingBlock != hasFollowingBlock {
+            coordinator.hasFollowingBlock = hasFollowingBlock
+            coordinator.sizes.removeAll()
+        }
         let natural: CGSize
         if let cached = coordinator.sizes[width] {
             natural = cached
         } else {
             let measurement = selectionID.flatMap { document?.measurement(for: $0) } ?? coordinator.measurement
-            natural = measurement.size(for: ns, font: font, width: width)
+            natural = measurement.size(for: ns, font: font, width: width, hasFollowingBlock: hasFollowingBlock)
             if coordinator.sizes.count >= 24 { coordinator.sizes.removeAll() }
             coordinator.sizes[width] = natural
         }
@@ -636,9 +622,8 @@ private struct MacSelectableTextView: NSViewRepresentable {
 
     private func apply(to textView: NSTextView, scroll: FadingTextScrollView?, coordinator: Coordinator) {
         let ns = converted(coordinator)
-        let fingerprint = Fingerprint(string: ns.string, fontSize: font.pointSize, foreground: foreground, tint: tint)
-        if selectionID.flatMap({ document?.container(for: $0) }) == nil, coordinator.fingerprint != fingerprint {
-            let isFirstFill = coordinator.fingerprint == nil
+        if selectionID.flatMap({ document?.container(for: $0) }) == nil, coordinator.appliedText !== ns {
+            let isFirstFill = coordinator.appliedText == nil
             let previous = textView.selectedRange()
             textView.textStorage?.setAttributedString(ns)
             #if DEBUG
@@ -647,7 +632,7 @@ private struct MacSelectableTextView: NSViewRepresentable {
             if previous.length > 0, NSMaxRange(previous) <= ns.length {
                 textView.setSelectedRange(previous)
             }
-            coordinator.fingerprint = fingerprint
+            coordinator.appliedText = ns
             if isFirstFill, let scroll {
                 // A capped bubble starts at its first line (the document view is flipped).
                 scroll.contentView.scroll(to: .zero)
@@ -761,6 +746,9 @@ extension EnvironmentValues {
         get { self[MacMessageSelectionIDKey.self] }
         set { self[MacMessageSelectionIDKey.self] = newValue }
     }
+
+    /// Set only by the conversation table's off-screen row measurement.
+    @Entry var macRowMeasurement = false
 }
 
 struct MacConversationTextSelection: ViewModifier {

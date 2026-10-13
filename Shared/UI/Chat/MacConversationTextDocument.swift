@@ -21,6 +21,13 @@ enum MacTextRowSwitchCounters {
         docRenders = 0
     }
 }
+
+/// SwiftUI's own scroll geometry per conversation document, so the rendering
+/// inspection can compare it with the AppKit clip view it observes.
+@MainActor
+enum MacChatScrollGeometryProbe {
+    static var latest: [ObjectIdentifier: [String: Any]] = [:]
+}
 #endif
 
 /// Uncapped Mac rows (the default: the conversation scrolls, not the bubble)
@@ -59,6 +66,46 @@ final class MacDirectMessageTextView: NSTextView {
         }
         let character = layout.characterIndexForGlyph(at: glyph)
         return character < storage.length && storage.attribute(.link, at: character, effectiveRange: nil) != nil
+    }
+}
+
+/// SwiftUI owns one mount per representable lifetime. The document owns the
+/// reusable text view, which can outlive that lifetime. Never hand the same
+/// NSView back to two SwiftUI platform-view hosts: an outgoing host can still
+/// lay out or dismantle after its replacement has appeared.
+final class MacMessageTextMount: NSView {
+    private(set) var textView: NSTextView?
+
+    override var isFlipped: Bool { true }
+
+    func attach(_ view: NSTextView) {
+        guard textView !== view || view.superview !== self else { return }
+        if let previous = view.superview as? MacMessageTextMount {
+            previous.textView = nil
+        }
+        releaseTextView()
+        view.removeFromSuperview()
+        textView = view
+        view.autoresizingMask = []
+        addSubview(view)
+        needsLayout = true
+    }
+
+    func releaseTextView() {
+        guard let view = textView else { return }
+        textView = nil
+        guard view.superview === self else { return }
+        MacConversationTextDocument.retireTextView(view)
+        view.removeFromSuperview()
+    }
+
+    override func layout() {
+        super.layout()
+        guard let view = textView, view.superview === self,
+              bounds.width > 0, bounds.height > 0 else { return }
+        // Speculative zero-sized placements must not collapse the shared text
+        // container and invalidate every subsequent message's glyph layout.
+        if view.frame != bounds { view.frame = bounds }
     }
 }
 
@@ -325,6 +372,8 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
     }
 
     #if DEBUG
+    var debugIdentity: ObjectIdentifier? { identity }
+
     /// The storage range of the block currently hosting a realized view.
     func range(of view: NSTextView) -> NSRange? {
         blocks.first { $0.view === view }?.range
@@ -405,6 +454,11 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
 
     func text(for id: Int) -> NSAttributedString? { byID[id]?.text }
 
+    func hasFollowingBlock(_ id: Int) -> Bool {
+        guard let block = byID[id] else { return false }
+        return blocks.last !== block
+    }
+
     /// Lazy rows may be recreated during reflow. Reuse detached measurements
     /// across those lifetimes, bounded to the recently visible working set.
     func measurement(for id: Int) -> MacTextMeasurement? {
@@ -460,23 +514,31 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
 
 /// Detached from the live selection network so measuring cannot mutate it.
 @MainActor
-final class MacTextMeasurement {
+final class MacTextMeasurement: NSObject, NSLayoutManagerDelegate {
     private let storage = NSTextStorage()
     private let layout = NSLayoutManager()
-    private let container = NSTextContainer(size: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
+    private let container = NSTextContainer(size: NSSize(width: 0, height: MacConversationTextDocument.initialCanvasHeight))
     private var source: NSAttributedString?
+    private var endsWithContainerBreak = false
     private var sizes: [CGFloat: CGSize] = [:]
     private var widths: [CGFloat] = []
 
-    init() {
+    override init() {
+        super.init()
         storage.addLayoutManager(layout)
+        layout.delegate = self
         container.lineFragmentPadding = 0
         layout.addTextContainer(container)
     }
 
-    func size(for text: NSAttributedString, font: NSFont, width: CGFloat) -> CGSize {
-        if source !== text {
+    func size(for text: NSAttributedString, font: NSFont, width: CGFloat,
+              hasFollowingBlock: Bool = false) -> CGSize {
+        if source !== text || endsWithContainerBreak != hasFollowingBlock {
+            endsWithContainerBreak = hasFollowingBlock
             storage.setAttributedString(text)
+            if hasFollowingBlock {
+                storage.append(NSAttributedString(string: "\n", attributes: [.font: font]))
+            }
             source = text
             sizes.removeAll()
             widths.removeAll()
@@ -485,13 +547,39 @@ final class MacTextMeasurement {
         widths.append(width)
         if let cached = sizes[width] { return cached }
         if container.size.width != width { container.size.width = width }
-        layout.ensureLayout(for: container)
+        ensureCompleteLayout()
         let used = layout.usedRect(for: container)
-        let result = CGSize(width: min(ceil(max(used.width, 1)), width),
-                            height: ceil(max(used.height, layout.defaultLineHeight(for: font))))
+        let fittedWidth = min(ceil(max(used.maxX, 1)), width)
+        if container.size.width != fittedWidth {
+            container.size.width = fittedWidth
+            ensureCompleteLayout()
+        }
+        let result = CGSize(width: fittedWidth,
+                            height: ceil(max(layout.usedRect(for: container).maxY,
+                                             layout.defaultLineHeight(for: font))))
         sizes[width] = result
         if widths.count > 64 { sizes.removeValue(forKey: widths.removeFirst()) }
         return result
+    }
+
+    private func ensureCompleteLayout() {
+        layout.ensureLayout(for: container)
+        // Keep the canvas finite so explicit container breaks are honored, but
+        // grow it when a single very long message exceeds the initial canvas.
+        var previousEnd = -1
+        var end = NSMaxRange(layout.characterRange(forGlyphRange: layout.glyphRange(for: container), actualGlyphRange: nil))
+        while end < storage.length && end > previousEnd {
+            previousEnd = end
+            container.size.height *= 2
+            layout.ensureLayout(for: container)
+            end = NSMaxRange(layout.characterRange(forGlyphRange: layout.glyphRange(for: container), actualGlyphRange: nil))
+        }
+    }
+
+    func layoutManager(_ layoutManager: NSLayoutManager,
+                       shouldUse action: NSLayoutManager.ControlCharacterAction,
+                       forControlCharacterAt charIndex: Int) -> NSLayoutManager.ControlCharacterAction {
+        endsWithContainerBreak && charIndex == storage.length - 1 ? .containerBreak : action
     }
 }
 #endif

@@ -233,6 +233,10 @@ private struct NativeChatScrollView<Header: View, Content: View>: View {
     @State private var jumpGeneration = 0
     /// The conversation is faded out while a far jump moves under it.
     @State private var isJumpFaded = false
+    /// An explicit latest request (composer focus, send, jump button) arrived
+    /// while the reader's fling was still coasting. Coasting must not cancel it:
+    /// it lands again once the scroll comes to rest; a new drag withdraws it.
+    @State private var latestPending = false
     /// Geometry fires every frame while scrolling: read acknowledgements are
     /// throttled here (the phase change already acks the gesture start).
     /// Without this each frame sent its own mark-read RPC.
@@ -286,7 +290,7 @@ private struct NativeChatScrollView<Header: View, Content: View>: View {
             let next = ChatAutoLoadEarlierPolicy.topmostTimelineID(ids)
             if topVisibleID != next { topVisibleID = next }
         }
-        .onScrollPhaseChange { _, phase, context in
+        .onScrollPhaseChange { oldPhase, phase, context in
             let wasUserScrolling = isUserScrolling
             let scrolling = phase == .tracking || phase == .interacting || phase == .decelerating
             if wasUserScrolling != scrolling { isUserScrolling = scrolling }
@@ -301,13 +305,19 @@ private struct NativeChatScrollView<Header: View, Content: View>: View {
                 if !userHasScrolled { userHasScrolled = true }
                 if autoLoadHeld { autoLoadHeld = false }
             }
+            // A fresh drag is the reader's own choice and withdraws a pending request.
+            if latestPending, phase == .interacting, oldPhase != .interacting { latestPending = false }
             // Idle alone must not clear the initial follow: at open the viewport
             // briefly reports top before the bottom anchor settles, and clearing
             // here would strand a long transcript at the oldest messages.
             // User-driven phases already cover drag + momentum end state.
-            if scrolling {
+            if scrolling, !latestPending {
                 let nearBottom = isNearBottom(context.geometry)
                 if followsLatest != nearBottom { followsLatest = nearBottom }
+            }
+            if latestPending, !scrolling {
+                latestPending = false
+                showLatest()
             }
         }
         .onScrollGeometryChange(for: ChatScrollState.self) { geometry in
@@ -332,14 +342,14 @@ private struct NativeChatScrollView<Header: View, Content: View>: View {
                 acknowledgeRead()
             }
             // Resizing for the keyboard is not a request to stop following.
-            if isUserScrolling, followsLatest != state.nearBottom { followsLatest = state.nearBottom }
+            if isUserScrolling, !latestPending, followsLatest != state.nearBottom { followsLatest = state.nearBottom }
             loadEarlierIfReading()
         }
         .onChange(of: onPullToLoadEarlier == nil) { _, _ in
             loadEarlierIfReading()
         }
         .onChange(of: scrollToLatestRequest) { _, _ in
-            showLatest()
+            requestLatest()
         }
         .onAppear {
             // Explicit landing is needed for overflowing async transcripts only.
@@ -394,7 +404,7 @@ private struct NativeChatScrollView<Header: View, Content: View>: View {
             jump(to: messageID)
         }
         .overlay(alignment: .bottomTrailing) {
-            if !followsLatest { ChatJumpToLatestButton(action: showLatest) }
+            if !followsLatest { ChatJumpToLatestButton(action: requestLatest) }
         }
     }
 
@@ -418,6 +428,7 @@ private struct NativeChatScrollView<Header: View, Content: View>: View {
             } else {
                 withAnimation(ChatJumpMotion.fadeOut) { isJumpFaded = true }
                 try? await Task.sleep(for: ChatJumpMotion.fadeOutDuration)
+                guard generation == jumpGeneration else { return }
                 withoutAnimation { position.scrollTo(id: messageID, anchor: .center) }
                 // Let the rows around the target realize and measure.
                 try? await Task.sleep(for: .milliseconds(60))
@@ -475,6 +486,21 @@ private struct NativeChatScrollView<Header: View, Content: View>: View {
             containerHeight: containerHeight
         ) ? .bottom : .top
         #endif
+    }
+
+    /// The reader asked for the latest messages. It outranks motion already in
+    /// flight: a message jump's delayed settle would otherwise drag the view back
+    /// into history (reproduced 2026-10-13 when the keyboard rose right after a
+    /// Your prompts jump), and a coasting fling would clear following before the
+    /// keyboard inset lands.
+    private func requestLatest() {
+        if isJumping {
+            jumpGeneration += 1
+            isJumping = false
+            if isJumpFaded { withAnimation(ChatJumpMotion.fadeIn) { isJumpFaded = false } }
+        }
+        if isUserScrolling { latestPending = true }
+        showLatest()
     }
 
     private func showLatest() {
@@ -593,7 +619,7 @@ private struct ChatScrollState: Equatable {
     var distanceFromTop: CGFloat
 }
 
-private struct ChatJumpToLatestButton: View {
+struct ChatJumpToLatestButton: View {
     @Environment(\.interfaceScale) private var interfaceScale
     var action: () -> Void
 

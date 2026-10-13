@@ -28,6 +28,15 @@ enum ChatTimelineRhythm {
     }
 }
 
+/// Inputs of the question card; also the Mac table's row value for it.
+struct ChatPromptsCardState: Equatable {
+    var prompts: [SessionPrompt]
+    var isConnected: Bool
+    var isSending: Bool
+    var showsBlockedHint: Bool
+    var submissionState: NativeQuestionSubmissionState?
+}
+
 struct ChatView: View {
     @Environment(\.interfaceScale) private var interfaceScale
     @Environment(\.sessionTextScale) private var sessionTextScale
@@ -168,6 +177,17 @@ struct ChatView: View {
             for: items, messages: store.visibleMessages, calendar: localCalendar
         )
         let activity = activityState
+        #if os(macOS)
+        return macConversation(items: items, separators: timeSeparators, activity: activity)
+            .modifier(MacConversationTextSelection(
+                identity: ObjectIdentifier(store),
+                messages: items.compactMap { item in
+                    if case .message(let message) = item { return message }
+                    return nil
+                },
+                documentOverride: textDocument
+            ))
+        #else
         // The activity cue renders below the question card, so it is the true bottom.
         let latestID: String? = activity != nil
             ? "activity"
@@ -187,93 +207,171 @@ struct ChatView: View {
             pullProgress: $loadEarlierPullProgress,
             header: {
                 if let loadError = store.loadError {
-                    Label(loadError, systemImage: "exclamationmark.triangle")
-                        .interfaceFont(.footnote)
-                        .foregroundStyle(.secondary)
-                        .interfaceFrame(maxWidth: .infinity)
+                    loadErrorLabel(loadError)
                 }
                 if store.hasMoreHistory {
-                    #if os(macOS)
-                    // Owner correction 2026-10-11: no Load earlier control on the
-                    // Mac. Reaching the top loads by itself; the reserved row only
-                    // shows progress and keeps its height so nothing shifts.
-                    ChatEarlierHistoryProgress(isLoading: store.isLoadingHistory)
-                    #else
                     ChatLoadEarlierButton(
                         pullProgress: loadEarlierPullProgress,
                         isLoading: store.isLoadingHistory
                     ) {
                         historyRequested = true
                     }
-                    #endif
                 }
             }
         ) {
             ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                VStack(alignment: .leading, spacing: 0) {
-                    if let date = timeSeparators[item.id] {
-                        ChatTimeSeparator(date: date)
-                    }
-                    switch item {
-                    case .message(let message):
-                        MessageBubbleView(
-                            message: message,
-                            runtimeID: runtimeID,
-                            onRetry: { onRetryMessage?(message) },
-                            interfaceScale: interfaceScale,
-                            sessionTextScale: sessionTextScale,
-                            colorScheme: colorScheme,
-                            bubbleTextCap: MessageBubbleLayout.defaultBubbleCap,
-                            selectionDocumentID: textDocumentID
-                        )
-                    case .toolGroup(_, let sourceSeqs, let tools):
-                        ToolActivityView(
-                            tools: tools,
-                            sourceSeqs: sourceSeqs,
-                            runtimeID: runtimeID,
-                            onNeedDetails: { await store.fetchToolDetails(sourceSeqs: $0) },
-                            detailSourceID: ObjectIdentifier(store),
-                            interfaceScale: interfaceScale,
-                            sessionTextScale: sessionTextScale,
-                            colorScheme: colorScheme
-                        )
-                    }
-                }
-                .interfacePadding(.top, ChatTimelineRhythm.leadingGap(before: index, in: items))
-                .id(item.id)
+                timelineRow(item, separator: timeSeparators[item.id],
+                            gap: ChatTimelineRhythm.leadingGap(before: index, in: items))
+                    .id(item.id)
             }
 
             if !store.prompts.isEmpty {
-                AnswerOptionsView(
-                    prompts: store.prompts,
-                    isConnected: isConnected,
-                    isBusy: isSending,
-                    showsBlockedHint: showsBlockedHint,
-                    submissionState: store.questionSubmissionState,
-                    onSubmit: submitQuestion
-                )
-                .id("prompts")
+                promptsCard(promptsState)
+                    .id("prompts")
             }
 
             // 运行中跳动小点：只在有正文时间线底部出现，loading/空态不长条；顶栏不再重复运行状态。
             if let activity {
-                ChatActivityFooter(state: activity)
-                    .interfaceFrame(maxWidth: .infinity, alignment: .leading)
-                    .interfacePadding(.top, Space.xs)
+                activityRow(activity)
                     .id("activity")
             }
         }
-        #if os(macOS)
-        .modifier(MacConversationTextSelection(
-            identity: ObjectIdentifier(store),
-            messages: items.compactMap { item in
-                if case .message(let message) = item { return message }
-                return nil
-            },
-            documentOverride: textDocument
-        ))
         #endif
     }
+
+    private func loadErrorLabel(_ loadError: String) -> some View {
+        Label(loadError, systemImage: "exclamationmark.triangle")
+            .interfaceFont(.footnote)
+            .foregroundStyle(.secondary)
+            .interfaceFrame(maxWidth: .infinity)
+    }
+
+    private func timelineRow(_ item: ConversationTimelineItem, separator: Date?, gap: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if let separator {
+                ChatTimeSeparator(date: separator)
+            }
+            switch item {
+            case .message(let message):
+                MessageBubbleView(
+                    message: message,
+                    runtimeID: runtimeID,
+                    onRetry: { onRetryMessage?(message) },
+                    interfaceScale: interfaceScale,
+                    sessionTextScale: sessionTextScale,
+                    colorScheme: colorScheme,
+                    bubbleTextCap: MessageBubbleLayout.defaultBubbleCap,
+                    selectionDocumentID: textDocumentID
+                )
+            case .toolGroup(_, let sourceSeqs, let tools):
+                ToolActivityView(
+                    tools: tools,
+                    sourceSeqs: sourceSeqs,
+                    runtimeID: runtimeID,
+                    onNeedDetails: { await store.fetchToolDetails(sourceSeqs: $0) },
+                    detailSourceID: ObjectIdentifier(store),
+                    interfaceScale: interfaceScale,
+                    sessionTextScale: sessionTextScale,
+                    colorScheme: colorScheme
+                )
+            }
+        }
+        .interfacePadding(.top, gap)
+    }
+
+    private var promptsState: ChatPromptsCardState {
+        ChatPromptsCardState(
+            prompts: store.prompts, isConnected: isConnected, isSending: isSending,
+            showsBlockedHint: showsBlockedHint, submissionState: store.questionSubmissionState
+        )
+    }
+
+    private func promptsCard(_ state: ChatPromptsCardState) -> some View {
+        AnswerOptionsView(
+            prompts: state.prompts,
+            isConnected: state.isConnected,
+            isBusy: state.isSending,
+            showsBlockedHint: state.showsBlockedHint,
+            submissionState: state.submissionState,
+            onSubmit: submitQuestion
+        )
+    }
+
+    private func activityRow(_ activity: ChatActivityState) -> some View {
+        ChatActivityFooter(state: activity)
+            .interfaceFrame(maxWidth: .infinity, alignment: .leading)
+            .interfacePadding(.top, Space.xs)
+    }
+
+    #if os(macOS)
+    /// Rows in reading order, with every input that changes their rendering.
+    private func macRows(items: [ConversationTimelineItem], separators: [String: Date],
+                         activity: ChatActivityState?) -> [MacConversationRow] {
+        var rows: [MacConversationRow] = []
+        rows.reserveCapacity(items.count + 4)
+        if let loadError = store.loadError {
+            rows.append(MacConversationRow(id: "load-error", value: .loadError(loadError)))
+        }
+        if store.hasMoreHistory {
+            // Owner correction 2026-10-11: no Load earlier control on the Mac.
+            // Reaching the top loads by itself; the reserved row only shows
+            // progress and keeps its height so nothing shifts.
+            rows.append(MacConversationRow(id: "earlier-history",
+                                           value: .earlierHistory(isLoading: store.isLoadingHistory)))
+        }
+        for (index, item) in items.enumerated() {
+            rows.append(MacConversationRow(id: item.id, value: .timeline(
+                item, separator: separators[item.id],
+                gap: ChatTimelineRhythm.leadingGap(before: index, in: items)
+            )))
+        }
+        if !store.prompts.isEmpty {
+            rows.append(MacConversationRow(id: "prompts", value: .prompts(promptsState)))
+        }
+        if let activity {
+            rows.append(MacConversationRow(id: "activity", value: .activity(activity)))
+        }
+        return rows
+    }
+
+    @ViewBuilder
+    private func macRowContent(_ row: MacConversationRow) -> some View {
+        switch row.value {
+        case .loadError(let message):
+            loadErrorLabel(message)
+        case .earlierHistory(let isLoading):
+            ChatEarlierHistoryProgress(isLoading: isLoading)
+        case .timeline(let item, let separator, let gap):
+            timelineRow(item, separator: separator, gap: gap)
+        case .prompts(let state):
+            promptsCard(state)
+        case .activity(let activity):
+            activityRow(activity)
+        }
+    }
+
+    private func macConversation(items: [ConversationTimelineItem], separators: [String: Date],
+                                 activity: ChatActivityState?) -> some View {
+        MacConversationScroller(
+            rows: macRows(items: items, separators: separators, activity: activity),
+            renderKey: MacConversationRenderKey(
+                interfaceScale: interfaceScale, sessionTextScale: sessionTextScale,
+                colorScheme: colorScheme, runtimeID: runtimeID, document: textDocumentID
+            ),
+            rowContent: { AnyView(macRowContent($0)) },
+            scrollToLatestRequest: scrollToLatestRequest + promptSubmission,
+            scrollToMessageID: $revealedMessageID,
+            jumpGlides: { target, visible in
+                ChatJumpPlan.glides(in: store.timelineItems.map(\.id), target: target, visible: visible)
+            },
+            onLoadEarlier: store.hasMoreHistory ? {
+                let oldest = store.oldestSequence
+                await store.loadEarlier()
+                return store.oldestSequence < oldest
+            } : nil
+        )
+    }
+    #endif
 
     /// 对话流底部的安静提示。loading 与空态走别的分支，这里只处理 messageList。
     private var activityState: ChatActivityState? {
