@@ -2843,6 +2843,23 @@
         }
       }
     },
+    "pairing.install_guide": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Install Corral on your computer"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在电脑上安装 Corral"
+          }
+        }
+      }
+    },
     "pairing.paste.hint": {
       "extractionState": "manual",
       "localizations": {

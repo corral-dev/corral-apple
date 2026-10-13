@@ -54,7 +54,7 @@ struct MacPairingView: View {
                 .interfacePadding(.horizontal, Space.md)
                 .interfacePadding(.vertical, Space.sm)
                 .background(Palette.codeSurface, in: RoundedRectangle(cornerRadius: Radius.sm * interfaceScale, style: .continuous))
-                Link("mac.pairing.install_guide", destination: MacLocalHostSetup.installGuideURL)
+                Link("mac.pairing.install_guide", destination: CorralLinks.installGuide)
                     .interfaceFont(.callout)
             }
             VStack(spacing: Space.md * interfaceScale) {

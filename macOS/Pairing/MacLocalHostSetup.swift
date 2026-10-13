@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Observation
 
@@ -27,6 +28,7 @@ final class MacLocalHostSetup {
     private(set) var state: State = .checking
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var isFixed = false
+    @ObservationIgnored private var generation = 0
 
     init() {}
 
@@ -39,7 +41,6 @@ final class MacLocalHostSetup {
     #endif
 
     static let homebrewURL = URL(string: "https://brew.sh")!
-    static let installGuideURL = URL(string: "https://github.com/corral-dev/corral#install")!
 
     /// Read-only detection; never installs or starts anything.
     func refresh(pairedHostIDs: Set<String>) async {
@@ -78,27 +79,39 @@ final class MacLocalHostSetup {
         }
     }
 
-    /// Stops the running Homebrew or pairing process.
+    /// Stops the running Homebrew or pairing process and everything it started.
     func cancel(pairedHostIDs: Set<String>) {
         task?.cancel()
         task = nil
+        generation &+= 1
         Task { await refresh(pairedHostIDs: pairedHostIDs) }
     }
 
     private func start(onPaired: @escaping @MainActor () -> Void,
                        _ work: @escaping @MainActor () async throws -> Void) {
         guard task == nil else { return }
+        generation &+= 1
+        let current = generation
         task = Task { [weak self] in
+            let outcome: Result<Void, Error>
             do {
                 try await work()
-                self?.state = .hidden
-                onPaired()
-            } catch is CancellationError {
-                // `cancel` already refreshes the state.
+                outcome = .success(())
             } catch {
-                self?.state = .failed(error.localizedDescription)
+                outcome = .failure(error)
             }
-            self?.task = nil
+            // A cancelled or superseded run never overwrites the newer state.
+            guard let self, self.generation == current else { return }
+            self.task = nil
+            switch outcome {
+            case .success:
+                self.state = .hidden
+                onPaired()
+            case .failure(let error) where !(error is CancellationError):
+                self.state = .failed(error.localizedDescription)
+            case .failure:
+                break
+            }
         }
     }
 
@@ -226,7 +239,7 @@ nonisolated enum MacHostCommand {
         let timer = timeout.map { seconds in
             Task.detached {
                 try? await Task.sleep(for: .seconds(seconds))
-                if process.isRunning { process.terminate() }
+                if process.isRunning { terminateTree(process.processIdentifier) }
             }
         }
         defer { timer?.cancel() }
@@ -239,7 +252,29 @@ nonisolated enum MacHostCommand {
             try Task.checkCancellation()
             return Output(status: process.terminationStatus, stdout: outData, stderr: errData)
         } onCancel: {
-            if process.isRunning { process.terminate() }
+            if process.isRunning { terminateTree(process.processIdentifier) }
         }
+    }
+
+    /// Homebrew starts downloads and builds as child processes that would keep
+    /// running (and keep the output pipes open) after only the parent stops.
+    /// Children first, so none is reparented before it is signalled.
+    static func terminateTree(_ pid: pid_t) {
+        guard pid > 0 else { return }
+        for child in childProcesses(of: pid) { terminateTree(child) }
+        kill(pid, SIGTERM)
+    }
+
+    private static func childProcesses(of pid: pid_t) -> [pid_t] {
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
+        var size = 0
+        guard sysctl(&mib, 4, nil, &size, nil, 0) == 0, size > 0 else { return [] }
+        let stride = MemoryLayout<kinfo_proc>.stride
+        var processes = [kinfo_proc](repeating: kinfo_proc(), count: size / stride + 16)
+        size = processes.count * stride
+        guard sysctl(&mib, 4, &processes, &size, nil, 0) == 0 else { return [] }
+        return processes.prefix(size / stride)
+            .filter { $0.kp_eproc.e_ppid == pid }
+            .map(\.kp_proc.p_pid)
     }
 }

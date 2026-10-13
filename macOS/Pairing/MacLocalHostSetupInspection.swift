@@ -29,7 +29,11 @@ import SwiftUI
                 report["install"] = error.localizedDescription
             }
         }
-        if case .ready(let corral) = setup.state {
+        if ProcessInfo.processInfo.arguments.contains("-CorralInspectLocalHostCancel") {
+            report["cancel"] = await inspectCancel(appModel: appModel)
+        }
+        if !ProcessInfo.processInfo.arguments.contains("-CorralInspectLocalHostSkipConnect"),
+           case .ready(let corral) = setup.state {
             let hostID = await MacHostCommand.localHostID(corral: corral)
             report["localHostID"] = hostID ?? NSNull()
             var paired = false
@@ -46,6 +50,41 @@ import SwiftUI
         if let data = try? JSONSerialization.data(withJSONObject: report, options: [.sortedKeys, .prettyPrinted]) {
             try? data.write(to: URL(fileURLWithPath: "/tmp/corral-mac-local-host-setup.json"), options: .atomic)
         }
+    }
+
+    /// Cancels an installation whose stand-in Homebrew starts a long-running
+    /// child, then checks that both processes ended and the state recovered.
+    private static func inspectCancel(appModel: AppModel) async -> [String: Any] {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "corral-fake-brew-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let brew = directory.appending(path: "brew")
+        let marker = directory.appending(path: "child.pid").path
+        let script = "#!/bin/sh\n/bin/sleep 300 &\necho $! > '\(marker)'\nwait\n"
+        try? script.write(to: brew, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: brew.path)
+        let setup = MacLocalHostSetup()
+        await setup.refresh(pairedHostIDs: [])
+        setup.install(brew: brew, appModel: appModel) {}
+        var result: [String: Any] = [:]
+        for _ in 0..<50 where !FileManager.default.fileExists(atPath: marker) {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        let child = (try? String(contentsOfFile: marker, encoding: .utf8))
+            .flatMap { pid_t($0.trimmingCharacters(in: .whitespacesAndNewlines)) } ?? 0
+        result["stateBeforeCancel"] = describe(setup.state)
+        result["childRunningBeforeCancel"] = child > 0 && kill(child, 0) == 0
+        let started = ContinuousClock.now
+        setup.cancel(pairedHostIDs: [])
+        for _ in 0..<50 {
+            if case .running = setup.state { try? await Task.sleep(for: .milliseconds(100)) } else { break }
+        }
+        try? await Task.sleep(for: .milliseconds(500))
+        result["childRunningAfterCancel"] = child > 0 && kill(child, 0) == 0
+        result["stateAfterCancel"] = describe(setup.state)
+        result["cancelSeconds"] = Double((ContinuousClock.now - started).components.attoseconds) / 1e18
+            + Double((ContinuousClock.now - started).components.seconds)
+        return result
     }
 
     /// `-CorralInspectPairingStates` renders the real pairing view in each
