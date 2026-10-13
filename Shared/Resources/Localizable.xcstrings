@@ -69,6 +69,23 @@
         }
       }
     },
+    "action.copy": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "拷贝"
+          }
+        }
+      }
+    },
     "action.delete": {
       "localizations": {
         "en": {
@@ -1823,6 +1840,74 @@
         }
       }
     },
+    "mac.pairing.check_again": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check Again"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重新检查"
+          }
+        }
+      }
+    },
+    "mac.pairing.connect_this_mac": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connect This Mac"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "连接这台 Mac"
+          }
+        }
+      }
+    },
+    "mac.pairing.connecting": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connecting…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在连接…"
+          }
+        }
+      }
+    },
+    "mac.pairing.corral_missing_after_install": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Homebrew finished, but the corral command was not found."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Homebrew 已完成，但找不到 corral 命令。"
+          }
+        }
+      }
+    },
     "mac.pairing.description": {
       "extractionState": "manual",
       "localizations": {
@@ -1836,6 +1921,74 @@
           "stringUnit": {
             "state": "translated",
             "value": "在要连接的电脑上运行下面的命令，再粘贴它给出的配对链接。"
+          }
+        }
+      }
+    },
+    "mac.pairing.get_homebrew": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Get Homebrew"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "获取 Homebrew"
+          }
+        }
+      }
+    },
+    "mac.pairing.install_corral": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Install Corral with Homebrew"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用 Homebrew 安装 Corral"
+          }
+        }
+      }
+    },
+    "mac.pairing.install_guide": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Install Corral on that computer"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在那台电脑上安装 Corral"
+          }
+        }
+      }
+    },
+    "mac.pairing.installing": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Installing Corral…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在安装 Corral…"
           }
         }
       }
@@ -1857,6 +2010,40 @@
         }
       }
     },
+    "mac.pairing.needs_homebrew": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Installing Corral on this Mac requires Homebrew."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在这台 Mac 上安装 Corral 需要 Homebrew。"
+          }
+        }
+      }
+    },
+    "mac.pairing.other_computer": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Another computer"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "其他电脑"
+          }
+        }
+      }
+    },
     "mac.pairing.pair": {
       "extractionState": "manual",
       "localizations": {
@@ -1870,6 +2057,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "配对"
+          }
+        }
+      }
+    },
+    "mac.pairing.this_mac": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This Mac"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台 Mac"
           }
         }
       }

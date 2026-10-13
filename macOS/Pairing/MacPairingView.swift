@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// Pairing on the Mac: the computer-side command, then paste the link it prints
-/// (or click a `corral://` link, handled by the window). A Mac has no camera
-/// scanning step; pasting the link is the primary path.
+/// Pairing on the Mac. This Mac first: connect, or install Corral with
+/// Homebrew and connect, in place. Another computer: run the command there,
+/// then paste the link it prints (or click a `corral://` link, handled by the
+/// window). A Mac has no camera scanning step.
 struct MacPairingView: View {
     @Environment(\.interfaceScale) private var interfaceScale
     @Environment(AppModel.self) private var appModel
@@ -12,22 +13,49 @@ struct MacPairingView: View {
     @State private var link = ""
     @State private var isPairing = false
     @State private var errorMessage: String?
+    @State private var localSetup: MacLocalHostSetup
+
+    init(isSheet: Bool = false, localSetup: MacLocalHostSetup = MacLocalHostSetup()) {
+        self.isSheet = isSheet
+        _localSetup = State(initialValue: localSetup)
+    }
+
+    private static let pairCommand = "corral remote pair"
 
     var body: some View {
         VStack(spacing: Space.xl * interfaceScale) {
             MachineIconTile(size: 72)
+            Text("mac.pairing.title")
+                .interfaceFont(.title2.weight(.semibold))
+            if localSetup.state != .hidden {
+                thisMacSection
+                Divider().interfaceFrame(maxWidth: 420)
+            }
             VStack(spacing: Space.sm * interfaceScale) {
-                Text("mac.pairing.title")
-                    .interfaceFont(.title2.weight(.semibold))
+                if localSetup.state != .hidden {
+                    Text("mac.pairing.other_computer")
+                        .interfaceFont(.headline)
+                }
                 Text("mac.pairing.description")
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                Text(verbatim: "corral remote pair")
-                    .interfaceFont(.body.monospaced())
-                    .textSelection(.enabled)
-                    .interfacePadding(.horizontal, Space.md)
-                    .interfacePadding(.vertical, Space.sm)
-                    .background(Palette.codeSurface, in: RoundedRectangle(cornerRadius: Radius.sm * interfaceScale, style: .continuous))
+                HStack(spacing: Space.xs * interfaceScale) {
+                    Text(verbatim: Self.pairCommand)
+                        .interfaceFont(.body.monospaced())
+                        .textSelection(.enabled)
+                    Button("action.copy", systemImage: "doc.on.doc") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(Self.pairCommand, forType: .string)
+                    }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.borderless)
+                    .help(Text("action.copy"))
+                }
+                .interfacePadding(.horizontal, Space.md)
+                .interfacePadding(.vertical, Space.sm)
+                .background(Palette.codeSurface, in: RoundedRectangle(cornerRadius: Radius.sm * interfaceScale, style: .continuous))
+                Link("mac.pairing.install_guide", destination: MacLocalHostSetup.installGuideURL)
+                    .interfaceFont(.callout)
             }
             VStack(spacing: Space.md * interfaceScale) {
                 HStack(spacing: Space.sm * interfaceScale) {
@@ -79,6 +107,62 @@ struct MacPairingView: View {
         .interfacePadding(Space.xxl)
         .interfaceFrame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemGroupedBackground))
+        .task { await localSetup.refresh(pairedHostIDs: pairedHostIDs) }
+    }
+
+    private var pairedHostIDs: Set<String> { Set(appModel.hosts.map(\.hostID)) }
+
+    /// One action for this Mac, chosen by what is already installed.
+    @ViewBuilder
+    private var thisMacSection: some View {
+        VStack(spacing: Space.sm * interfaceScale) {
+            Text("mac.pairing.this_mac")
+                .interfaceFont(.headline)
+            switch localSetup.state {
+            case .checking, .hidden:
+                ProgressView().interfaceControlSize(.small)
+            case .ready(let corral):
+                Button("mac.pairing.connect_this_mac") {
+                    localSetup.connect(corral: corral, appModel: appModel, onPaired: finishLocalPairing)
+                }
+                .buttonStyle(.borderedProminent)
+            case .needsInstall(let brew):
+                Button("mac.pairing.install_corral") {
+                    localSetup.install(brew: brew, appModel: appModel, onPaired: finishLocalPairing)
+                }
+                .buttonStyle(.borderedProminent)
+            case .needsHomebrew:
+                Text("mac.pairing.needs_homebrew")
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                HStack(spacing: Space.md * interfaceScale) {
+                    Link("mac.pairing.get_homebrew", destination: MacLocalHostSetup.homebrewURL)
+                    Button("mac.pairing.check_again") {
+                        Task { await localSetup.refresh(pairedHostIDs: pairedHostIDs) }
+                    }
+                }
+            case .running(let step):
+                HStack(spacing: Space.sm * interfaceScale) {
+                    ProgressView().interfaceControlSize(.small)
+                    Text(step == .installing ? "mac.pairing.installing" : "mac.pairing.connecting")
+                        .foregroundStyle(.secondary)
+                    Button("action.cancel") { localSetup.cancel(pairedHostIDs: pairedHostIDs) }
+                }
+            case .failed(let message):
+                Label(message, systemImage: "exclamationmark.triangle.fill")
+                    .interfaceFont(.callout)
+                    .foregroundStyle(Palette.danger)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("action.retry") {
+                    Task { await localSetup.refresh(pairedHostIDs: pairedHostIDs) }
+                }
+            }
+        }
+        .interfaceFrame(maxWidth: 420)
+    }
+
+    private func finishLocalPairing() {
+        if isSheet { dismiss() }
     }
 
     private func startPairing() {

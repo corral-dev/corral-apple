@@ -21,6 +21,10 @@ The Mac branch re-anchors to the latest item whenever the measured content heigh
 
 Limits: the probe validates native layout and row realization, not WindowServer pixels (the console was locked during this investigation). Pointer scrolling is left to the owner.
 
+## Delivery
+
+Mac 0.3.88 (92), built from `21a3f86`, is installed at `/Applications/Corral.app`: the executable matches the export, its signature verifies, and live diagnostics report the local connection ready with the data channel attached. Its public publication stopped at notarization stapling (`stapler` error 68, a transient CloudKit TLS failure); the fix is published with Mac 0.3.89, whose source contains it. The installed window was not visually inspected because the console was locked during delivery.
+
 ## Cross-client
 
 - iPhone: shares the file but has its own `#if os(iOS)` re-anchor; not changed.

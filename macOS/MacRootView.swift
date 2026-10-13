@@ -47,7 +47,7 @@ struct MacRootView: View {
         .sheet(isPresented: $showPairing) {
             MacPairingView(isSheet: true)
                 .modifier(MacZoomContent())
-                .interfaceFrame(width: 520, height: 460)
+                .interfaceFrame(width: 520, height: 640)
         }
         .onOpenURL { url in
             Task { await pair(url: url) }
@@ -370,6 +370,12 @@ struct MacRootView: View {
         }
         if ProcessInfo.processInfo.arguments.contains("-CorralInspectConnectionRecovery") {
             Task { await MacConnectionInspection.run(model: appModel, feed: current) }
+        }
+        if ProcessInfo.processInfo.arguments.contains("-CorralInspectPairingStates") {
+            MacLocalHostSetupInspection.renderStates(appModel: appModel)
+        }
+        if ProcessInfo.processInfo.arguments.contains("-CorralInspectLocalHostSetup") {
+            Task { await MacLocalHostSetupInspection.run(appModel: appModel) }
         }
         if ProcessInfo.processInfo.arguments.contains("-CorralInspectLifecycle") {
             Task { await MacLifecycleInspection.run(appModel: appModel, workspace: workspace, feed: current) }
