@@ -471,13 +471,22 @@ struct SessionDetailView: View {
                 isBusy: isSending || isActionBusy,
                 autoFocus: autoFocusComposer,
                 focusRequest: composerFocusRequest,
-                onFocusChange: onComposerFocusChange,
+                onFocusChange: composerFocusChanged,
                 history: userPrompts.compactMap { $0.text?.trimmingCharacters(in: .whitespacesAndNewlines) },
                 onStop: stopAction,
                 isStopping: isInterrupting,
                 onSend: submitDraft
             )
         }
+    }
+
+    private func composerFocusChanged(_ focused: Bool) {
+        #if os(iOS)
+        // The keyboard coming up always returns the reader to the latest
+        // messages, even from history (owner requirement 2026-10-13).
+        if focused { scrollToLatestRequest += 1 }
+        #endif
+        onComposerFocusChange?(focused)
     }
 
     private var paneSwipe: some Gesture {
@@ -579,11 +588,13 @@ struct SessionDetailView: View {
 
     private var isAssistantRunning: Bool {
         guard let store = conversationStore else { return false }
-        return ChatActivityState.resolve(
-            store: store,
-            connected: isHostReady,
-            marker: SessionPresentation.activityMarker(for: session)
-        )?.isRunning == true
+        let marker = SessionPresentation.activityMarker(for: session)
+        return ChatActivityState.hasRunningTurn(
+            state: ChatActivityState.resolve(store: store, connected: isHostReady, marker: marker),
+            attention: store.displayAttention,
+            hasRunningTool: store.hasRunningTool,
+            marker: marker
+        )
     }
 
     /// Stop shows while the turn runs, and stays (quiet) until an interrupt

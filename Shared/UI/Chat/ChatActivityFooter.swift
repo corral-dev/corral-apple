@@ -42,6 +42,18 @@ enum ChatActivityState: Equatable {
     /// The assistant is executing a turn; waiting for a reply is not running.
     var isRunning: Bool { self != .waiting }
 
+    /// A turn the stop button can interrupt. The host's `recent` green dot only
+    /// means a hosted session was active within the just-now window — a freshly
+    /// created, never-prompted session qualifies — so it shows Working but never
+    /// counts as a running turn on its own.
+    static func hasRunningTurn(
+        state: Self?, attention: AttentionKind, hasRunningTool: Bool,
+        marker: SessionPresentation.StatusMarker?
+    ) -> Bool {
+        guard state?.isRunning == true else { return false }
+        return attention == .working || marker == .working || hasRunningTool
+    }
+
     var label: LocalizedStringResource {
         switch self {
         case .working: "chat.activity.working"
