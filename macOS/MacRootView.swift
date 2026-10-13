@@ -341,6 +341,7 @@ struct MacRootView: View {
         let current = await notifications.sessionFeed(host: host, model: appModel)
         feed = current
         workspace.feed = current
+        current.onSessionMigrated = { [weak workspace] old, new in workspace?.carryMode(from: old, to: new) }
         current.onListChanged = { [weak current] in
             if let current { await notifications.resolvePending(feed: current, workspace: workspace) }
         }
@@ -544,7 +545,8 @@ private struct FeedConnectionKey: Hashable {
 /// `CORRAL_INSPECTION_SESSION_KEY`; several keys separated by commas open a
 /// split), `-CorralInspectTerminal` switches the last of them to terminal view,
 /// `-CorralInspectPromptsOpen`
-/// opens every pane's prompts card. Release has none.
+/// opens every pane's prompts card, `-CorralInspectAddPaneSession` creates a
+/// Claude session beside the first pane. Release has none.
 enum MacInspection {
     static func apply(feed: HostSessionFeed, workspace: MacWorkspace) {
         let arguments = ProcessInfo.processInfo.arguments
@@ -563,6 +565,17 @@ enum MacInspection {
                 if let last = keys.last { workspace.setMode(.terminal, for: last) }
             }
             workspace.focus(first)
+            if arguments.contains("-CorralInspectAddPaneSession"),
+               let project = feed.listStore.session(for: first)?.cwd {
+                // Creates a Claude session beside the first pane through the
+                // production Add Pane path (new-session default view check).
+                Task {
+                    for _ in 0..<60 where !workspace.runtimes.contains(where: { $0.id == "claude" }) {
+                        try? await Task.sleep(for: .milliseconds(500))
+                    }
+                    await workspace.newSessionPane(runtimeID: "claude", project: project)
+                }
+            }
         }
         if arguments.contains("-CorralInspectPromptsOpen") {
             for key in workspace.paneKeys { workspace.promptsOpen[key] = true }

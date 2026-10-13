@@ -66,6 +66,8 @@ final class MacWorkspace {
     @ObservationIgnored weak var feed: HostSessionFeed?
 
     private static let modesKey = "corral.mac.paneModes"
+    /// Settings: the view a session created by this client opens in.
+    static let newSessionModeKey = "corral.mac.newSessionMode"
     private var modes: [String: String] = UserDefaults.standard.dictionary(forKey: MacWorkspace.modesKey) as? [String: String] ?? [:]
 
     func attach(appModel: AppModel) {
@@ -96,7 +98,11 @@ final class MacWorkspace {
 
     // MARK: - Chat / terminal per session (chat by default, remembered)
 
-    private func modeKey(_ key: String) -> String { "\(hostID ?? ""):\(key)" }
+    /// Keyed by the canonical session key, so a pane still holding the
+    /// provisional key of a new session reads the same choice.
+    private func modeKey(_ key: String) -> String {
+        "\(hostID ?? ""):\(feed?.listStore.resolvedKey(key) ?? key)"
+    }
 
     func mode(for key: String) -> PaneMode {
         if ProjectShell.isShellKey(key) { return .terminal }
@@ -106,6 +112,24 @@ final class MacWorkspace {
     func setMode(_ mode: PaneMode, for key: String) {
         modes[modeKey(key)] = mode.rawValue
         UserDefaults.standard.set(modes, forKey: Self.modesKey)
+    }
+
+    /// A new session's provisional key becomes canonical after its first
+    /// prompt; its chosen view must survive the rename.
+    func carryMode(from oldKey: String, to newKey: String) {
+        let old = "\(hostID ?? ""):\(oldKey)"
+        guard let stored = modes.removeValue(forKey: old) else { return }
+        let new = modeKey(newKey)
+        if modes[new] == nil { modes[new] = stored }
+        UserDefaults.standard.set(modes, forKey: Self.modesKey)
+    }
+
+    /// Only sessions created here follow the setting; history keeps chat so
+    /// browsing never resumes ended sessions through the terminal view.
+    private func applyNewSessionMode(to key: String) {
+        let preferred = UserDefaults.standard.string(forKey: Self.newSessionModeKey)
+            .flatMap(PaneMode.init(rawValue:)) ?? .chat
+        if preferred != .chat { setMode(preferred, for: key) }
     }
 
     func toggleModeOfFocusedPane() {
@@ -572,6 +596,7 @@ final class MacWorkspace {
     func openCreated(_ session: SessionSummary, asPane: Bool) {
         feed?.listStore.patchSession(session)
         feed?.listStore.rememberOpened(session)
+        applyNewSessionMode(to: session.key)
         if asPane, !paneKeys.isEmpty {
             addPane(session.key, project: session.cwd)
         } else {

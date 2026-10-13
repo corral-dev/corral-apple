@@ -241,7 +241,8 @@ final class SessionListStore {
         return nil
     }
 
-    private func resolvedKey(_ key: String) -> String {
+    /// The canonical key a provisional key was promoted to (itself otherwise).
+    func resolvedKey(_ key: String) -> String {
         var current = key
         var seen = Set<String>()
         while let next = aliasByKey[current], !seen.contains(current) {

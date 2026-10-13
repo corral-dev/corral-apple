@@ -29,6 +29,8 @@ final class HostSessionFeed {
     @ObservationIgnored var onNotification: ((SessionSummary, String) async -> Void)?
 
     @ObservationIgnored var onListChanged: (() async -> Void)?
+    /// A provisional key was promoted to its canonical key (old, new).
+    @ObservationIgnored var onSessionMigrated: ((String, String) -> Void)?
 
     @ObservationIgnored private weak var appModel: AppModel?
     @ObservationIgnored private var didWatch = false
@@ -204,6 +206,7 @@ final class HostSessionFeed {
                 } else if let oldKey = event.data["old_key"] as? String,
                           let newKey = event.data["new_key"] as? String {
                     self.listStore.migrateSession(from: oldKey, to: newKey)
+                    self.onSessionMigrated?(oldKey, newKey)
                     await self.onListChanged?()
                 } else if let patch = SessionListStore.sessionPatch(from: event.data) {
                     self.listStore.applySessionEvent(patch.0, revision: patch.1)

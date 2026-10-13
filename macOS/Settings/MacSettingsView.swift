@@ -25,6 +25,7 @@ private struct MacGeneralSettings: View {
     @Environment(MacInterfaceZoom.self) private var zoom
     @State private var notifications = MacNotifications.shared
     @Environment(\.scenePhase) private var scenePhase
+    @AppStorage(MacWorkspace.newSessionModeKey) private var newSessionMode = MacWorkspace.PaneMode.chat
 
     var body: some View {
         @Bindable var model = appModel
@@ -47,6 +48,11 @@ private struct MacGeneralSettings: View {
                         Text(size.title).tag(size)
                     }
                 }
+                Picker("mac.settings.new_session_view", selection: $newSessionMode) {
+                    Text("mac.pane.chat").tag(MacWorkspace.PaneMode.chat)
+                    Text("mac.pane.terminal").tag(MacWorkspace.PaneMode.terminal)
+                }
+                .pickerStyle(.segmented)
             }
             Section("settings.notifications") {
                 Toggle("settings.notifications", isOn: Binding(

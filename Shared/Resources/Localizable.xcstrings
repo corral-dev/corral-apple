@@ -2554,6 +2554,23 @@
         }
       }
     },
+    "mac.settings.new_session_view": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New Sessions Open In"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "新会话打开方式"
+          }
+        }
+      }
+    },
     "mac.settings.machine": {
       "extractionState": "manual",
       "localizations": {
