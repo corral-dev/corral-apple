@@ -8,15 +8,24 @@ import UIKit
 /// the phone. SwiftTerm's keyboard accessory supplies Esc, Ctrl, Tab and arrows.
 struct ShellTerminalView: UIViewRepresentable {
     let stream: RemoteTerminalStream
+    var isPresented = true
+    var allowsInput = true
+    var isAgent = false
 
     func makeUIView(context: Context) -> ShellTerminalHost {
         let view = ShellTerminalHost(frame: .zero)
+        view.configure(presented: isPresented, allowsInput: allowsInput, isAgent: isAgent)
         view.bind(stream)
         return view
     }
 
     func updateUIView(_ view: ShellTerminalHost, context: Context) {
+        view.configure(presented: isPresented, allowsInput: allowsInput, isAgent: isAgent)
         if view.stream !== stream { view.bind(stream) }
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: ShellTerminalHost, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? 390, height: proposal.height ?? 400)
     }
 
     static func dismantleUIView(_ view: ShellTerminalHost, coordinator: ()) {
@@ -29,12 +38,18 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
 
     private(set) weak var stream: RemoteTerminalStream?
     private var feedingHost = false
+    private var presented = true
+    private var allowsInput = true
+    private var isAgent = false
     private var scheme = TerminalColorScheme.dark
 
     override init(frame: CGRect) {
         super.init(frame: frame, font: UIFont.monospacedSystemFont(ofSize: Self.fontSize, weight: .regular))
         terminalDelegate = self
         applyScheme()
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: ShellTerminalHost, _: UITraitCollection) in
+            view.applyScheme()
+        }
     }
 
     @available(*, unavailable)
@@ -53,15 +68,36 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
         stream = nil
     }
 
+    func configure(presented: Bool, allowsInput: Bool, isAgent: Bool) {
+        let revealed = !self.presented && presented
+        self.presented = presented
+        self.allowsInput = allowsInput
+        self.isAgent = isAgent
+        isHidden = !presented
+        accessibilityElementsHidden = !presented
+        if !presented || !allowsInput { _ = resignFirstResponder() }
+        if revealed { reportFit() }
+    }
+
+    override var canBecomeFirstResponder: Bool { presented && allowsInput && super.canBecomeFirstResponder }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        reportFit()
+    }
+
+    override func paste(_ sender: Any?) {
+        guard presented, allowsInput, stream?.phase == .live, let text = UIPasteboard.general.string else { return }
+        scroll(toPosition: 1)
+        stream?.input.paste(text)
+    }
+
     override func didMoveToWindow() {
         super.didMoveToWindow()
         // The terminal is the screen's only input: the keyboard comes up with it.
-        if window != nil { DispatchQueue.main.async { [weak self] in _ = self?.becomeFirstResponder() } }
-    }
-
-    override func traitCollectionDidChange(_ previous: UITraitCollection?) {
-        super.traitCollectionDidChange(previous)
-        applyScheme()
+        if window != nil, !isAgent {
+            DispatchQueue.main.async { [weak self] in _ = self?.becomeFirstResponder() }
+        }
     }
 
     private func applyScheme() {
@@ -80,14 +116,24 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
     }
 
     private func reportFit() {
+        guard presented, !feedingHost, bounds.width > 0, bounds.height > 0 else { return }
         let emulator = getTerminal()
-        guard bounds.width > 0, bounds.height > 0 else { return }
-        stream?.updateFit(TerminalGrid(cols: max(20, emulator.cols), rows: max(5, emulator.rows)))
+        let optimal = getOptimalFrameSize()
+        let cellWidth = optimal.width / CGFloat(max(1, emulator.cols))
+        let cellHeight = optimal.height / CGFloat(max(1, emulator.rows))
+        guard cellWidth > 0, cellHeight > 0 else { return }
+        // Fit derives from the local viewport, never a received desktop grid.
+        stream?.updateFit(TerminalGrid(
+            cols: max(isAgent ? 40 : 20, Int(bounds.width / cellWidth)),
+            rows: max(isAgent ? 10 : 5, Int(bounds.height / cellHeight))
+        ))
     }
 
     // MARK: - TerminalStreamSink
 
     func terminalReset(grid: TerminalGrid, data: Data) {
+        feedingHost = true
+        defer { feedingHost = false }
         let emulator = getTerminal()
         if emulator.cols != grid.cols || emulator.rows != grid.rows {
             resize(cols: grid.cols, rows: grid.rows)
@@ -115,7 +161,7 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
     }
 
     override func send(source: Terminal, data: ArraySlice<UInt8>) {
-        guard !feedingHost else { return }
+        guard !feedingHost, presented, allowsInput, stream?.phase == .live else { return }
         super.send(source: source, data: data)
     }
 
@@ -124,12 +170,13 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
     /// Typing (keyboard, accessory keys, paste) returns to the live screen,
     /// as in iTerm2: SwiftTerm only scrolls when the caret is off screen.
     func send(source: SwiftTerm.TerminalView, data: ArraySlice<UInt8>) {
+        guard presented, allowsInput, stream?.phase == .live else { return }
         scroll(toPosition: 1)
         stream?.input.send(data)
     }
 
     func sizeChanged(source: SwiftTerm.TerminalView, newCols: Int, newRows: Int) {
-        stream?.updateFit(TerminalGrid(cols: max(20, newCols), rows: max(5, newRows)))
+        reportFit()
     }
 
     func setTerminalTitle(source: SwiftTerm.TerminalView, title: String) {}

@@ -4172,6 +4172,23 @@
         }
       }
     },
+    "sessions.filter.project.selected %lld": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected %lld"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已选 %lld 项"
+          }
+        }
+      }
+    },
     "sessions.filter.project.title": {
       "extractionState": "manual",
       "localizations": {
@@ -5407,6 +5424,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "先回答这道提问，你写的消息会留在下面的输入框里。"
+          }
+        }
+      }
+    },
+    "session.actions.resume": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Resume"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "继续会话"
           }
         }
       }

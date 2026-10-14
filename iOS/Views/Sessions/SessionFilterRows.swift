@@ -170,15 +170,14 @@ struct SessionProjectFilterRow: View {
                     }
                 }
             }
-            Button(action: onMore) {
-                Image(systemName: "ellipsis")
-                    .font(.body.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .frame(minWidth: TouchTarget.minimum, minHeight: TouchTarget.minimum)
-                    .contentShape(Rectangle())
+            SessionFilterChip(selected: !selected.isEmpty) {
+                summaryLabel
+            } action: {
+                onMore()
             }
-            .buttonStyle(PressableButtonStyle(pressedScale: 1))
-            .accessibilityLabel(Text("sessions.filter.more"))
+            .layoutPriority(1)
+            .accessibilityLabel(Text("sessions.filter.project"))
+            .accessibilityValue(summaryLabel.title)
         }
         .padding(.horizontal, SessionListLayout.rowHorizontal)
         .onChange(of: selected, initial: true) { _, _ in rememberSelectedProjects() }
@@ -202,6 +201,10 @@ struct SessionProjectFilterRow: View {
     private var rowOptions: [SessionProjectOption] {
         let visible = Set(choices.map(\.path))
         return choices + extraChoices.filter { !visible.contains($0.path) }
+    }
+
+    private var summaryLabel: ProjectFilterSummaryLabel {
+        ProjectFilterSummaryLabel(selected: selected, options: rowOptions, maximumNameWidth: 132)
     }
 
     private func rememberSelectedProjects() {

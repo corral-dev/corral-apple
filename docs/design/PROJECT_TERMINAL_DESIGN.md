@@ -36,9 +36,9 @@ Shell output, input, sizing and colours reuse the desktop terminal stream (`term
 
 ## iPhone
 
-- **Entry:** "Open Terminal" in the session detail's top-right menu opens the project terminal for that session's project as a full-screen cover. The phone session page keeps only two navigation-bar buttons (back and that menu; owner rule 2026-10-07 in the UI design knowledge base); a separate terminal button squeezed the title. Hidden for read-only pairings and hosts without `project_shell`. This is a new, separate feature: hard constraint 9 (the hidden per-session agent terminal page) is unchanged.
+- **Entry:** "Open Terminal" in the session detail's top-right menu opens the project terminal for that session's project as a full-screen cover. The phone session page keeps only two navigation-bar buttons (back and that menu; owner rule 2026-10-07 in the UI design knowledge base); a separate terminal button squeezed the title. Hidden for read-only pairings and hosts without `project_shell`. This is separate from [iPhone agent terminal switching](IPHONE_AGENT_TERMINAL_DESIGN.md), approved 2026-10-14.
 - **Screen:** navigation bar with Done, the shell tabs as a menu when more than one exists, and "+"; SwiftTerm's UIKit `TerminalView` fills the rest with its built-in keyboard accessory (Esc, Ctrl, Tab, arrows, function keys) ([SwiftTerm TerminalView](https://migueldeicaza.github.io/SwiftTerm/Classes/TerminalView.html), [accessory issue #116](https://github.com/migueldeicaza/SwiftTerm/issues/116)). Opening it with no shell for the project starts one.
-- **Dependency:** SwiftTerm (MIT, same pinned release as the Mac) is added to the iPhone target for this screen only; it supersedes "iPhone has no third-party package" in `apple/AGENTS.md`.
+- **Dependency:** SwiftTerm (MIT, same pinned release as the Mac) is used by the iPhone project shell and agent terminal; it supersedes "iPhone has no third-party package" in `apple/AGENTS.md`.
 
 ## Typing returns to the live screen (owner report 2026-10-07)
 

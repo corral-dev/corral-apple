@@ -58,16 +58,15 @@ struct MacSidebarFilters: View {
                 MacFilterChoices {
                     ForEach(projectRowOptions, id: \.path) { option in projectButton(option) }
                 }
-                Button { showProjects = true } label: {
-                    Image(systemName: "ellipsis")
-                        .interfaceFont(.body.weight(.medium))
-                        .foregroundStyle(.secondary)
-                        .interfaceFrame(width: 28, height: MacSidebarMetrics.filterHeight)
-                        .contentShape(Rectangle())
+                MacQuickFilterButton(selected: !projects.isEmpty, sidebar: true) {
+                    summaryLabel
+                } action: {
+                    showProjects = true
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(Text("sessions.filter.more"))
-                .help(Text("sessions.filter.more"))
+                .layoutPriority(1)
+                .accessibilityLabel(Text("sessions.filter.project"))
+                .accessibilityValue(summaryLabel.title)
+                .help(summaryLabel.title)
                 .popover(isPresented: $showProjects) {
                     MacProjectFilterPopover(
                         options: SessionListFiltering.allOptions(sessions: sessions),
@@ -139,6 +138,10 @@ struct MacSidebarFilters: View {
     private var projectRowOptions: [SessionProjectOption] {
         let visible = Set(choices.map(\.path))
         return choices + extraChoices.filter { !visible.contains($0.path) }
+    }
+
+    private var summaryLabel: ProjectFilterSummaryLabel {
+        ProjectFilterSummaryLabel(selected: projects, options: projectRowOptions, maximumNameWidth: 108 * interfaceScale)
     }
 
     private func rememberSelectedProjects() {

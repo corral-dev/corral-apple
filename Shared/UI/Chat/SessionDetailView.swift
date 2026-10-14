@@ -58,7 +58,7 @@ struct SessionDetailView: View {
     @State private var pane: DetailPane = .chat
     @State private var conversationStore: ConversationStore?
     @State private var imageLoader: ChatImageLoader?
-    @State private var terminalStore: TerminalStore?
+    @State private var visitedTerminal = false
     @State private var draft = ""
     @State private var draftAttachments: [DraftImageAttachment] = []
     @State private var isSending = false
@@ -99,7 +99,7 @@ struct SessionDetailView: View {
         ChatScreen {
             detailContent
         } composer: {
-            composerStack
+            if pane == .chat || !canShowAgentTerminal { composerStack }
         }
         .background(Color(.systemGroupedBackground))
         .environment(\.sessionTextScale, appModel.sessionTextSize.scale)
@@ -160,24 +160,10 @@ struct SessionDetailView: View {
         }
         .task {
             let conv = prepareConversationIfNeeded()
-            let client = appModel.client
             async let runtimesLoad: Void = loadRuntimes()
             async let readMark: Void = injectedStore == nil ? conv.markRead() : ()
             async let chatStart: Void = startIfOwned(conv)
-            if ProductFeatures.terminalPaneEnabled, let client {
-                let term = TerminalStore(sessionKey: session.key, client: client)
-                terminalStore = term
-                if session.live {
-                    async let screenStart: Void = term.start()
-                    _ = await (chatStart, screenStart)
-                } else {
-                    await chatStart
-                }
-            } else {
-                pane = .chat
-                terminalStore = nil
-                await chatStart
-            }
+            await chatStart
             await runtimesLoad
             await readMark
 #if DEBUG
@@ -209,16 +195,25 @@ struct SessionDetailView: View {
             scrollToMessageID = scrollRequest.messageID
         }
         .onChange(of: pane) { _, newValue in
-            guard ProductFeatures.terminalPaneEnabled, newValue == .terminal else { return }
-            Task { await terminalStore?.start() }
+            if newValue == .terminal { visitedTerminal = true }
         }
+        .onChange(of: canShowAgentTerminal) { _, allowed in
+            if !allowed { pane = .chat }
+        }
+        #if DEBUG
+        .onChange(of: canShowAgentTerminal, initial: true) { _, allowed in
+            if allowed, ProcessInfo.processInfo.arguments.contains("-CorralInspectAgentTerminal") {
+                visitedTerminal = true
+                pane = .terminal
+            }
+        }
+        #endif
         .hapticScope(hapticScope)
         .onDisappear {
             persistDraft(draft)
             let owned = injectedStore == nil ? conversationStore : nil
             Task {
                 await owned?.stop()
-                await terminalStore?.stop()
             }
         }
     }
@@ -226,7 +221,7 @@ struct SessionDetailView: View {
 
     #if os(iOS)
     /// Project terminal: a full pairing to a host that runs project shells.
-    /// Independent of the hidden per-session terminal page (hard constraint 9).
+    /// Independent of per-session agent terminal switching.
     private var canOpenProjectTerminal: Bool {
         appModel.client?.hostCapabilities.projectShell == true
             && !SessionActionsMenu.isReadonly(access: appModel.connectedAccess)
@@ -308,17 +303,17 @@ struct SessionDetailView: View {
         return conv
     }
 
+    private var canShowAgentTerminal: Bool {
+        #if os(iOS)
+        ProductFeatures.terminalPaneEnabled && appModel.client?.hostCapabilities.terminalStream == true
+        #else
+        false
+        #endif
+    }
+
     private var detailContent: some View {
         VStack(spacing: 0) {
-            if ProductFeatures.terminalPaneEnabled,
-               session.live,
-               let status = terminalStore?.status,
-               !status.isEmpty
-            {
-                StatusBarView(verbatim: status)
-            }
-
-            if ProductFeatures.terminalPaneEnabled {
+            if canShowAgentTerminal {
                 Picker("session.detail.mode", selection: $pane) {
                     ForEach(DetailPane.allCases) { pane in
                         Text(pane.title).tag(pane)
@@ -328,43 +323,44 @@ struct SessionDetailView: View {
                 .interfacePadding(.horizontal, Space.base)
                 .interfacePadding(.vertical, Space.sm)
             }
-
-            Group {
-                if pane == .chat || !ProductFeatures.terminalPaneEnabled {
-                    if let store = conversationStore {
-                        ChatView(
-                            store: store,
-                            runtimeID: session.runtime,
-                            sessionMarker: SessionPresentation.activityMarker(for: session),
-                            isConnected: isHostReady,
-                            isSending: isSending || isActionBusy,
-                            scrollToLatestRequest: scrollToLatestRequest,
-                            loadEarlierPullProgress: $loadEarlierPullProgress,
-                            scrollToMessageID: $scrollToMessageID,
-                            blockedQuestionRequestID: blockedQuestionRequestID,
-                            onQuestionSubmit: submitQuestion,
-                            onRetryMessage: retryFailedMessage
-                        )
-                        .environment(\.chatImageLoader, imageLoader)
-                        .environment(\.conversationScrollReadAction, acknowledgeScrollRead)
-                    } else {
-                        ProgressView()
-                    }
-                } else if let store = terminalStore {
-                    #if os(iOS)
-                    TerminalGridView(store: store)
-                    #else
-                    // The terminal pane is iOS-only and gated off (ProductFeatures).
-                    let _ = store
-                    EmptyView()
-                    #endif
-                } else {
-                    ProgressView()
+            ZStack {
+                conversationContent
+                    .opacity(pane == .chat || !canShowAgentTerminal ? 1 : 0)
+                    .allowsHitTesting(pane == .chat || !canShowAgentTerminal)
+                    .accessibilityHidden(pane != .chat && canShowAgentTerminal)
+                #if os(iOS)
+                if visitedTerminal && canShowAgentTerminal {
+                    AgentTerminalPane(
+                        session: session,
+                        isPresented: pane == .terminal && !showProjectTerminal && !showUserPrompts
+                    )
                 }
+                #endif
             }
             .interfaceFrame(maxWidth: .infinity, maxHeight: .infinity)
-            .modifier(OptionalPaneSwipe(enabled: ProductFeatures.terminalPaneEnabled, gesture: paneSwipe))
+        }
+    }
 
+    @ViewBuilder
+    private var conversationContent: some View {
+        if let store = conversationStore {
+            ChatView(
+                store: store,
+                runtimeID: session.runtime,
+                sessionMarker: SessionPresentation.activityMarker(for: session),
+                isConnected: isHostReady,
+                isSending: isSending || isActionBusy,
+                scrollToLatestRequest: scrollToLatestRequest,
+                loadEarlierPullProgress: $loadEarlierPullProgress,
+                scrollToMessageID: $scrollToMessageID,
+                blockedQuestionRequestID: blockedQuestionRequestID,
+                onQuestionSubmit: submitQuestion,
+                onRetryMessage: retryFailedMessage
+            )
+            .environment(\.chatImageLoader, imageLoader)
+            .environment(\.conversationScrollReadAction, acknowledgeScrollRead)
+        } else {
+            ProgressView()
         }
     }
 
@@ -487,22 +483,6 @@ struct SessionDetailView: View {
         if focused { scrollToLatestRequest += 1 }
         #endif
         onComposerFocusChange?(focused)
-    }
-
-    private var paneSwipe: some Gesture {
-        DragGesture(minimumDistance: 48)
-            .onEnded { value in
-                guard ProductFeatures.terminalPaneEnabled else { return }
-                // Left-edge drags stay with system back; switch chat / terminal only in content.
-                guard value.startLocation.x > 28 else { return }
-                let dx = value.translation.width
-                if dx < -64, pane == .chat {
-                    pane = .terminal
-                    Task { await terminalStore?.start() }
-                } else if dx > 64, pane == .terminal {
-                    pane = .chat
-                }
-            }
     }
 
     private var isHostReady: Bool {
@@ -954,21 +934,6 @@ struct SessionDetailView: View {
             withAnimation(.easeInOut(duration: Motion.stateDuration)) {
                 composerError = message
             }
-        }
-    }
-}
-
-private struct OptionalPaneSwipe<G: Gesture>: ViewModifier {
-    @Environment(\.interfaceScale) private var interfaceScale
-    let enabled: Bool
-    let gesture: G
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if enabled {
-            content.simultaneousGesture(gesture)
-        } else {
-            content
         }
     }
 }
