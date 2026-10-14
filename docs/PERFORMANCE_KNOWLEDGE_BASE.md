@@ -14,6 +14,7 @@ Also covers native Mac split resizing and sidebar switching, including measured 
 - [Identity and asynchronous result safety](#identity-and-asynchronous-result-safety)
 - [连接层审查清单](#连接层审查清单)
 - [Compiler diagnostics](#compiler-diagnostics-2026-10-07)
+- [Terminal replay diagnostics](#terminal-selection-replay-diagnostics-2026-10-14)
 - [验收](#验收)
 - [离线能力表](#离线能力表全局-offline-first--ios-基线-b9)
 - [跨规范备注](#跨规范备注展示元数据--基线豁免)
