@@ -103,13 +103,17 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
     private func feedFromHost(_ data: Data) {
         feedingHost = true
         defer { feedingHost = false }
-        data.withUnsafeBytes { raw in
-            feed(byteArray: ArraySlice(raw.bindMemory(to: UInt8.self)))
-        }
+        feedPreservingSelection(data)
     }
 
     /// Replies the emulator produces while drawing host output are dropped:
     /// tmux already answered the shell's terminal queries.
+    /// A reset or alternate-screen switch replaces the selected document.
+    override func bufferActivated(source: Terminal) {
+        selection?.selectNone()
+        super.bufferActivated(source: source)
+    }
+
     override func send(source: Terminal, data: ArraySlice<UInt8>) {
         guard !feedingHost else { return }
         super.send(source: source, data: data)
