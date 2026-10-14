@@ -135,6 +135,25 @@ struct SessionListView: View {
                                     NavigationLink(value: SessionRoute(key: session.key)) {
                                         SessionRowView(session: session)
                                     }
+                                    .confirmationDialog(
+                                        "sessions.delete_confirm.title",
+                                        isPresented: Binding(
+                                            get: { sessionToDelete?.key == session.key },
+                                            set: { presented in
+                                                if !presented, sessionToDelete?.key == session.key {
+                                                    sessionToDelete = nil
+                                                }
+                                            }
+                                        ),
+                                        titleVisibility: .visible,
+                                        presenting: sessionToDelete
+                                    ) { target in
+                                        Button("sessions.action.delete", role: .destructive) {
+                                            sessionToDelete = nil
+                                            Task { await deleteSession(target) }
+                                        }
+                                        Button("action.cancel", role: .cancel) { sessionToDelete = nil }
+                                    }
                                     .listRowSeparator(.visible, edges: .bottom)
                                     .alignmentGuide(.listRowSeparatorLeading) { dimensions in
                                         dimensions[.leading] + SessionListLayout.separatorLeading
@@ -318,22 +337,6 @@ struct SessionListView: View {
                 listStore.rememberOpened(session)
                 pendingCreatedSessionKey = session.key
             }
-        }
-        .confirmationDialog(
-            "sessions.delete_confirm.title",
-            isPresented: Binding(
-                get: { sessionToDelete != nil },
-                set: { if !$0 { sessionToDelete = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button("sessions.action.delete", role: .destructive) {
-                if let session = sessionToDelete {
-                    Task { await deleteSession(session) }
-                }
-                sessionToDelete = nil
-            }
-            Button("action.cancel", role: .cancel) { sessionToDelete = nil }
         }
         .task(id: isActiveList) {
             guard isActiveList else { return }

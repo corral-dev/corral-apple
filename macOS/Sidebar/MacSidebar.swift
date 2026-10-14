@@ -22,6 +22,7 @@ struct MacSidebar: View {
     @State private var orderBox = OrderBox()
     @State private var sessionToDelete: SessionSummary?
     #if DEBUG
+    @State private var didInspectDeleteConfirmation = false
     @State private var inspectionTick = 0
     @FocusState private var inspectionFocused: Bool
     #endif
@@ -134,26 +135,6 @@ struct MacSidebar: View {
                     .help(Text("sessions.new"))
                     .disabled(!canCreate)
                 }
-            }
-            .confirmationDialog(
-                "sessions.delete_confirm.title",
-                isPresented: Binding(get: { sessionToDelete != nil }, set: { if !$0 { sessionToDelete = nil } }),
-                titleVisibility: .visible
-            ) {
-                Button("sessions.action.delete", role: .destructive) {
-                    if let session = sessionToDelete {
-                        Task {
-                            do {
-                                try await feed.delete(session)
-                                workspace.closePane(session.key)
-                            } catch {
-                                // The shared feed keeps the row and presents the host error.
-                            }
-                        }
-                    }
-                    sessionToDelete = nil
-                }
-                Button("action.cancel", role: .cancel) { sessionToDelete = nil }
             }
     }
 
@@ -321,6 +302,43 @@ struct MacSidebar: View {
             .tag(SidebarTag.session(session.key))
             .onAppear { feed.listStore.rememberOpened(session) }
             .contextMenu { sessionMenu(session) }
+            .confirmationDialog(
+                "sessions.delete_confirm.title",
+                isPresented: Binding(
+                    get: { sessionToDelete?.key == session.key },
+                    set: { presented in
+                        if !presented, sessionToDelete?.key == session.key {
+                            sessionToDelete = nil
+                        }
+                    }
+                ),
+                titleVisibility: .visible,
+                presenting: sessionToDelete
+            ) { target in
+                Button("sessions.action.delete", role: .destructive) {
+                    sessionToDelete = nil
+                    Task {
+                        do {
+                            try await feed.delete(target)
+                            workspace.closePane(target.key)
+                        } catch {
+                            // The shared feed keeps the row and presents the host error.
+                        }
+                    }
+                }
+                Button("action.cancel", role: .cancel) { sessionToDelete = nil }
+            }
+            #if DEBUG
+            .task {
+                guard ProcessInfo.processInfo.arguments.contains("-CorralInspectDeleteConfirmation"),
+                      ProcessInfo.processInfo.environment["CORRAL_INSPECTION_SESSION_KEY"] == session.key,
+                      !didInspectDeleteConfirmation else { return }
+                didInspectDeleteConfirmation = true
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled else { return }
+                sessionToDelete = session
+            }
+            #endif
     }
 
     /// The project names the split (design: Collapsed split and project

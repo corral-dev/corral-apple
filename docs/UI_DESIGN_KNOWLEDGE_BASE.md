@@ -8,6 +8,7 @@
 - [设计令牌位置](#设计令牌位置)
 - [App-icon brand colors](#app-icon-brand-colors-2026-10-01)
 - [Session list filters and layout](#session-list-filters-and-layout-2026-10-01)
+- [Session deletion confirmation](#session-deletion-confirmation-2026-10-14)
 - [Conversation polish: overflow cue, inline images, header state, instant Working](#conversation-polish-2026-10-01)
 - [Mac Agent Activity popover](#mac-agent-activity-popover-2026-10-07)
 - [助手标识](#助手标识强制官方图形禁止自绘)
@@ -92,6 +93,14 @@ References: [Apple color guidance](https://developer.apple.com/design/human-inte
 - List previews use the footnote role so they sit a step below the title. They are bounded plain-text excerpts with whitespace collapsed. Normalize paired strong-emphasis markers before parsing inline Markdown because CJK punctuation can leave those markers literal. Never mutate the source conversation.
 - Section headers show the group name in the section style and the count in secondary caption type, not as one concatenated string.
 - Inspection launch arguments on the same installed app, without a separate test runner: `-CorralInspectSessions` (open the real list), `-CorralInspectConversation` (open the newest session), `-CorralInspectLoadEarlier` (jump to the oldest visible message), `-CorralInspectKeyboard` (also focus the composer so the keyboard is visible), and `-CorralInspectLight` / `-CorralInspectDark` (force appearance). These switches are compiled only into Debug builds (`#if DEBUG`): a delivered Release build ignores them and opens normally (verified 2026-10-01 on 1.0.86), so Release screen acceptance needs a Debug install of the same source or the owner to navigate. These switches do not change text size. Do not leave the user's phone in an altered inspection appearance; restore the ordinary launch afterward.
+
+### Session deletion confirmation (2026-10-14)
+
+The iPhone's swipe-delete confirmation belongs to the selected session row. It must not originate from the page header regardless of the row's position. The Mac sidebar uses the same row-scoped presentation for context-menu deletion. Keep the native destructive confirmation, cancellation and existing host deletion/error behavior; opening or dismissing the dialog never deletes history.
+
+Reference inspected: the existing `SessionListView` swipe action and `MacSidebar.sessionRow`, plus Apple's [ConfirmEraseItems example](https://developer.apple.com/documentation/swiftui/view/confirmationDialog(_:isPresented:titleVisibility:actions:)), which attaches `confirmationDialog` to its source control. Reuse that public modifier directly on the persistent session row because swipe/context-menu controls disappear after selection. Its API is present in the installed iOS 27.2 SDK and supports the product's iOS 17 minimum. Apple's [Liquid Glass adoption guidance](https://developer.apple.com/documentation/technologyoverviews/adopting-liquid-glass) requires the action sheet's source view/item for inline presentation. The system owns adaptation, arrow direction and edge clamping; no manual coordinates or custom popover are needed. Scope the presentation binding to the session key so an unrelated row's dismissal cannot clear the current target.
+
+Acceptance: inspect confirmations from different visible row positions, including a scrolled list; cancel/dismiss, then open a different row and verify the target remains correct. Never confirm deletion of real user history during acceptance. TUI deletion uses its intentional centered `ConfirmModal`, so it has no Apple source-anchor behavior. Physical iPhone evidence is pending while the paired iPhone is unavailable; compilation and Mac captures cannot establish iPhone placement. Verification of the source change: 387 portable Core tests and localization checks pass; fresh Mac Debug and generic-device iOS Release builds pass. Complete logs are retained in the `delete-anchor-20261014` workflow receipt (`8c5540f10339499bbc479f84514b26ae`). Existing native Markdown, camera queue, terminal trait and App Intents diagnostics match the individual assessments in [Compiler diagnostics](PERFORMANCE_KNOWLEDGE_BASE.md#compiler-diagnostics-2026-10-07); the changed rows introduce no compiler warnings. The Mac console is locked (`CGSSessionScreenIsLocked = 1`) and window capture was rejected, so Mac popup appearance and manual context-menu/cancellation behavior also remain unverified. No real session was deleted.
 
 ### Bottom search: fixed trailing icon (2026-10-01)
 
