@@ -14,6 +14,7 @@ struct AgentTerminalPane: View {
     @State private var resumed = false
     @State private var resumeError: String?
     @State private var sawScreen = false
+    @State private var visibility = TerminalVisibility()
 
     var body: some View {
         ZStack {
@@ -25,6 +26,8 @@ struct AgentTerminalPane: View {
             if isPresented { status }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .allowsHitTesting(isPresented)
+        .accessibilityHidden(!isPresented)
         .background {
             if isPresented { background }
         }
@@ -36,12 +39,17 @@ struct AgentTerminalPane: View {
             if phase == .live { sawScreen = true }
         }
         .onChange(of: isPresented) { _, presented in
+            visibility.active = presented && scenePhase == .active
             if !presented { stream?.stop() }
         }
         .onChange(of: scenePhase) { _, phase in
+            visibility.active = isPresented && phase == .active
             if phase != .active { stream?.stop() }
         }
-        .onDisappear { stream?.stop() }
+        .onDisappear {
+            visibility.active = false
+            stream?.stop()
+        }
     }
 
     private var isActive: Bool { isPresented && scenePhase == .active }
@@ -49,13 +57,17 @@ struct AgentTerminalPane: View {
     private var isReadonly: Bool { SessionActionsMenu.isReadonly(access: appModel.connectedAccess) }
 
     private func updateStream() {
+        visibility.active = isActive
         guard isActive, let client = appModel.client, session.hosted || resumed else {
             stream?.stop()
             return
         }
         if stream?.clientIdentity != ObjectIdentifier(client) {
             stream?.stop()
-            stream = RemoteTerminalStream(sessionKey: session.key, client: client)
+            let next = RemoteTerminalStream(sessionKey: session.key, client: client)
+            let visibility = visibility
+            next.isInFront = { visibility.active }
+            stream = next
             sawScreen = false
         }
         stream?.start()
@@ -133,6 +145,8 @@ struct AgentTerminalPane: View {
         let rgb = (colorScheme == .dark ? TerminalColorScheme.dark : .light).background
         return Color(red: Double(rgb.red) / 255, green: Double(rgb.green) / 255, blue: Double(rgb.blue) / 255)
     }
+
+    private final class TerminalVisibility { var active = false }
 
     private struct ConnectionKey: Hashable {
         let client: ObjectIdentifier?

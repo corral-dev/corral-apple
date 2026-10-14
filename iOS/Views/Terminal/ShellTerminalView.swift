@@ -2,7 +2,7 @@ import SwiftTerm
 import SwiftUI
 import UIKit
 
-/// SwiftTerm's UIKit terminal fed by a host shell stream. The view's own grid
+/// SwiftTerm's UIKit terminal fed by a host shell or agent stream. The view's own grid
 /// (its frame at the phone font) is the size it votes; the host makes the
 /// latest active viewer's grid the shell's, so typing here sizes the shell to
 /// the phone. SwiftTerm's keyboard accessory supplies Esc, Ctrl, Tab and arrows.
@@ -94,7 +94,7 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        // The terminal is the screen's only input: the keyboard comes up with it.
+        // Project shells focus on open; an agent terminal focuses only on a tap.
         if window != nil, !isAgent {
             DispatchQueue.main.async { [weak self] in _ = self?.becomeFirstResponder() }
         }
