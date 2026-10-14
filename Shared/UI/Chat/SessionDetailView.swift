@@ -55,7 +55,7 @@ struct SessionDetailView: View {
     var scrollRequest: ChatScrollRequest? = nil
     /// 复制/接力成功后的新会话：列表页负责落盘并推进，详情页只上报。
     var onDidCreateSession: ((SessionSummary) -> Void)? = nil
-    @State private var pane: DetailPane = .chat
+    @State private var pane: SessionDetailMode = .chat
     @State private var conversationStore: ConversationStore?
     @State private var imageLoader: ChatImageLoader?
     @State private var visitedTerminal = false
@@ -80,20 +80,6 @@ struct SessionDetailView: View {
     @State private var pendingPromptJump: String?
     @State private var draftHostID = ""
     @State private var didLoadDraft = false
-
-    enum DetailPane: String, CaseIterable, Identifiable, Hashable {
-        case chat
-        case terminal
-
-        var id: String { rawValue }
-
-        var title: LocalizedStringKey {
-            switch self {
-            case .chat: "session.detail.chat"
-            case .terminal: "session.detail.terminal"
-            }
-        }
-    }
 
     var body: some View {
         ChatScreen {
@@ -239,7 +225,8 @@ struct SessionDetailView: View {
             onRestart: startRestart,
             onCopy: { Task { await copySession() } },
             onHandoff: { target in Task { await handoffSession(to: target) } },
-            onOpenTerminal: openTerminalAction
+            onOpenTerminal: openTerminalAction,
+            displayMode: canShowAgentTerminal ? $pane : nil
         )
     }
 
@@ -313,16 +300,6 @@ struct SessionDetailView: View {
 
     private var detailContent: some View {
         VStack(spacing: 0) {
-            if canShowAgentTerminal {
-                Picker("session.detail.mode", selection: $pane) {
-                    ForEach(DetailPane.allCases) { pane in
-                        Text(pane.title).tag(pane)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .interfacePadding(.horizontal, Space.base)
-                .interfacePadding(.vertical, Space.sm)
-            }
             ZStack {
                 conversationContent
                     .opacity(pane == .chat || !canShowAgentTerminal ? 1 : 0)

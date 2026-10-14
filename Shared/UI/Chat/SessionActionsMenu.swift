@@ -10,15 +10,15 @@ import SwiftUI
 /// - 失败透服务端 `RemoteCallError.message`，缺 message 走 `error.unknown`；
 /// - 无历史/占位卡失败时原会话不动（只在这里报错，不改列表/详情）。
 /// 菜单状态规则（产品裁定，已锁）：
-/// - 只读配对（hello `access == "readonly"`）隐藏整单；旧开发机无 `access` 字段按 full 显示；
+/// - 只读配对（hello `access == "readonly"`）隐藏远程操作；本地显示模式可切换；旧开发机无 `access` 字段按 full 显示；
 /// - `runtimes.list` 缺 `available` 按可用处理，`available == false` 直接隐藏该行（不是置灰）；
-/// - 离线 / client 未 ready 时菜单禁用（progress 态除外），点之报 `error.not_connected`；
+/// - 离线 / client 未 ready 时远程操作禁用；本地显示模式不受此限制；
 /// - Kimi 作目标必须写明：`-p` 非交互跑完即退出，后续回电脑 `kimi -c` 继续，不承诺持续交互。
 enum SessionActionsMenu {
 
     // MARK: - 纯状态机（可单测，不依赖 SwiftUI 环境）
 
-    /// 菜单整体是否可见。只读配对隐藏整单。
+    /// Remote actions visibility. Local display choices have a separate gate.
     static func isMenuVisible(access: String?) -> Bool {
         !isReadonly(access: access)
     }
@@ -29,7 +29,7 @@ enum SessionActionsMenu {
         (access ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "readonly"
     }
 
-    /// 菜单是否可用：client 必须 ready。progress 进行中由调用方单独处理（禁用 + 转圈）。
+    /// Remote actions need a ready client. The caller also gates busy actions.
     static func isMenuEnabled(clientReady: Bool) -> Bool {
         clientReady
     }
@@ -85,8 +85,22 @@ enum SessionActionsMenu {
 
 // MARK: - SwiftUI 菜单视图
 
+enum SessionDetailMode: String, CaseIterable, Identifiable, Hashable {
+    case chat
+    case terminal
+
+    var id: String { rawValue }
+
+    var title: LocalizedStringKey {
+        switch self {
+        case .chat: "session.detail.chat"
+        case .terminal: "session.detail.terminal"
+        }
+    }
+}
+
 /// Top-trailing More menu uses a plain ellipsis with a 44-point target.
-/// 标题组（principal）一律不动；进行中用行内 ProgressView + 整单禁用，不往标题组加转圈。
+/// Busy remote actions never block the local display picker.
 @MainActor
 struct SessionActionsMenuView: View {
     let session: SessionSummary
@@ -102,6 +116,8 @@ struct SessionActionsMenuView: View {
     /// Project terminal for the session's folder; nil hides the item (old host,
     /// or a platform that opens terminals elsewhere).
     var onOpenTerminal: (() -> Void)? = nil
+    /// Local display selection is independent of remote mutation permissions.
+    var displayMode: Binding<SessionDetailMode>? = nil
 
     @State private var pendingHandoff: RuntimeEntry?
 
@@ -118,30 +134,43 @@ struct SessionActionsMenuView: View {
     }
 
     var body: some View {
-        if visible {
+        if visible || displayMode != nil {
             Menu {
-                if let onOpenTerminal {
+                if let displayMode {
                     Section {
-                        Button(action: onOpenTerminal) {
-                            Label("session.actions.open_terminal", systemImage: "terminal")
+                        Picker("session.detail.mode", selection: displayMode) {
+                            ForEach(SessionDetailMode.allCases) { mode in
+                                Text(mode.title).tag(mode)
+                            }
                         }
+                        .pickerStyle(.inline)
                     }
                 }
-                copySection
-                handoffSection
-                Section {
-                    Button {
-                        onRestart()
-                    } label: {
-                        Label(supportsRestart ? "session.actions.restart" : "session.actions.restart.update_host",
-                              systemImage: "arrow.clockwise")
+                if visible {
+                    if let onOpenTerminal {
+                        Section {
+                            Button(action: onOpenTerminal) {
+                                Label("session.actions.open_terminal", systemImage: "terminal")
+                            }
+                            .disabled(!enabled)
+                        }
                     }
-                    .disabled(!enabled || !supportsRestart)
+                    copySection
+                    handoffSection
+                    Section {
+                        Button {
+                            onRestart()
+                        } label: {
+                            Label(supportsRestart ? "session.actions.restart" : "session.actions.restart.update_host",
+                                  systemImage: "arrow.clockwise")
+                        }
+                        .disabled(!enabled || !supportsRestart)
+                    }
                 }
             } label: {
                 Label("session.actions.menu", systemImage: "ellipsis")
             }
-            .disabled(!enabled)
+            .disabled(displayMode == nil && !enabled)
             .interfaceFrame(minWidth: TouchTarget.minimum, minHeight: TouchTarget.minimum)
             .accessibilityHint(Text("session.actions.menu.hint"))
             .confirmationDialog(

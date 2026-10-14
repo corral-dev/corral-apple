@@ -20,6 +20,8 @@ The proposed reading order is title → assistant/state → conversation content
 
 **More action icon (2026-10-01):** the conversation's top-right More menu uses the plain horizontal `ellipsis` system symbol, without a ring around the dots. Retain the existing native toolbar button surface, minimum 44-point target, accessibility label and menu actions.
 
+**Display mode (owner correction 2026-10-14):** Chat / Terminal belongs inside this existing More menu, with native selection marks, rather than a standalone segmented row under the navigation bar. The [iPhone agent terminal contract](IPHONE_AGENT_TERMINAL_DESIGN.md) owns capability, local display and remote-action access boundaries.
+
 Delivery evidence: Release 1.0.76 (86) built successfully, was installed on the paired iPhone with matching device version readback, and was uploaded to AppShelf. On-device visual acceptance remains unverified: launch was denied because the phone was locked, and the captured screenshot was black.
 
 **Session fork naming:** the existing same-assistant action follows the shared [Fork Session terminology contract](https://github.com/corral-dev/corral/blob/main/docs/CROSS_RUNTIME_HANDOFF_KNOWLEDGE_BASE.md#session-fork-naming-2026-10-01), including menu and accessibility wording. The wire method remains `session.copy`.

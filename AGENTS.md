@@ -1,6 +1,6 @@
 # Corral Apple client (public source)
 
-iPhone + native Mac session-handoff app: scan-pair with the development machine, browse and reply to sessions, locally-decrypted push. Both ends share the code and resources under `Shared/`. The in-session terminal view on iPhone stays behind a feature flag (see constraint 9); the Mac client ships a terminal view where each pane switches between chat and the agent's native interface.
+iPhone + native Mac session-handoff app: scan-pair with the development machine, browse and reply to sessions, locally-decrypted push. Both ends share the code and resources under `Shared/`. The iPhone session More menu switches between chat and the native agent terminal (see constraint 9); the Mac client ships a terminal view where each pane switches between chat and the agent's native interface.
 
 Product overview and cross-component rules live in the terminal repository: `https://github.com/corral-dev/corral` (SessKit session-semantics ownership, five-runtime allowlist, dormant compatibility). This file keeps Apple-client-only engineering rules.
 
@@ -84,7 +84,7 @@ One-command public build: `bash scripts/build-public-client.sh mac`. It preserve
 
 ## Hard constraints (product behavior)
 
-1. **The phone's chat/snapshot mirror never resizes a hosted pane (never sends `screen.resize`)**: phone and desktop look at the same tmux pane; a mirror resize would squeeze the desktop. Clients showing the agent's native terminal (the Mac terminal view, and a future phone agent-terminal mode) size together with TUI windows under the most-recently-used-client rule (owner decision 2026-10-12, superseding widest-viewer-wins; `terminal.*` carries `active`, see the Mac design doc [Terminal size follows the client in use](docs/design/MACOS_CLIENT_DESIGN.md#terminal-size-follows-the-client-in-use-owner-decision-2026-10-12)).
+1. **The phone's chat/snapshot mirror never resizes a hosted pane (never sends `screen.resize`)**: phone and desktop look at the same tmux pane; a mirror resize would squeeze the desktop. Clients showing the agent's native terminal (the Mac terminal view, and the phone agent-terminal mode) size together with TUI windows under the most-recently-used-client rule (owner decision 2026-10-12, superseding widest-viewer-wins; `terminal.*` carries `active`, see the Mac design doc [Terminal size follows the client in use](docs/design/MACOS_CLIENT_DESIGN.md#terminal-size-follows-the-client-in-use-owner-decision-2026-10-12)).
 2. Event streams must be **multicast**: session list, conversation and terminal can subscribe simultaneously; no single-consumer message stealing.
 3. The push ciphertext field name is **`corral`** (base64); the plaintext development-machine identifier field is **`host_id`**, used by the notification extension to fetch the public key.
 4. The notification extension compiles its own encryption and Keychain sources; it must not link the main app binary.
@@ -92,7 +92,7 @@ One-command public build: `bash scripts/build-public-client.sh mac`. It preserve
 6. Assistant colors and attention colors take the CLI as the single source; see [`docs/UI_DESIGN_KNOWLEDGE_BASE.md`](docs/UI_DESIGN_KNOWLEDGE_BASE.md).
 7. **Connections must work on any network**: LAN and relay race concurrently (LAN ~2s, relay ~8s timeouts), first success wins — smart routing is "whoever is fast wins". **Do not** disable LAN on cellular/Wi-Fi heuristics (VLAN/VPN/overlay networks exist on cellular too). Candidates come from pairing `l=`, `hello.local_hints`, optional Bonjour. Reconnects and network changes must re-race; **never** wait serially or cling to the last address. Pair once. Hosts without relay/LAN addresses get them written back from `hello`. The UI must show LAN vs relay. **Installed/started, TCP up, or Connecting-turned-Failed is not connected**; the status bar must show connected and the dev machine `Currently online` ≥ 1. Handshake timeouts/cancellation must **immediately** close the socket; arbitration waits only for the first winner; losers, late winners and winners of an expired round are all closed; split the old socket before `adopt`. Contract: [remote knowledge base](https://github.com/corral-dev/corral/blob/main/docs/REMOTE_KNOWLEDGE_BASE.md) ("Same-machine and LAN connections never drop").
 8. **Once a redraw direction is locked, change code directly**; no chained batches of mockups. Details: UI design knowledge base "redraw workflow".
-9. **iPhone native agent terminal:** Chat / Terminal switching uses SwiftTerm UIKit and terminal.*. Only a visible foreground terminal subscribes and claims dimensions; hidden views retire keyboard input and accessibility. The project shell remains separate. See [iPhone agent terminal](docs/design/IPHONE_AGENT_TERMINAL_DESIGN.md).
+9. **iPhone native agent terminal:** Chat / Terminal selection lives in the top-right More menu, with native selection marks and no standalone segmented row. Local display choices remain available offline, while busy, and for read-only viewers; remote actions retain their access gates. Switching uses SwiftTerm UIKit and terminal.*. Only a visible foreground terminal subscribes and claims dimensions; hidden views retire keyboard input and accessibility. The project shell remains separate. See [iPhone agent terminal](docs/design/IPHONE_AGENT_TERMINAL_DESIGN.md).
 10. **iPhone session-list rows are fixed-height three-line rows at the normal font size** (Mac sidebar differs: fixed-height two-line desktop rows, see [Mac sidebar density redesign](docs/design/MACOS_CLIENT_DESIGN.md#sidebar-density-redesign-owner-request-2026-10-05)): one title line, one preview line, one project+time line. Title length and missing previews must not change row height, and no blank placeholder rows. The single authority is the [`docs/UI_DESIGN_KNOWLEDGE_BASE.md` row-height contract](docs/UI_DESIGN_KNOWLEDGE_BASE.md#row-height-contract).
 
 ## Directory map
@@ -102,7 +102,7 @@ One-command public build: `bash scripts/build-public-client.sh mac`. It preserve
 | `Shared/Core/` | Both ends' pure Foundation layer (protocol, crypto, connection, storage, conversation/send/timeline logic); `Package.swift` portable tests cover only this |
 | `Shared/UI/` | Shared SwiftUI interface and `AppModel`; platform differences via `#if os(...)` and `Shared/UI/Platform/` adapters |
 | `Shared/Resources/` | Shared copy directory and shared color/assistant-identity assets (`SharedAssets.xcassets`) |
-| `iOS/` | iPhone shell: entry, machine list, session list, QR pairing, push, project terminal, session terminal view (unshipped) |
+| `iOS/` | iPhone shell: entry, machine list, session list, QR pairing, push, project terminal, native agent terminal |
 | `macOS/` | Mac shell: main window, sidebar, inspector, pairing, settings, menu commands, `AppIcon.icon` |
 | `Shared/Core/Network/RemoteClient.swift` | WebSocket, handshake, RPC, reconnect, per-channel multicast |
 | `Shared/Core/Crypto/RemoteCrypto.swift` | Channel and push crypto aligned with the Python/Go sides |
@@ -131,4 +131,4 @@ Before launching a newly built Corral Mac app for debugging or acceptance, termi
 
 ## iPhone agent terminal
 
-Native Chat / Terminal switching uses SwiftTerm UIKit and the encrypted raw-terminal stream. A hidden/background terminal withdraws its stream and size vote; Chat preserves its draft and reading position. See [iPhone agent terminal](docs/design/IPHONE_AGENT_TERMINAL_DESIGN.md) for the adopted contract and physical acceptance limits.
+Chat / Terminal switching inside the top-right More menu uses SwiftTerm UIKit and the encrypted raw-terminal stream. A hidden/background terminal withdraws its stream and size vote; Chat preserves its draft and reading position. See [iPhone agent terminal](docs/design/IPHONE_AGENT_TERMINAL_DESIGN.md) for the adopted contract and physical acceptance limits.
