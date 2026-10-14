@@ -140,7 +140,13 @@ struct SessionActionsMenuView: View {
                     Section {
                         Picker("session.detail.mode", selection: displayMode) {
                             ForEach(SessionDetailMode.allCases) { mode in
+                                #if os(iOS)
+                                Label(mode.title, systemImage: mode == .chat ? "bubble.left.and.text.bubble.right" : "terminal")
+                                    .labelStyle(.titleAndIcon)
+                                    .tag(mode)
+                                #else
                                 Text(mode.title).tag(mode)
+                                #endif
                             }
                         }
                         .pickerStyle(.inline)
