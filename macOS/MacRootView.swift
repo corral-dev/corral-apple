@@ -416,16 +416,21 @@ struct MacRootView: View {
                     let probe = MainThreadStallProbe()
                     recorder.begin(name: "open terminal")
                     probe.begin()
+                    let priorKeys = Set(workspace.paneKeys)
                     await workspace.newTerminal(project: folder)
+                    if ProcessInfo.processInfo.arguments.contains("-CorralInspectProjectTerminalPair") {
+                        await workspace.newTerminal(project: folder)
+                    }
+                    let openedKeys = workspace.paneKeys.filter { ProjectShell.isShellKey($0) && !priorKeys.contains($0) }
                     try? await Task.sleep(for: .seconds(MacMotion.seconds(1.2)))
                     steps.append(recorder.end().merging(probe.end()) { $1 })
                     guard let after = Double(ProcessInfo.processInfo.environment["CORRAL_INSPECTION_SHELL_CLOSE_AFTER"] ?? ""),
-                          let key = workspace.paneKeys.last(where: ProjectShell.isShellKey) else { return }
+                          !openedKeys.isEmpty else { return }
                     try? await Task.sleep(for: .seconds(after))
                     try? "close".write(toFile: "/tmp/corral-shell-motion.txt", atomically: true, encoding: .utf8)
                     recorder.begin(name: "close terminal")
                     probe.begin()
-                    workspace.endTerminal(key)
+                    for key in openedKeys { workspace.endTerminal(key) }
                     try? await Task.sleep(for: .seconds(MacMotion.seconds(1.2)))
                     steps.append(recorder.end().merging(probe.end()) { $1 })
                     // Baseline: the same add and close with a chat pane.

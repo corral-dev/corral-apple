@@ -48,7 +48,9 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
     private var interfaceScale: CGFloat = 1
     private var baseSize: CGFloat { TerminalAppearance.baseSize * interfaceScale }
     private var inset: CGFloat { TerminalAppearance.inset * interfaceScale }
-    private static let minimumFit = TerminalGrid(cols: 20, rows: 5)
+    // The host withdraws votes below 40 × 10 to avoid narrow wraps in shared
+    // scrollback. A 220 pt split pane can fit fewer than 40 cols at 13 pt.
+    private static let minimumFit = TerminalGrid(cols: 40, rows: 10)
 
     private let terminal: StreamTerminalView
     private(set) weak var stream: RemoteTerminalStream?
@@ -149,6 +151,7 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
 
     #if DEBUG
     static weak var inspectionLatest: TerminalHostView?
+    private var lastInspectedFit: TerminalGrid?
     var inspectionPalette: String { palette == .light ? "light" : "dark" }
     private(set) var inspectionFirstReset: Date?
     var inspectionHasKeyboardFocus: Bool { window?.firstResponder === terminal }
@@ -289,19 +292,29 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
         return max(0, optimal.width - cell.width * CGFloat(terminalGrid.cols))
     }
 
-    /// Columns at the base font; rows at the font the shared width needs, so a
-    /// wider viewer shrinking the font does not leave empty rows below the
-    /// agent. Rows never follow a font shrunk for rows (that would run away).
+    /// Columns at the base font, floored at the host's accepted minimum; rows
+    /// at the font those columns need. A narrow pane must not vote fewer than
+    /// 40 cols (the host would withdraw it and keep another viewer's height).
+    /// Rows never follow a font shrunk for rows (that would run away).
     private func reportFit() {
         guard let stream, bounds.width > 0, bounds.height > 0 else { return }
         let cell = cellSize(for: baseSize)
         let usableWidth = bounds.width - inset * 2 - scrollerReserve
         let usableHeight = bounds.height - inset * 2
-        let rowCell = grid.map { cellSize(for: widthFittingFontSize(cols: $0.cols)) } ?? cell
+        let cols = max(Self.minimumFit.cols, Int(usableWidth / cell.width))
+        let rowCell = cellSize(for: widthFittingFontSize(cols: cols))
         let fit = TerminalGrid(
-            cols: max(Self.minimumFit.cols, Int(usableWidth / cell.width)),
+            cols: cols,
             rows: max(Self.minimumFit.rows, Int(usableHeight / rowCell.height))
         )
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-CorralInspectTerminalFit"), fit != lastInspectedFit {
+            lastInspectedFit = fit
+            debugTrace(String(format: "terminal fit pane %.0fx%.0f, vote %dx%d, row cell %.1f, front %@",
+                              bounds.width, bounds.height, fit.cols, fit.rows, rowCell.height,
+                              isInFront ? "yes" : "no"))
+        }
+        #endif
         stream.updateFit(fit)
     }
 
@@ -309,11 +322,10 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
     /// `cols` fit the pane width.
     private func widthFittingFontSize(cols: Int) -> CGFloat {
         let usableWidth = bounds.width - inset * 2 - scrollerReserve
-        var size = baseSize
-        while size > TerminalAppearance.minimumSize, CGFloat(cols) * cellSize(for: size).width > usableWidth {
-            size -= 0.5
-        }
-        return max(size, TerminalAppearance.minimumSize)
+        return TerminalAppearance.widthFittingFontSize(
+            cols: cols, usableWidth: usableWidth, baseSize: baseSize,
+            scale: window?.backingScaleFactor
+        )
     }
 
     /// Largest size, in half points from the base down to 9 pt, at which the
@@ -369,6 +381,11 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
     // MARK: - TerminalStreamSink
 
     func terminalReset(grid: TerminalGrid, data: Data) {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-CorralInspectTerminalFit") {
+            debugTrace("terminal snapshot grid \(grid.cols)x\(grid.rows)")
+        }
+        #endif
         #if DEBUG
         if inspectionFirstReset == nil { inspectionFirstReset = Date() }
         #endif
@@ -494,15 +511,30 @@ enum TerminalAppearance {
         )
     }
 
-    /// Grid a terminal body of `size` fits at the base font, so a new shell can
-    /// start at the size its pane will vote (no resize, no font jump on open).
+    static func widthFittingFontSize(cols: Int, usableWidth: CGFloat, baseSize: CGFloat, scale: CGFloat?) -> CGFloat {
+        var size = baseSize
+        while size > minimumSize, CGFloat(cols) * cellSize(fontSize: size, scale: scale).width > usableWidth {
+            size -= 0.5
+        }
+        return max(size, minimumSize)
+    }
+
+    /// Initial grid for a new shell, using the same host minimum as the live
+    /// pane vote. Narrow slots start at 40 columns and fit with a smaller font.
     static func fittingGrid(for size: CGSize, interfaceScale: CGFloat = 1) -> TerminalGrid? {
         guard size.width > 0, size.height > 0 else { return nil }
         let cell = cellSize(fontSize: baseSize * interfaceScale, scale: nil)
         let cols = Int((size.width - inset * 2 * interfaceScale) / cell.width)
         let rows = Int((size.height - inset * 2 * interfaceScale) / cell.height)
         guard cols >= 20, rows >= 5 else { return nil }
-        return TerminalGrid(cols: cols, rows: rows)
+        let votedCols = max(40, cols)
+        let rowFontSize = widthFittingFontSize(
+            cols: votedCols, usableWidth: size.width - inset * 2 * interfaceScale,
+            baseSize: baseSize * interfaceScale, scale: nil
+        )
+        let rowCell = cellSize(fontSize: rowFontSize, scale: nil)
+        let votedRows = max(10, Int((size.height - inset * 2 * interfaceScale) / rowCell.height))
+        return TerminalGrid(cols: votedCols, rows: votedRows)
     }
 
     static func font(size: CGFloat) -> NSFont {
