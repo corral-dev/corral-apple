@@ -482,7 +482,7 @@ struct MacSidebar: View {
         } label: {
             Label("mac.session.open_in_split", systemImage: "rectangle.split.2x1")
         }
-        .disabled(workspace.paneKeys.isEmpty)
+        .disabled(workspace.paneKeys.isEmpty || !workspace.canAddSessionToSplit(session))
         Button {
             Task { await workspace.togglePin(session.key) }
         } label: {

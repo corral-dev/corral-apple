@@ -28,6 +28,22 @@ struct MacConversationRenderKey: Equatable {
     var document: ObjectIdentifier?
 }
 
+/// Row heights measured for one conversation document. The document outlives
+/// its table, so a table rebuilt when a pane returns from its terminal reuses
+/// them; re-measuring every row of a long history through SwiftUI blocked the
+/// window for seconds on each return (2026-10-14). Keys still include content
+/// and width, so only changed rows are measured again.
+@MainActor
+final class MacConversationRowHeights {
+    fileprivate var measured: [String: MacConversationTable.Coordinator.Measured] = [:]
+
+    /// Drop rows that left the conversation once they clearly outnumber it.
+    fileprivate func prune(keeping ids: [String: Int]) {
+        guard measured.count > ids.count * 2 + 64 else { return }
+        measured = measured.filter { ids[$0.key] != nil }
+    }
+}
+
 /// The Mac conversation (owner decision 2026-10-13): a native table whose every
 /// row height is measured from that row's own SwiftUI layout before the table
 /// tiles it. A lazy stack places unrealized rows at estimated heights, which
@@ -180,12 +196,12 @@ struct MacConversationTable: NSViewRepresentable {
             var render: MacConversationRenderKey
         }
 
-        private struct HeightKey: Equatable {
+        fileprivate struct HeightKey: Equatable {
             var content: ContentKey
             var width: CGFloat
         }
 
-        private struct Measured {
+        fileprivate struct Measured {
             var key: HeightKey
             var height: CGFloat
         }
@@ -210,7 +226,7 @@ struct MacConversationTable: NSViewRepresentable {
         private var scrollToMessageID: Binding<String?>?
         private var lastLatestRequest: Int?
 
-        private var heights: [String: Measured] = [:]
+        private var heights = MacConversationRowHeights()
         private var cells: [RowCell] = []
         private let measurer = NSHostingController(rootView: AnyView(EmptyView()))
         /// Width the current row heights were measured for.
@@ -284,6 +300,13 @@ struct MacConversationTable: NSViewRepresentable {
 
         func update(_ view: MacConversationTable, environment: EnvironmentValues) {
             self.environment = environment
+            if let document = environment.macConversationTextDocument {
+                if let shared = document.tableRowHeights as? MacConversationRowHeights {
+                    if shared !== heights { heights = shared }
+                } else {
+                    document.tableRowHeights = heights
+                }
+            }
             rowContent = view.rowContent
             jumpGlides = view.jumpGlides
             onLoadEarlier = view.onLoadEarlier
@@ -318,6 +341,7 @@ struct MacConversationTable: NSViewRepresentable {
             let anchor = followsLatest ? nil : currentAnchor()
             rows = newRows
             indexByID = Dictionary(newRows.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
+            heights.prune(keeping: indexByID)
             if old.map(\.id) == newRows.map(\.id) {
                 var changed = IndexSet()
                 for index in newRows.indices where renderChanged || newRows[index] != old[index] {
@@ -365,13 +389,13 @@ struct MacConversationTable: NSViewRepresentable {
                 // Hidden or not yet sized: keep the last known height and
                 // measure every row before this table is next laid out.
                 needsRemeasure = true
-                return heights[item.id]?.height ?? 1
+                return heights.measured[item.id]?.height ?? 1
             }
             let key = HeightKey(content: ContentKey(value: item.value, isFirst: row == 0, render: renderKey),
                                 width: width)
-            if let cached = heights[item.id], cached.key == key { return cached.height }
+            if let cached = heights.measured[item.id], cached.key == key { return cached.height }
             let height = measure(item, isFirst: row == 0, width: width)
-            heights[item.id] = Measured(key: key, height: height)
+            heights.measured[item.id] = Measured(key: key, height: height)
             measuredWidth = width
             return height
         }
@@ -416,10 +440,10 @@ struct MacConversationTable: NSViewRepresentable {
         fileprivate func row(_ id: String, content: ContentKey?, reportedHeight height: CGFloat, width: CGFloat) {
             // Reports from a cell still showing older content are not news.
             guard table != nil, abs(width - rowWidth) <= 0.5,
-                  let index = indexByID[id], let measured = heights[id],
+                  let index = indexByID[id], let measured = heights.measured[id],
                   measured.key.content == content, abs(measured.key.width - width) <= 0.5,
                   abs(measured.height - ceil(height)) > 0.5 else { return }
-            heights[id]?.height = ceil(height)
+            heights.measured[id]?.height = ceil(height)
             #if DEBUG
             MacConversationTableCounters.liveCorrections &+= 1
             #endif
@@ -770,7 +794,7 @@ struct MacConversationTable: NSViewRepresentable {
                 // Never query row views here: this runs inside table layout.
                 "rowDetails": readingRowIndexes().map { index -> String in
                     let id = rows[index].id
-                    return "\(id) h=\(table.rect(ofRow: index).height) measuredW=\(heights[id]?.key.width ?? -1)"
+                    return "\(id) h=\(table.rect(ofRow: index).height) measuredW=\(heights.measured[id]?.key.width ?? -1)"
                 },
                 "liveCorrections": MacConversationTableCounters.liveCorrections,
             ]) { $1 }

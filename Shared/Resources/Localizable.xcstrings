@@ -2129,23 +2129,6 @@
         }
       }
     },
-    "mac.pane.add_other": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "New Session in Split…"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "在分屏里新建会话…"
-          }
-        }
-      }
-    },
     "mac.pane.add.help": {
       "extractionState": "manual",
       "localizations": {
@@ -2601,6 +2584,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "按标题或项目筛选"
+          }
+        }
+      }
+    },
+    "mac.split.project_mismatch": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A split can contain agents from one project only"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "一个分屏只能包含同一项目的助手"
           }
         }
       }

@@ -20,7 +20,6 @@ struct MacRootView: View {
     @State private var feedClientIdentity: ObjectIdentifier?
     /// A session created here opens with the composer focused (new-session rule).
     @State private var autoFocusKey: String?
-    @State private var newSessionAsPane = false
     @State private var showNewSession = false
     @State private var showPairing = false
     @State private var showSearch = false
@@ -111,7 +110,7 @@ struct MacRootView: View {
             if let feed {
                 MacSidebar(
                     feed: feed,
-                    onNewSession: { startNewSession(asPane: false) },
+                    onNewSession: startNewSession,
                     onPair: { showPairing = true }
                 )
                 .navigationSplitViewColumnWidth(min: 260 * interfaceScale, ideal: 310 * interfaceScale, max: 440 * interfaceScale)
@@ -159,15 +158,14 @@ struct MacRootView: View {
             if ready, !inspectedNewSession,
                ProcessInfo.processInfo.arguments.contains("-CorralInspectNewSession") {
                 inspectedNewSession = true
-                startNewSession(asPane: false)
+                startNewSession()
             }
             #endif
         }
         .onChange(of: workspace.focusedKey) { _, key in
             commands.hasFocusedPane = key != nil
         }
-        .onChange(of: commands.newSessionRequest) { _, _ in startNewSession(asPane: false) }
-        .onChange(of: commands.addPaneRequest) { _, _ in startNewSession(asPane: true) }
+        .onChange(of: commands.newSessionRequest) { _, _ in startNewSession() }
         .onChange(of: commands.searchRequest) { _, _ in showSearch = true }
         .onChange(of: commands.closePaneRequest) { _, _ in
             if let key = workspace.focusedKey { workspace.requestClose(key) }
@@ -211,7 +209,7 @@ struct MacRootView: View {
             if let host = appModel.selectedHost {
                 NewSessionSheet(host: host, preferredProject: focusedProject) { session in
                     autoFocusKey = session.key
-                    workspace.openCreated(session, asPane: newSessionAsPane)
+                    workspace.openCreated(session, asPane: false)
                 }
                 .modifier(MacZoomContent())
             }
@@ -233,7 +231,7 @@ struct MacRootView: View {
             ContentUnavailableView {
                 Label("mac.detail.empty.title", systemImage: "rectangle.split.2x1")
             } actions: {
-                Button("sessions.new") { startNewSession(asPane: false) }
+                Button("sessions.new") { startNewSession() }
                     .buttonStyle(.borderedProminent)
                     .disabled(!canCreateSession)
             }
@@ -265,7 +263,7 @@ struct MacRootView: View {
             Menu {
                 ForEach(runtimeChoices, id: \.id) { runtime in
                     Button(runtime.name ?? runtime.id) {
-                        Task { await workspace.newSessionPane(runtimeID: runtime.id, project: focusedProject) }
+                        Task { await workspace.newSessionPane(runtimeID: runtime.id) }
                     }
                 }
                 if canUseTerminal {
@@ -274,8 +272,6 @@ struct MacRootView: View {
                         Task { await workspace.newTerminal(project: focusedProject) }
                     }
                 }
-                Divider()
-                Button("mac.pane.add_other") { startNewSession(asPane: true) }
             } label: {
                 Label("mac.pane.add", systemImage: "rectangle.split.2x1")
             }
@@ -317,9 +313,8 @@ struct MacRootView: View {
         Task { await workspace.openTerminal(project: focusedProject) }
     }
 
-    private func startNewSession(asPane: Bool) {
+    private func startNewSession() {
         guard canCreateSession else { return }
-        newSessionAsPane = asPane
         showNewSession = true
     }
 
@@ -571,14 +566,14 @@ enum MacInspection {
             }
             workspace.focus(first)
             if arguments.contains("-CorralInspectAddPaneSession"),
-               let project = feed.listStore.session(for: first)?.cwd {
+               feed.listStore.session(for: first) != nil {
                 // Creates a Claude session beside the first pane through the
                 // production Add Pane path (new-session default view check).
                 Task {
                     for _ in 0..<60 where !workspace.runtimes.contains(where: { $0.id == "claude" }) {
                         try? await Task.sleep(for: .milliseconds(500))
                     }
-                    await workspace.newSessionPane(runtimeID: "claude", project: project)
+                    await workspace.newSessionPane(runtimeID: "claude")
                 }
             }
         }

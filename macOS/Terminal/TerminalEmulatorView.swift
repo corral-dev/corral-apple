@@ -8,11 +8,13 @@ import SwiftUI
 struct TerminalEmulator: NSViewRepresentable {
     let stream: RemoteTerminalStream
     let isFocusedPane: Bool
+    let isPresented: Bool
     @Environment(\.interfaceScale) private var interfaceScale
     @Environment(\.conversationScrollReadAction) private var acknowledgeRead
 
     func makeNSView(context: Context) -> TerminalHostView {
         let view = TerminalHostView()
+        view.setPresented(isPresented)
         view.onManualScroll = acknowledgeRead
         view.updateInterfaceScale(interfaceScale)
         view.bind(stream)
@@ -20,6 +22,7 @@ struct TerminalEmulator: NSViewRepresentable {
     }
 
     func updateNSView(_ view: TerminalHostView, context: Context) {
+        view.setPresented(isPresented)
         view.onManualScroll = acknowledgeRead
         if view.stream !== stream {
             view.bind(stream)
@@ -56,6 +59,7 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
     private(set) weak var stream: RemoteTerminalStream?
     private var grid: TerminalGrid?
     private var fontSize = TerminalAppearance.baseSize
+    private var presentationEnabled = true
     var onManualScroll: (@MainActor @Sendable () -> Void)?
     private var readScrollMonitor: Any?
     private var frontObservers: [NSObjectProtocol] = []
@@ -110,7 +114,7 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
     }
 
     private func observeReadScrollIfNeeded() {
-        guard readScrollMonitor == nil, window != nil, stream != nil else { return }
+        guard presentationEnabled, readScrollMonitor == nil, window != nil, stream != nil else { return }
         readScrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
             // Observe only the terminal actually under the pointer, including an
             // unfocused pane; overlays, other windows and host output cannot read it.
@@ -156,6 +160,7 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
     private(set) var inspectionFirstReset: Date?
     var inspectionHasKeyboardFocus: Bool { window?.firstResponder === terminal }
     var inspectionFontSize: CGFloat { fontSize }
+    var inspectionUsesMetal: Bool { terminal.isUsingMetalRenderer }
     var inspectionBottomVisible: Bool { terminal.frame.maxY <= bounds.maxY - inset + 1 }
     var inspectionVisibleText: [String] {
         let emulator = terminal.getTerminal()
@@ -199,7 +204,23 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
     #endif
 
     /// The window the user is looking at: the host pane follows this view.
-    private var isInFront: Bool { NSApp.isActive && window?.isKeyWindow == true }
+    private var isInFront: Bool { presentationEnabled && NSApp.isActive && window?.isKeyWindow == true }
+
+    func setPresented(_ presented: Bool) {
+        guard presentationEnabled != presented else { return }
+        presentationEnabled = presented
+        isHidden = !presented
+        if presented {
+            observeReadScrollIfNeeded()
+            if wantsKeyboardFocus { focusTerminal() }
+        } else {
+            if let window, let responder = window.firstResponder as? NSView,
+               responder === terminal || responder.isDescendant(of: terminal) {
+                window.makeFirstResponder(nil)
+            }
+            removeReadScrollMonitor()
+        }
+    }
 
     /// Coming back to this window (it becomes key, or the app is activated
     /// with it key) takes the shared agent grid back from the TUI or another view.
@@ -240,9 +261,10 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
     }
 
     private func focusTerminal() {
-        guard let window, window.firstResponder !== terminal else { return }
+        guard presentationEnabled, let window, window.firstResponder !== terminal else { return }
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.wantsKeyboardFocus, let window = self.window else { return }
+            guard let self, self.presentationEnabled, self.wantsKeyboardFocus,
+                  let window = self.window else { return }
             window.makeFirstResponder(self.terminal)
         }
     }

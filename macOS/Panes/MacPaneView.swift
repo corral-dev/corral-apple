@@ -18,6 +18,7 @@ struct MacPaneView: View {
     @State private var store: ConversationStore?
     @State private var bodySize: CGSize = .zero
     @State private var paneFrame: CGRect = .zero
+    @State private var terminalVisited = false
 
     init(session: SessionSummary, metadataStore: SessionListStore?, allowsClose: Bool = true,
          autoFocusComposer: Bool = false, retainedStore: ConversationStore? = nil,
@@ -105,9 +106,7 @@ struct MacPaneView: View {
                 promptsOpen: promptsOpenBinding
             )
             Divider()
-            // Chat and terminal crossfade, softening the light-to-dark jump.
             content
-                .animation(MacMotion.crossfade, value: mode)
                 // Beside the conversation the card takes the trailing margin and
                 // the chat shifts aside; elsewhere it floats over the content.
                 // Animated only when the person opens or closes the card (its
@@ -132,6 +131,9 @@ struct MacPaneView: View {
             if lifetime == nil { workspace.paneFrames[session.key] = frame }
         }
         .onAppear { prepareStore() }
+        .onChange(of: mode, initial: true) { _, current in
+            if current == .terminal && !terminalVisited { terminalVisited = true }
+        }
         #if DEBUG
         .onChange(of: prompts.count, initial: true) { _, _ in
             MacInteractionInspectionPrompts.shared[session.key] = prompts
@@ -157,36 +159,44 @@ struct MacPaneView: View {
         }
     }
 
+    /// The terminal sits beneath the chat at a fixed position once visited, so
+    /// its native emulator keeps its screen while chat is shown. It hides
+    /// itself natively; SwiftUI visibility modifiers here would re-insert the
+    /// AppKit view and force a synchronous window layout on every switch.
     @ViewBuilder
     private var content: some View {
-        switch mode {
-        case .chat:
-            if let store {
-                SessionDetailView(
+        ZStack {
+            if mode == .terminal || terminalVisited {
+                MacTerminalPane(
                     session: session,
-                    autoFocusComposer: autoFocusComposer,
-                    metadataStore: metadataStore,
-                    injectedStore: store,
-                    composerFocusRequest: workspace.composerFocusRequest(for: session.key),
-                    onComposerFocusChange: { focused in
-                        if focused { workspace.composerDidGainFocus(session.key) }
-                    },
-                    scrollRequest: workspace.scrollRequests[session.key],
-                    onDidCreateSession: { created in workspace.openCreated(created, asPane: true) }
+                    isFocused: isFocused && mode == .terminal,
+                    isPresented: mode == .terminal && (lifetime?.isPresented ?? true)
                 )
-                .environment(\.macConversationTextDocument, workspace.paneSurfaces.entry(for: session.key).textDocument())
-                .id(ObjectIdentifier(store))
-                .environment(\.composerRecedes, composerRecedes)
-                .animation(MacMotion.state, value: composerRecedes)
-                .transition(.opacity)
-            } else {
-                ProgressView().interfaceFrame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        case .terminal:
-            MacTerminalPane(session: session, isFocused: isFocused)
                 .environment(\.conversationScrollReadAction, acknowledgeTerminalScrollRead)
                 .id(session.key)
-                .transition(.opacity)
+            }
+            if mode == .chat {
+                if let store {
+                    SessionDetailView(
+                        session: session,
+                        autoFocusComposer: autoFocusComposer,
+                        metadataStore: metadataStore,
+                        injectedStore: store,
+                        composerFocusRequest: workspace.composerFocusRequest(for: session.key),
+                        onComposerFocusChange: { focused in
+                            if focused { workspace.composerDidGainFocus(session.key) }
+                        },
+                        scrollRequest: workspace.scrollRequests[session.key],
+                        onDidCreateSession: { created in workspace.openCreated(created, asPane: true) }
+                    )
+                    .environment(\.macConversationTextDocument, workspace.paneSurfaces.entry(for: session.key).textDocument())
+                    .id(ObjectIdentifier(store))
+                    .environment(\.composerRecedes, composerRecedes)
+                    .animation(MacMotion.state, value: composerRecedes)
+                } else {
+                    ProgressView().interfaceFrame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
         }
     }
 

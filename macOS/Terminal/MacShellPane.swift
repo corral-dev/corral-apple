@@ -126,7 +126,7 @@ struct MacShellPane: View {
                 }
             } else {
                 // Clicks focus the pane through the window's click monitor (MacRootView).
-                TerminalEmulator(stream: stream, isFocusedPane: isFocused)
+                TerminalEmulator(stream: stream, isFocusedPane: isFocused, isPresented: true)
                     .overlay {
                         if showsWaiting { waitingIndicator.transition(.opacity) }
                     }

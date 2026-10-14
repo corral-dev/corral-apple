@@ -380,7 +380,52 @@ struct LifecycleProbe {
         print("PASS selection: drag start, long clipped text, native range copy, blank-pane focus")
     }
 
+    @MainActor static func splitProjectRegressions() async {
+        _ = NSApplication.shared
+        let model = AppModel(), client = RemoteClient(), feed = HostSessionFeed(), workspace = MacWorkspace()
+        model.client = client
+        workspace.attach(appModel: model)
+        workspace.selectHost("host")
+        workspace.feed = feed
+        let a = SessionSummary(key: "a", cwd: "/tmp/project-a/")
+        let a2 = SessionSummary(key: "a2", cwd: "/tmp/project-a")
+        let b = SessionSummary(key: "b", cwd: "/tmp/project-b")
+        for session in [a, a2, b] { feed.listStore.patchSession(session) }
+        workspace.restorePanes([a.key])
+        check(!workspace.canAddSessionToSplit(b), "another project's session was offered for this split")
+        workspace.addPane(b.key, project: a.cwd)
+        check(workspace.paneKeys == [a.key], "a mismatched session entered a split")
+        workspace.addPane(a2.key, project: a2.cwd)
+        check(workspace.paneKeys == [a.key, a2.key], "matching project path with trailing slash was rejected")
+        workspace.addPane("shell:12345678", project: b.cwd)
+        check(workspace.splitAgentProject == a.cwd, "focused terminal changed the split's agent project")
+        client.handler = { method, _ in
+            if method == WireProtocol.mSessionNew {
+                return ["session": ["key": "new", "cwd": "/tmp/project-a", "hosted": true]]
+            }
+            return [:]
+        }
+        await workspace.newSessionPane(runtimeID: "claude")
+        let creation = client.calls.first { $0.0 == WireProtocol.mSessionNew }
+        check(creation?.1["cwd"] as? String == a.cwd, "quick Add Pane ignored the existing agent project")
+        check(workspace.paneKeys.contains("new"), "same-project quick session did not join the split")
+        workspace.openCreated(b, asPane: true)
+        check(workspace.paneKeys == [b.key], "cross-project creation mixed agents in one split")
+        let legacy = DesktopGroup(id: "legacy", name: "", project: a.cwd,
+                                  members: [a.key, b.key, a2.key], focus: a.key)
+        workspace.openGroup(legacy, sessions: [a, b, a2])
+        check(workspace.paneKeys == [a.key, a2.key], "legacy mixed group opened cross-project panes")
+        var otherFocused = legacy
+        otherFocused.focus = b.key
+        workspace.openGroup(otherFocused, sessions: [a, b, a2])
+        check(workspace.paneKeys == [b.key], "legacy group ignored its focused agent project")
+        workspace.restorePanes([a.key, b.key, a2.key])
+        check(workspace.paneKeys == [a.key, a2.key], "restoration reopened cross-project panes")
+        print("PASS split project: membership, terminal focus, quick creation, cross-project result, legacy group")
+    }
+
     @MainActor static func main() async throws {
+        await splitProjectRegressions()
         selectionCopyRegressions()
         try await searchRegressions()
         try await searchOpeningRegressions()

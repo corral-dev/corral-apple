@@ -104,7 +104,6 @@ struct CorralMacApp: App {
 @Observable
 final class MacCommandCenter {
     var newSessionRequest = 0
-    var addPaneRequest = 0
     var closePaneRequest = 0
     var toggleViewRequest = 0
     var searchRequest = 0
@@ -132,9 +131,6 @@ struct MacCommands: Commands {
             Button("sessions.new") { center.newSessionRequest += 1 }
                 .keyboardShortcut("n", modifiers: .command)
                 .disabled(!center.canCreateSession)
-            Button("mac.pane.add") { center.addPaneRequest += 1 }
-                .keyboardShortcut("d", modifiers: .command)
-                .disabled(!center.canCreateSession || !center.hasFocusedPane)
             Button("mac.pane.close") { center.closePaneRequest += 1 }
                 .keyboardShortcut("w", modifiers: .command)
                 .disabled(!center.hasFocusedPane)

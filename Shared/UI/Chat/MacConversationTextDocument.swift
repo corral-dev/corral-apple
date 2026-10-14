@@ -151,6 +151,9 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
 
     let storage = NSTextStorage()
     let layout = NSLayoutManager()
+    /// The conversation table's measured row heights (owned and typed by the
+    /// table), kept with the document so a rebuilt table reuses them.
+    var tableRowHeights: AnyObject?
     private var identity: ObjectIdentifier?
     private var sources: [Source] = []
     private var style: Style?

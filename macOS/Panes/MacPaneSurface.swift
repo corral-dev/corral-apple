@@ -10,25 +10,34 @@ final class MacPaneLifetime {
     private(set) var isFocused = false
     private(set) var hasFocusedPeer = false
     @ObservationIgnored private weak var store: ConversationStore?
+    @ObservationIgnored private var terminalStart: (@MainActor () -> Void)?
+    @ObservationIgnored private var terminalStop: (@MainActor () -> Void)?
     @ObservationIgnored private var suspension: Task<Void, Never>?
     @ObservationIgnored private var lease = 0
 
     func bind(_ store: ConversationStore) { self.store = store }
+    func bindTerminal(start: @escaping @MainActor () -> Void,
+                      stop: @escaping @MainActor () -> Void) {
+        terminalStart = start
+        terminalStop = stop
+    }
 
     func updateFocus(isFocused: Bool, hasFocusedPeer: Bool) {
         if self.isFocused != isFocused { self.isFocused = isFocused }
         if self.hasFocusedPeer != hasFocusedPeer { self.hasFocusedPeer = hasFocusedPeer }
     }
 
-    func present() -> Int {
+    func present(isTerminal: Bool = false) -> Int {
         lease &+= 1
         isPresented = true
+        if isTerminal { terminalStart?() }
         return lease
     }
 
     func suspend(lease: Int) {
         guard self.lease == lease, isPresented else { return }
         isPresented = false
+        terminalStop?()
         guard let store else { return }
         let previous = suspension
         suspension = Task {
@@ -112,7 +121,9 @@ final class MacPaneSurfaceCache {
 
     func existingEntry(for key: String) -> Entry? { entries[key] }
 
-    func present(_ entry: Entry) { entry.lease = entry.lifetime.present() }
+    func present(_ entry: Entry, isTerminal: Bool = false) {
+        entry.lease = entry.lifetime.present(isTerminal: isTerminal)
+    }
 
     func suspend(_ entry: Entry, key: String, lease: Int, keepingMounted: Bool = false) {
         guard entry.lease == lease else { return }
@@ -310,7 +321,7 @@ struct MacPaneSurface: NSViewRepresentable {
     private func update(_ coordinator: Coordinator) {
         let entry = coordinator.entry
         if isPresented, !entry.lifetime.isPresented {
-            coordinator.cache.present(entry)
+            coordinator.cache.present(entry, isTerminal: workspace.mode(for: session.key) == .terminal)
             coordinator.lease = entry.lease
             entry.view.isHidden = false
         } else if !isPresented, entry.lifetime.isPresented {

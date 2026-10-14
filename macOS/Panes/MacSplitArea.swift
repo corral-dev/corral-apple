@@ -38,8 +38,9 @@ struct MacSplitArea: View {
 }
 
 /// Keep at most four dormant native hosts at their last measured geometry.
-/// Hidden hosts keep reading/composer state, suspend watches and never own
-/// focus or hit targets. Eviction releases their data and hosting roots.
+/// Hidden hosts keep reading/composer or terminal screen state, suspend
+/// watches and size votes, and never own focus or hit targets. Eviction
+/// releases their data and hosting roots.
 private struct MacRetainedPanes: View {
     @Environment(MacWorkspace.self) private var workspace
     let keys: [String]
@@ -50,7 +51,6 @@ private struct MacRetainedPanes: View {
     var body: some View {
         let roster = workspace.paneSurfaces.retainedKeys(visible: keys, previous: recent) {
             !ProjectShell.isShellKey($0) && feed.listStore.session(for: $0) != nil
-                && workspace.mode(for: $0) == .chat
         }
         MacRetainedPaneLayout(visibleKeys: keys) {
             // Visible order is supplied by the layout, not this retained roster.
@@ -79,7 +79,6 @@ private struct MacRetainedPanes: View {
         .onChange(of: keys, initial: true) { _, _ in
             let retained = workspace.paneSurfaces.retainedKeys(visible: keys, previous: recent) {
                 !ProjectShell.isShellKey($0) && feed.listStore.session(for: $0) != nil
-                    && workspace.mode(for: $0) == .chat
             }
             for key in recent where !retained.contains(key) {
                 workspace.paneSurfaces.evict(key)

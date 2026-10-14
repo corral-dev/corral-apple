@@ -68,7 +68,16 @@ final class MacWorkspace {
     private static let modesKey = "corral.mac.paneModes"
     /// Settings: the view a session created by this client opens in.
     static let newSessionModeKey = "corral.mac.newSessionMode"
-    private var modes: [String: String] = UserDefaults.standard.dictionary(forKey: MacWorkspace.modesKey) as? [String: String] ?? [:]
+    @ObservationIgnored private var modes: [String: String] = UserDefaults.standard.dictionary(forKey: MacWorkspace.modesKey) as? [String: String] ?? [:]
+    /// Observed per session: one pane's chat/terminal switch must not
+    /// re-render every visible and retained pane (each is its own hosting
+    /// view, so a shared dictionary cost one transaction per pane).
+    @ObservationIgnored private var modeSignals: [String: ModeSignal] = [:]
+
+    @Observable
+    final class ModeSignal {
+        fileprivate(set) var revision = 0
+    }
 
     func attach(appModel: AppModel) {
         self.appModel = appModel
@@ -106,12 +115,24 @@ final class MacWorkspace {
 
     func mode(for key: String) -> PaneMode {
         if ProjectShell.isShellKey(key) { return .terminal }
-        return modes[modeKey(key)].flatMap(PaneMode.init(rawValue:)) ?? .chat
+        let storageKey = modeKey(key)
+        _ = modeSignal(storageKey).revision
+        return modes[storageKey].flatMap(PaneMode.init(rawValue:)) ?? .chat
     }
 
     func setMode(_ mode: PaneMode, for key: String) {
-        modes[modeKey(key)] = mode.rawValue
+        let storageKey = modeKey(key)
+        guard modes[storageKey] != mode.rawValue else { return }
+        modes[storageKey] = mode.rawValue
+        modeSignal(storageKey).revision &+= 1
         UserDefaults.standard.set(modes, forKey: Self.modesKey)
+    }
+
+    private func modeSignal(_ storageKey: String) -> ModeSignal {
+        if let signal = modeSignals[storageKey] { return signal }
+        let signal = ModeSignal()
+        modeSignals[storageKey] = signal
+        return signal
     }
 
     /// A new session's provisional key becomes canonical after its first
@@ -121,6 +142,8 @@ final class MacWorkspace {
         guard let stored = modes.removeValue(forKey: old) else { return }
         let new = modeKey(newKey)
         if modes[new] == nil { modes[new] = stored }
+        modeSignal(old).revision &+= 1
+        modeSignal(new).revision &+= 1
         UserDefaults.standard.set(modes, forKey: Self.modesKey)
     }
 
@@ -151,9 +174,8 @@ final class MacWorkspace {
             focus(key)
             return
         }
-        let visible = Set(sessions.map(\.key))
         if let group = layout.group(containing: key) {
-            let members = group.members.filter { visible.contains($0) }
+            let members = matchingGroupMembers(group, sessions: sessions, selected: key)
             if members.count >= 2 {
                 cancelSplitMotion()
                 paneKeys = Array(members.prefix(Self.maxPanes))
@@ -192,26 +214,48 @@ final class MacWorkspace {
     }
 
     func openGroup(_ group: DesktopGroup, sessions: [SessionSummary]) {
-        let visible = Set(sessions.map(\.key))
-        let members = group.members.filter { visible.contains($0) }
-        guard let first = members.first else { return }
+        let byKey = Dictionary(uniqueKeysWithValues: sessions.map { ($0.key, $0) })
+        let selected = byKey[group.focus] != nil ? group.focus : group.members.first { byKey[$0] != nil }
+        guard let selected else { return }
+        let members = matchingGroupMembers(group, sessions: sessions, selected: selected)
         pendingEntrances = []
         cancelSplitMotion()
         paneKeys = Array(members.prefix(Self.maxPanes))
-        let target = group.members.contains(group.focus) && members.contains(group.focus) ? group.focus : first
-        focus(target)
-        if Self.selectionCameFromPointer { requestKeyFocus(target) }
+        focus(selected)
+        if Self.selectionCameFromPointer { requestKeyFocus(selected) }
+    }
+
+    private func matchingGroupMembers(
+        _ group: DesktopGroup, sessions: [SessionSummary], selected: String
+    ) -> [String] {
+        let byKey = Dictionary(uniqueKeysWithValues: sessions.map { ($0.key, $0) })
+        guard let project = byKey[selected]?.cwd else { return [] }
+        return group.members.filter {
+            guard let session = byKey[$0] else { return false }
+            return Self.projectIdentity(session.cwd) == Self.projectIdentity(project)
+        }
     }
 
     /// Relaunch: show the panes from the last run without writing the layout.
     /// The host's groups may have changed in the TUI meanwhile; a restored
     /// split must not overwrite them. The next pane change syncs as usual.
     func restorePanes(_ keys: [String]) {
-        guard let first = keys.first else { return }
+        let agentProject = keys.lazy
+            .filter { !ProjectShell.isShellKey($0) }
+            .compactMap { self.feed?.listStore.session(for: $0)?.cwd }
+            .first
         pendingEntrances = []
         cancelSplitMotion()
         var unique: [String] = []
-        for key in keys where !unique.contains(key) { unique.append(key) }
+        for key in keys where !unique.contains(key) {
+            if !ProjectShell.isShellKey(key), let agentProject,
+               let session = feed?.listStore.session(for: key),
+               Self.projectIdentity(session.cwd) != Self.projectIdentity(agentProject) {
+                continue
+            }
+            unique.append(key)
+        }
+        guard let first = unique.first else { return }
         paneKeys = Array(unique.prefix(Self.maxPanes))
         focusedKey = first
     }
@@ -232,6 +276,11 @@ final class MacWorkspace {
             focus(key)
             return
         }
+        let agentProject = feed?.listStore.session(for: key)?.cwd ?? project
+        guard ProjectShell.isShellKey(key) || canAddAgent(project: agentProject) else {
+            actionError = String(localized: "mac.split.project_mismatch")
+            return
+        }
         leavingPanes[key] = nil
         let before = drawnPaneKeys
         if paneKeys.count >= Self.maxPanes, let focusedKey, let index = paneKeys.firstIndex(of: focusedKey) {
@@ -243,7 +292,30 @@ final class MacWorkspace {
         glide(from: before, entering: key)
         focusedKey = key
         requestKeyFocus(key)
-        syncGroup(project: project)
+        syncGroup()
+    }
+
+    /// Agent members define a split's project even while a terminal has focus.
+    var splitAgentProject: String {
+        if let agent = paneKeys.first(where: { !ProjectShell.isShellKey($0) }) {
+            return projectPath(of: agent)
+        }
+        return focusedKey.map(projectPath(of:)) ?? ""
+    }
+
+    func canAddSessionToSplit(_ session: SessionSummary) -> Bool {
+        paneKeys.contains(session.key) || canAddAgent(project: session.cwd)
+    }
+
+    private func canAddAgent(project: String) -> Bool {
+        guard let existing = paneKeys.first(where: { !ProjectShell.isShellKey($0) }) else { return true }
+        return Self.projectIdentity(projectPath(of: existing)) == Self.projectIdentity(project)
+    }
+
+    private static func projectIdentity(_ path: String) -> String {
+        var value = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        while value.count > 1 && value.hasSuffix("/") { value.removeLast() }
+        return value
     }
 
     /// Pane ✕ / ⌘W: the hosted session keeps running; the pane leaves the split
@@ -418,10 +490,10 @@ final class MacWorkspace {
     }
 
     /// Only sessions form a TUI group: terminal panes stay local to the Mac.
-    private func syncGroup(project: String) {
+    private func syncGroup() {
         let sessionKeys = paneKeys.filter { !ProjectShell.isShellKey($0) }
         guard sessionKeys.count >= 2 else { return }
-        let groupProject = project.isEmpty ? projectPath(of: sessionKeys[0]) : project
+        let groupProject = Self.projectIdentity(projectPath(of: sessionKeys[0]))
         var params: [String: Any] = ["project": groupProject, "keys": sessionKeys]
         if let focusedKey, sessionKeys.contains(focusedKey) { params["focus"] = focusedKey }
         scheduleLayout(WireProtocol.mLayoutSetGroup, params)
@@ -566,12 +638,13 @@ final class MacWorkspace {
     }
 
     /// TUI top bar: click an assistant to add a pane with a new session in the
-    /// focused pane's project.
-    func newSessionPane(runtimeID: String, project: String) async {
+    /// split's existing agent project, even when a terminal has focus.
+    func newSessionPane(runtimeID: String) async {
         guard let client = appModel?.client, let host = hostID else {
             actionError = String(localized: "error.not_connected")
             return
         }
+        let project = splitAgentProject
         do {
             let created = try await SessionCreationCoordinator.create(
                 hostID: host, runtimeID: runtimeID, cwd: project,
@@ -597,7 +670,7 @@ final class MacWorkspace {
         feed?.listStore.patchSession(session)
         feed?.listStore.rememberOpened(session)
         applyNewSessionMode(to: session.key)
-        if asPane, !paneKeys.isEmpty {
+        if asPane, !paneKeys.isEmpty, canAddSessionToSplit(session) {
             addPane(session.key, project: session.cwd)
         } else {
             cancelSplitMotion()

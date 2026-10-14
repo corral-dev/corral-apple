@@ -1,0 +1,226 @@
+#if DEBUG
+import AppKit
+import Foundation
+
+/// Exercises the real Mac pane presentation with a running, hosted agent.
+/// Uses in-memory workspace changes and never sends terminal input.
+@MainActor
+enum MacTerminalReturnInspection {
+    private static var started = false
+
+    static func runIfRequested(workspace: MacWorkspace, session: SessionSummary,
+                               stream: RemoteTerminalStream) {
+        guard ProcessInfo.processInfo.arguments.contains("-CorralInspectTerminalReturn"),
+              !started, session.hosted, session.live else { return }
+        started = true
+        Task { await run(workspace: workspace, session: session, stream: stream) }
+    }
+
+    private static func run(workspace: MacWorkspace, session: SessionSummary,
+                            stream: RemoteTerminalStream) async {
+        let clock = ContinuousClock()
+        let originalKeys = workspace.paneKeys
+        let originalFocus = workspace.focusedKey
+        let originalMode = workspace.mode(for: session.key)
+        defer {
+            workspace.setMode(originalMode, for: session.key)
+            workspace.inspectionRestoreWorkspace(keys: originalKeys, focus: originalFocus)
+        }
+
+        var host: TerminalHostView?
+        for _ in 0..<150 {
+            if stream.phase == .live,
+               let latest = TerminalHostView.inspectionLatest, latest.stream === stream,
+               latest.inspectionVisibleText.contains(where: { !$0.isEmpty }) {
+                host = latest
+                break
+            }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        guard let host else {
+            write(["error": "running terminal did not deliver an initial screen"])
+            return
+        }
+        let profiling = ProcessInfo.processInfo.arguments.contains("-CorralInspectTerminalReturnProfile")
+        if profiling { try? await Task.sleep(for: .seconds(5)) }
+        let split = ProcessInfo.processInfo.arguments.contains("-CorralInspectTerminalReturnSplit")
+        let modeOnly = split || ProcessInfo.processInfo.arguments.contains("-CorralInspectTerminalReturnModeOnly")
+        // Owner's scenario: the terminal beside three other panes in one split.
+        var splitKeys: [String] = []
+        if split {
+            let peers = workspace.feed?.listStore.windowSessions
+                .filter { $0.key != session.key && !$0.hosted && !$0.live }.prefix(3).map(\.key) ?? []
+            splitKeys = [session.key] + peers
+            workspace.inspectionRestoreWorkspace(keys: splitKeys, focus: session.key)
+            try? await Task.sleep(for: .seconds(2))
+        }
+
+        workspace.setMode(.chat, for: session.key)
+        _ = await waitUntil { !isVisible(host) }
+        let hiddenAfterChat = !isVisible(host)
+        let modeStall = MainThreadStallProbe()
+        modeStall.begin()
+        let modeStart = clock.now
+        workspace.setMode(.terminal, for: session.key)
+        let modeMutationMs = milliseconds(modeStart.duration(to: clock.now))
+        let modeReturned = await waitUntil { isVisible(host) }
+        let modeMs = milliseconds(modeStart.duration(to: clock.now))
+        let modeStalls = modeStall.end()
+        let sameAfterMode = TerminalHostView.inspectionLatest === host
+        let modeLines = host.inspectionVisibleText.filter { !$0.isEmpty }.count
+        let revealCaptured = profiling ? false : capture(host, name: split ? "split-reveal" : "reveal")
+        let phaseAtMode = String(describing: stream.phase)
+
+        var sessionReturned = false
+        var sessionMs = -1.0
+        var sameAfterSession = false
+        var sessionLines = 0
+        var sessionMutationMs = -1.0
+        var sessionStalls: [String: Any] = [:]
+        let other = workspace.feed?.listStore.windowSessions.first(where: {
+            $0.key != session.key && !$0.hosted && !$0.live
+        })
+        if let other, !modeOnly {
+            workspace.inspectionRestoreWorkspace(keys: [other.key], focus: other.key)
+            _ = await waitUntil { !isVisible(host) }
+            let stall = MainThreadStallProbe()
+            stall.begin()
+            let sessionStart = clock.now
+            workspace.inspectionRestoreWorkspace(keys: [session.key], focus: session.key)
+            sessionMutationMs = milliseconds(sessionStart.duration(to: clock.now))
+            sessionReturned = await waitUntil { isVisible(host) }
+            sessionMs = milliseconds(sessionStart.duration(to: clock.now))
+            sessionStalls = stall.end()
+            sameAfterSession = TerminalHostView.inspectionLatest === host
+            sessionLines = host.inspectionVisibleText.filter { !$0.isEmpty }.count
+        }
+
+        // Each warm return starts after the previous surface has settled, as a
+        // person reading chat or another session would, and its stall window
+        // covers the reveal plus the following display commits.
+        var chatCaptured = false
+        if !profiling {
+            workspace.setMode(.chat, for: session.key)
+            try? await Task.sleep(for: .milliseconds(600))
+            chatCaptured = capture(host, name: split ? "split-chat" : "chat")
+            workspace.setMode(.terminal, for: session.key)
+            try? await Task.sleep(for: .milliseconds(400))
+        }
+        var warmModeMs: [Double] = []
+        var warmSessionMs: [Double] = []
+        var warmModeStallMs: [Int] = []
+        var warmSessionStallMs: [Int] = []
+        var preservedEveryTime = true
+        var warmChatStallMs: [Int] = []
+        var chatMeasurements: [Int] = []
+        var chatRows: [Int] = []
+        var iterationAt: [Int] = []
+        let loopStart = clock.now
+        let iterations = ProcessInfo.processInfo.arguments.contains("-CorralInspectTerminalReturnLong") ? 60 : 0
+        for _ in 0..<(iterations > 0 ? iterations : (profiling ? 30 : 8)) {
+            let measuredBefore = MacConversationTableCounters.measurements
+            let chatProbe = MainThreadStallProbe()
+            chatProbe.begin()
+            iterationAt.append(Int(milliseconds(loopStart.duration(to: clock.now))))
+            workspace.setMode(.chat, for: session.key)
+            _ = await waitUntil { !isVisible(host) }
+            try? await Task.sleep(for: .milliseconds(400))
+            warmChatStallMs.append(chatProbe.end()["maxMainStallMs"] as? Int ?? -1)
+            chatMeasurements.append(MacConversationTableCounters.measurements - measuredBefore)
+            chatRows.append(workspace.paneSurfaces.store(for: session.key)?.timelineItems.count ?? -1)
+            let modeProbe = MainThreadStallProbe()
+            modeProbe.begin()
+            let modeStarted = clock.now
+            workspace.setMode(.terminal, for: session.key)
+            _ = await waitUntil { isVisible(host) }
+            warmModeMs.append(milliseconds(modeStarted.duration(to: clock.now)))
+            try? await Task.sleep(for: .milliseconds(150))
+            warmModeStallMs.append(modeProbe.end()["maxMainStallMs"] as? Int ?? -1)
+            preservedEveryTime = preservedEveryTime && TerminalHostView.inspectionLatest === host
+                && host.inspectionVisibleText.contains(where: { !$0.isEmpty })
+
+            if let other, !modeOnly {
+                workspace.inspectionRestoreWorkspace(keys: [other.key], focus: other.key)
+                _ = await waitUntil { !isVisible(host) }
+                try? await Task.sleep(for: .milliseconds(400))
+                let sessionProbe = MainThreadStallProbe()
+                sessionProbe.begin()
+                let sessionStarted = clock.now
+                workspace.inspectionRestoreWorkspace(keys: [session.key], focus: session.key)
+                _ = await waitUntil { isVisible(host) }
+                warmSessionMs.append(milliseconds(sessionStarted.duration(to: clock.now)))
+                try? await Task.sleep(for: .milliseconds(150))
+                warmSessionStallMs.append(sessionProbe.end()["maxMainStallMs"] as? Int ?? -1)
+                preservedEveryTime = preservedEveryTime && TerminalHostView.inspectionLatest === host
+                    && host.inspectionVisibleText.contains(where: { !$0.isEmpty })
+            }
+        }
+
+        write([
+            "hosted": session.hosted,
+            "live": session.live,
+            "hiddenAfterChat": hiddenAfterChat,
+            "modeReturned": modeReturned,
+            "modeReturnMs": modeMs,
+            "modeMutationMs": modeMutationMs,
+            "modeStalls": modeStalls,
+            "sameNativeViewAfterMode": sameAfterMode,
+            "screenLinesAtModeReveal": modeLines,
+            "phaseAtModeReveal": phaseAtMode,
+            "sessionReturned": sessionReturned,
+            "sessionReturnMs": sessionMs,
+            "sessionMutationMs": sessionMutationMs,
+            "sessionStalls": sessionStalls,
+            "sameNativeViewAfterSession": sameAfterSession,
+            "screenLinesAtSessionReveal": sessionLines,
+            "warmModeReturnMs": warmModeMs,
+            "warmSessionReturnMs": warmSessionMs,
+            "warmModeMaxStallMs": warmModeStallMs,
+            "warmSessionMaxStallMs": warmSessionStallMs,
+            "metalRenderer": host.inspectionUsesMetal,
+            "preservedEveryTime": preservedEveryTime,
+            "splitKeys": splitKeys.count,
+            "revealCaptured": revealCaptured,
+            "chatCaptured": chatCaptured,
+            "sessionRuntime": session.runtime ?? "",
+            "sessionCwd": SessionPresentation.fullWorkspacePath(from: session),
+            "sessionAttention": String(describing: session.attention),
+            "warmChatMaxStallMs": warmChatStallMs,
+            "chatMeasurements": chatMeasurements,
+            "chatTimelineItems": chatRows,
+            "iterationAtMs": iterationAt,
+        ])
+    }
+
+    /// Window content through `NSView.cacheDisplay`; not a desktop screenshot.
+    private static func capture(_ host: NSView, name: String) -> Bool {
+        guard let content = host.window?.contentView,
+              let bitmap = content.bitmapImageRepForCachingDisplay(in: content.bounds) else { return false }
+        content.cacheDisplay(in: content.bounds, to: bitmap)
+        guard let data = bitmap.representation(using: .png, properties: [:]) else { return false }
+        return (try? data.write(to: URL(fileURLWithPath: "/tmp/corral-terminal-return-\(name).png"))) != nil
+    }
+
+    private static func isVisible(_ view: NSView) -> Bool {
+        view.window != nil && !view.isHiddenOrHasHiddenAncestor
+    }
+
+    private static func waitUntil(_ condition: () -> Bool) async -> Bool {
+        for _ in 0..<250 {
+            if condition() { return true }
+            try? await Task.sleep(for: .milliseconds(2))
+        }
+        return condition()
+    }
+
+    private static func milliseconds(_ duration: Duration) -> Double {
+        Double(duration.components.seconds) * 1_000
+            + Double(duration.components.attoseconds) / 1_000_000_000_000_000
+    }
+
+    private static func write(_ result: [String: Any]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted]) else { return }
+        try? data.write(to: URL(fileURLWithPath: "/tmp/corral-terminal-return.json"), options: .atomic)
+    }
+}
+#endif

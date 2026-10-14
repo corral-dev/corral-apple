@@ -91,7 +91,19 @@ struct Probe {
         precondition(cache.entry(for: "a") === a, "visible entries cannot be evicted")
 
         let terminal = cache.entry(for: "terminal")
-        cache.present(terminal)
+        var terminalStarts = 0
+        var terminalStops = 0
+        terminal.lifetime.bindTerminal(start: { terminalStarts += 1 },
+                                       stop: { terminalStops += 1 })
+        cache.present(terminal, isTerminal: true)
+        precondition(terminalStarts == 1)
+        cache.suspend(terminal, key: "terminal", lease: terminal.lease, keepingMounted: true)
+        precondition(terminalStops == 1)
+        cache.present(terminal, isTerminal: true)
+        precondition(terminalStarts == 2, "a returning terminal resumes its stream")
+        cache.suspend(terminal, key: "terminal", lease: terminal.lease, keepingMounted: true)
+        cache.present(terminal, isTerminal: false)
+        precondition(terminalStarts == 2, "a hidden terminal in chat mode stays stopped")
         cache.suspend(terminal, key: "terminal", lease: terminal.lease)
         precondition(cache.entry(for: "terminal") !== terminal)
         let big = cache.entry(for: "big")
