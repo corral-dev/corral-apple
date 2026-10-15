@@ -27,6 +27,7 @@ struct MacTerminalPane: View {
                 // Clicks focus the pane through the window's click monitor (MacRootView).
                 TerminalEmulator(stream: stream, isFocusedPane: isFocused,
                                  isPresented: isPresented)
+                    .chatReadableColumn()
             }
             if isPresented { status }
         }
