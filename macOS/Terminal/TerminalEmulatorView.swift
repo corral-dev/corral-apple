@@ -287,8 +287,17 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
         // Dragging the window edge or a split divider only moves the grid;
         // fitting, the font and the host size vote wait for the drag to end.
         if !inLiveResize {
-            reportFit()
-            applyFittingFont(refreshing: true)
+            let voteChanged = reportFit()
+            // A fresh vote from the front window always wins the shared pane
+            // (most-recently-used), so its snapshot is already on the way:
+            // fitting the still-stale grid now would transiently shrink the
+            // font, then the snapshot grows it back ("shrink then enlarge" on
+            // every window shrink). Crop via placeTerminal until the snapshot
+            // lands instead. A background vote never claims the grid, so it
+            // still fits whatever grid is current.
+            if !(voteChanged && isInFront) {
+                applyFittingFont(refreshing: true)
+            }
         }
         placeTerminal()
     }
@@ -321,8 +330,11 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
     /// at the font those columns need. A narrow pane must not vote fewer than
     /// 40 cols (the host would withdraw it and keep another viewer's height).
     /// Rows never follow a font shrunk for rows (that would run away).
-    private func reportFit() {
-        guard let stream, bounds.width > 0, bounds.height > 0 else { return }
+    /// Returns whether a new vote was sent (used to skip fitting the stale
+    /// grid while its snapshot is on the way; see layout()).
+    @discardableResult
+    private func reportFit() -> Bool {
+        guard let stream, bounds.width > 0, bounds.height > 0 else { return false }
         let cell = cellSize(for: baseSize)
         let usableWidth = bounds.width - inset * 2 - scrollerReserve
         let usableHeight = bounds.height - inset * 2
@@ -332,7 +344,7 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
             cols: cols,
             rows: max(Self.minimumFit.rows, Int(usableHeight / rowCell.height))
         )
-        guard fit != lastReportedFit else { return }
+        guard fit != lastReportedFit else { return false }
         lastReportedFit = fit
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-CorralInspectTerminalFit"), fit != lastInspectedFit {
@@ -343,6 +355,7 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
         }
         #endif
         stream.updateFit(fit)
+        return true
     }
 
     /// Largest size, in half points from the base down to 9 pt, at which

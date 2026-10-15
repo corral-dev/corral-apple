@@ -118,7 +118,9 @@ struct MacPaneView: View {
                 // reflowed every visible message on every frame of the change.
                 .interfacePadding(.trailing, reservesCardMargin ? MacPromptsCard.reserve : 0)
                 .interfaceFrame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(.systemGroupedBackground))
+                // The strip behind the floating card is pane background too:
+                // terminal keeps its emulator black, chat keeps grouped gray.
+                .background(mode == .terminal ? Color(nsColor: TerminalAppearance.background) : Color(.systemGroupedBackground))
                 .overlay(alignment: .topTrailing) { promptsCard }
                 .onGeometryChange(for: CGSize.self) { $0.size } action: {
                     bodySize = $0
