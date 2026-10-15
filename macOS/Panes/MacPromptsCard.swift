@@ -69,7 +69,6 @@ struct MacPromptsCard: View {
         .background {
             let shape = RoundedRectangle(cornerRadius: Self.cornerRadius * interfaceScale, style: .continuous)
             shape.fill(onTerminal ? Color(nsColor: TerminalAppearance.background) : Color(.systemGroupedBackground))
-            shape.fill(Color.primary.opacity(colorScheme == .dark ? 0.075 : 0.045))
         }
         .overlay {
             RoundedRectangle(cornerRadius: Self.cornerRadius * interfaceScale, style: .continuous)
