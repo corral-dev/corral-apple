@@ -22,7 +22,12 @@ SOURCES = [
 ]
 with tempfile.TemporaryDirectory(prefix='corral-mac-lifecycle-') as directory:
     executable = str(Path(directory) / 'probe')
+    # Compile the exact production path helpers without unrelated list models.
+    filtering = (ROOT / 'Shared/Core/Presentation/SessionListFiltering.swift').read_text()
+    helper = Path(directory) / 'DirectoryIdentity.swift'
+    helper.write_text('import Foundation\nenum SessionListFiltering {\n'
+                      + filtering[filtering.index('    private static func normalizeDirectory'):])
     subprocess.run(['swiftc', '-swift-version', '6', '-default-isolation', 'MainActor',
-                    '-parse-as-library', *[str(ROOT / path) for path in SOURCES],
+                    '-parse-as-library', str(helper), *[str(ROOT / path) for path in SOURCES],
                     '-o', executable], check=True)
     subprocess.run([executable], check=True)

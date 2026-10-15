@@ -67,7 +67,10 @@ struct RuntimeEntry: Decodable { var id: String; var isActive: Bool { true } }
     func resolvedKey(_ key: String) -> String { key }
 }
 @MainActor final class HostSessionFeed { var listStore = SessionListStore() }
-@MainActor final class MacPaneSurfaceCache { func reset() {} }
+@MainActor final class MacPaneSurfaceCache {
+    func reset() {}
+    func evict(_ key: String) {}
+}
 
 // The standalone lifecycle probe does not link the SwiftTerm view. Its
 // workspace fixtures have no laid-out terminal body; fitting is an Xcode/runtime check.
@@ -424,7 +427,41 @@ struct LifecycleProbe {
         print("PASS split project: membership, terminal focus, quick creation, cross-project result, legacy group")
     }
 
+    @MainActor static func sidebarSplitRestorationRegressions() async {
+        let model = AppModel(), client = RemoteClient(), workspace = MacWorkspace()
+        let a = SessionSummary(key: "flat-a", cwd: "/tmp/flat-project")
+        let b = SessionSummary(key: "flat-b", cwd: "/tmp/flat-project")
+        let c = SessionSummary(key: "flat-c", cwd: "/tmp/other-project")
+        let split = DesktopGroup(id: "flat-split", name: "", project: a.cwd,
+                                 members: [a.key, b.key], focus: a.key, collapsed: true)
+        client.handler = { method, _ in
+            if method == WireProtocol.mLayoutWatch {
+                return DesktopLayout(revision: 1, groups: [split], pinnedSessions: [:])
+            }
+            return [:]
+        }
+        model.client = client
+        workspace.attach(appModel: model)
+        workspace.selectHost("flat-sidebar-fixture")
+        workspace.startLayoutWatch()
+        await settle()
+        workspace.open(a.key, sessions: [a, b, c], takeKeys: false)
+        check(workspace.paneKeys == [a.key, b.key] && workspace.focusedKey == a.key,
+              "flat member did not restore its collapsed host split")
+        workspace.open(b.key, sessions: [a, b, c], takeKeys: false)
+        check(workspace.paneKeys == [a.key, b.key] && workspace.focusedKey == b.key,
+              "selecting another flat member replaced the existing split")
+        workspace.open(c.key, sessions: [a, b, c], takeKeys: false)
+        check(workspace.paneKeys == [c.key], "standalone session did not open alone")
+        workspace.open(b.key, sessions: [a, b, c], takeKeys: false)
+        check(workspace.paneKeys == [a.key, b.key] && workspace.focusedKey == b.key,
+              "returning to a flat member did not restore its saved split")
+        workspace.stopLayoutWatch()
+        print("PASS flat sidebar: collapsed split restoration, member focus, standalone, saved split return")
+    }
+
     @MainActor static func main() async throws {
+        await sidebarSplitRestorationRegressions()
         await splitProjectRegressions()
         selectionCopyRegressions()
         try await searchRegressions()
