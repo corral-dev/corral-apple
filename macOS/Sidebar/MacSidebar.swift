@@ -262,8 +262,8 @@ struct MacSidebar: View {
             .listRowSeparator(.visible, edges: .bottom)
             .listRowSeparatorTint(Color(nsColor: .separatorColor).opacity(0.5), edges: .bottom)
             .background(NativeSidebarSelection())
-            // All sessions use the same native leaf-row alignment.
-            .listRowInsets(.leading, -Space.sm)
+            // Flat rows keep the native sidebar leading inset. The old
+            // disclosure-gutter reclaim pulled every row flush to the edge.
             .tag(SidebarTag.session(session.key))
             .onAppear { feed.listStore.rememberOpened(session) }
             .contextMenu { sessionMenu(session, split: split) }

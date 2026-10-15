@@ -260,6 +260,25 @@ final class ConversationSendCoordinatorTests: XCTestCase {
         XCTAssertEqual(display.clearedErrorCount, 1)
     }
 
+    func testLegacyImageSendSettlesAsDelivered() async {
+        store.supportsCommandReceipts = false
+        let images = [StagedSendImage(id: UUID(), base64: "a", commandID: nil)]
+
+        guard let plan = coordinator.beginComposerSend(
+            store: store, display: display, text: "",
+            images: images, isBusy: false, isHostReady: true
+        ) else { return XCTFail("begin must succeed") }
+        let commandID = try? XCTUnwrap(plan.images.first?.commandID)
+
+        await coordinator.runComposerSend(plan, store: store, display: display)
+
+        XCTAssertEqual(store.sentImages.map(\.commandID), [commandID])
+        XCTAssertEqual(store.appliedStatuses.map(\.status), ["delivered"])
+        XCTAssertEqual(store.messages.first(where: { $0.commandID == commandID })?.delivery, .sent)
+        XCTAssertTrue(display.restoredImageBatches.isEmpty)
+        XCTAssertEqual(display.clearedErrorCount, 1)
+    }
+
     func testPartialImageFailureRestoresOnlyUnsentSuffix() async throws {
         store.supportsCommandReceipts = true
         store.sendImageErrors = [nil, URLError(.timedOut)]

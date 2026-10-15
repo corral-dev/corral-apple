@@ -217,6 +217,7 @@ struct ConversationSendCoordinator: Sendable {
         do {
             for image in plan.images {
                 let commandID = image.commandID
+                var imageSeq: Int?
                 if let commandID {
                     // Give each image its own bubble seq (multi-image failure mapping).
                     let seq = store.enqueueLocalUser("[image]", commandID: commandID, reusingSeq: nil)
@@ -225,8 +226,15 @@ struct ConversationSendCoordinator: Sendable {
                         text: "[image]",
                         localSeq: seq
                     )
+                    imageSeq = seq
                 }
                 try await store.sendImage(base64: image.base64, commandID: commandID)
+                // Legacy hosts never return a receipt: settle like the text path
+                // so the bubble does not stay pending forever.
+                if !store.supportsCommandReceipts, let commandID {
+                    store.markLocalSent(text: nil, seq: imageSeq)
+                    store.applyCommandStatus(commandID: commandID, status: "delivered", failureDetail: nil)
+                }
                 sentImageCount += 1
             }
             if let textPlan = plan.text {

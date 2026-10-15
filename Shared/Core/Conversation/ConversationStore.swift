@@ -591,7 +591,7 @@ final class ConversationStore {
     }
 
     func sendImage(base64: String, commandID: String? = nil) async throws {
-        try await inOutboundOrder { [weak self] in
+        try await inOutboundOrder(excludingCommandID: commandID) { [weak self] in
             try await self?.deliverImage(base64: base64, commandID: commandID)
         }
     }
@@ -617,6 +617,10 @@ final class ConversationStore {
                 throw CommandDeliveryError.unconfirmed(receipt.detail ?? String(localized: "chat.delivery.unknown"))
             default: break
             }
+        } else if !supportsCommandReceipts, let commandID = params["command_id"] as? String {
+            // Legacy hosts never return a receipt: a successful RPC is delivery.
+            // Settle here so the bubble does not stay pending forever.
+            applyCommandStatus(commandID: commandID, status: "delivered", failureDetail: nil)
         }
     }
 
