@@ -9,7 +9,7 @@ struct MacPromptsCard: View {
     let prompts: [RichMessage]
     @Binding var isOpen: Bool
     var width: CGFloat = MacPromptsCard.width
-    /// Floating over content (narrow pane, terminal) rather than beside it.
+    /// Floating over content in a narrow pane rather than beside it.
     var overContent = false
     var onTerminal = false
     var maxListHeight: CGFloat = 360

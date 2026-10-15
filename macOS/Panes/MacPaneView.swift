@@ -56,10 +56,9 @@ struct MacPaneView: View {
         store?.userPrompts ?? []
     }
 
-    /// Chat view with room for a reading column beside the card. Terminal view
-    /// never gives up width: its width sets the host terminal size.
+    /// Both presentations center in the same space beside an open prompts card.
     private var cardFitsBeside: Bool {
-        mode == .chat && bodySize.width - MacPromptsCard.reserve * interfaceScale >= MacPromptsCard.minimumReadingWidth * interfaceScale
+        bodySize.width - MacPromptsCard.reserve * interfaceScale >= MacPromptsCard.minimumReadingWidth * interfaceScale
     }
 
     private var cardOpen: Bool {
@@ -112,7 +111,7 @@ struct MacPaneView: View {
             Divider()
             content
                 // Beside the conversation the card takes the trailing margin and
-                // the chat shifts aside; elsewhere it floats over the content.
+                // either presentation shifts aside; elsewhere it floats over content.
                 // Animated only when the person opens or closes the card (its
                 // buttons use withAnimation). A split change that makes the card
                 // stop fitting must not interpolate the reading width: that

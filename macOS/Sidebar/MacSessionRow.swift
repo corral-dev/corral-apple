@@ -9,8 +9,8 @@ struct MacSessionRow: View {
     @Environment(\.sidebarRowSize) private var rowSize
     @Environment(\.sidebarNow) private var now
     let session: SessionSummary
-    /// Project name already shown by the enclosing split header, if any.
-    var groupProject: String?
+    /// Present for every host split member, even when its peers are filtered out.
+    var splitHelp: String?
 
     var body: some View {
         HStack(alignment: .top, spacing: Space.xs * interfaceScale) {
@@ -34,11 +34,19 @@ struct MacSessionRow: View {
                 }
                 .interfaceFrame(height: MacSidebarMetrics.titleLineHeight)
 
-                secondaryLine
-                    .interfaceFont(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                HStack(spacing: Space.xs * interfaceScale) {
+                    if let splitHelp {
+                        Image(systemName: "rectangle.split.2x1")
+                            .imageScale(.small)
+                            .help(Text(verbatim: splitHelp))
+                            .accessibilityLabel(Text("mac.session.in_split"))
+                    }
+                    secondaryLine
+                        .truncationMode(.tail)
+                }
+                .interfaceFont(.subheadline)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
             }
         }
         .interfacePadding(.vertical, MacSidebarMetrics.rowPadding)
@@ -72,7 +80,6 @@ struct MacSessionRow: View {
 
     private var visibleProject: Text? {
         let name = SessionPresentation.projectName(from: session)
-        if let groupProject, groupProject == name { return nil }
         switch name {
         case "~": return Text("sessions.project.home").fontWeight(.semibold).foregroundStyle(.primary)
         case "": return Text("sessions.project.unknown").fontWeight(.semibold).foregroundStyle(.primary)
@@ -122,6 +129,7 @@ struct MacSessionRow: View {
             SessionPresentation.displayTitle(for: session),
             SessionPresentation.fullWorkspacePath(from: session),
             preview,
+            splitHelp ?? "",
         ]
         .filter { !$0.isEmpty }
         .joined(separator: "\n")

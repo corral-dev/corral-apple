@@ -19,7 +19,7 @@ final class DesktopSidebarProjectionTests: XCTestCase {
         )
     }
 
-    func testGroupNeedsTwoVisibleMembersElseMembersStandAlone() {
+    func testSplitMembersRemainFlatAndRetainMembershipWhenFiltered() {
         let group = DesktopGroup(id: "g", name: "Group Apple", members: ["a", "b"])
         let layout = DesktopLayout(revision: 1, groups: [group], pinnedSessions: [:])
         let sessions = [session("a", hoursAgo: 1, title: "alpha"), session("b", hoursAgo: 2, title: "beta")]
@@ -27,13 +27,14 @@ final class DesktopSidebarProjectionTests: XCTestCase {
         let both = DesktopSidebarProjection.sections(
             sessions: sessions, layout: layout, filter: "", order: &order, now: now, calendar: calendar
         )
-        XCTAssertEqual(both.flatMap(\.items).map(\.id), ["group:g"])
+        XCTAssertEqual(both.flatMap(\.items).map(\.id), ["session:a", "session:b"])
 
         var filteredOrder = DesktopSidebarProjection.StableOrder()
         let filtered = DesktopSidebarProjection.sections(
             sessions: sessions, layout: layout, filter: "alpha", order: &filteredOrder, now: now, calendar: calendar
         )
         XCTAssertEqual(filtered.flatMap(\.items).map(\.id), ["session:a"])
+        XCTAssertEqual(filtered.first?.items.first?.split?.id, "g")
     }
 
     func testEachSessionAppearsOnceWithRepeatedInputAndOverlappingGroups() {
@@ -49,15 +50,10 @@ final class DesktopSidebarProjectionTests: XCTestCase {
         let result = DesktopSidebarProjection.sections(
             sessions: sessions, layout: layout, filter: "", order: &order, now: now, calendar: calendar
         )
-        var keys: [String] = []
-        for item in result.flatMap(\.items) {
-            switch item {
-            case .session(let session): keys.append(session.key)
-            case .group(_, let members): keys.append(contentsOf: members.map(\.key))
-            }
-        }
+        let keys = result.flatMap(\.items).map { $0.session.key }
         XCTAssertEqual(keys.sorted(), ["a", "b", "c", "d", "e", "f"])
-        XCTAssertEqual(result.flatMap(\.items).map(\.id), ["group:g1", "group:g2", "session:e", "session:f"])
+        XCTAssertEqual(result.flatMap(\.items).count, 6)
+        XCTAssertEqual(result.flatMap(\.items).first { $0.session.key == "b" }?.split?.id, "g1")
     }
 
     func testFilterNeverMatchesSplitIdentity() {
@@ -131,27 +127,59 @@ final class DesktopSidebarProjectionTests: XCTestCase {
         XCTAssertEqual(result.first?.items.map(\.id), ["session:new", "session:a", "session:b", "session:empty"])
     }
 
-    func testAttentionSummaryCountsUnreadIndependentlyFromActivity() {
-        let members = [
-            SessionSummary(key: "a", attention: .waiting, marker: "waiting"),
-            SessionSummary(key: "b", attention: .working, marker: "unread"),
-            SessionSummary(key: "c", attention: .unread, marker: "unread"),
-            SessionSummary(key: "d", attention: .none, marker: "recent"),
-            SessionSummary(key: "e"),
-        ]
-        let summary = DesktopSidebarProjection.attentionSummary(members)
-        // waiting: a; working: b (behind red) + d (recent shares green);
-        // unread: b + c. One session can count in two buckets.
-        XCTAssertEqual(summary.map(\.0), [.waiting, .working, .unread])
-        XCTAssertEqual(summary.map(\.1), [1, 2, 2])
-    }
-
     func testGroupArrivingAfterFirstRenderKeepsItsMembersPlace() {
         var order = DesktopSidebarProjection.StableOrder()
         let sessions = [session("live", hoursAgo: 0.1), session("a", hoursAgo: 4), session("b", hoursAgo: 5)]
         _ = DesktopSidebarProjection.sections(sessions: sessions, layout: .empty, filter: "", order: &order, now: now, calendar: calendar)
         let layout = DesktopLayout(revision: 2, groups: [DesktopGroup(id: "g", name: "Group Pear", members: ["a", "b"])], pinnedSessions: [:])
         let result = DesktopSidebarProjection.sections(sessions: sessions, layout: layout, filter: "", order: &order, now: now, calendar: calendar)
-        XCTAssertEqual(result.first?.items.map(\.id), ["session:live", "group:g"])
+        XCTAssertEqual(result.first?.items.map(\.id), ["session:live", "session:a", "session:b"])
     }
+
+    func testCollapsedSplitKeepsEveryMemberInItsOwnDateBucket() {
+        let group = DesktopGroup(id: "g", name: "", members: ["a", "b"], collapsed: true)
+        var order = DesktopSidebarProjection.StableOrder()
+        let result = DesktopSidebarProjection.sections(
+            sessions: [session("a", hoursAgo: 1), session("b", hoursAgo: 20)],
+            layout: DesktopLayout(revision: 1, groups: [group], pinnedSessions: [:]),
+            filter: "", order: &order, now: now, calendar: calendar
+        )
+        XCTAssertEqual(result.map(\.id), ["today", "yesterday"])
+        XCTAssertEqual(result.flatMap(\.items).map(\.id), ["session:a", "session:b"])
+        XCTAssertTrue(result.flatMap(\.items).allSatisfy { $0.split?.collapsed == true })
+    }
+
+    func testPinnedSplitExposesFlatMembersAndPreservesIndividualPinTimes() {
+        let group = DesktopGroup(id: "g", name: "", members: ["a", "b"], pinned: true, pinnedAt: 20)
+        var order = DesktopSidebarProjection.StableOrder()
+        let result = DesktopSidebarProjection.sections(
+            sessions: [session("a", hoursAgo: 1), session("b", hoursAgo: 2), session("c", hoursAgo: 3)],
+            layout: DesktopLayout(revision: 1, groups: [group], pinnedSessions: ["b": 30, "c": 10]),
+            filter: "", order: &order, now: now, calendar: calendar
+        )
+        XCTAssertEqual(result.map(\.id), ["pinned"])
+        XCTAssertEqual(result.first?.items.map(\.id), ["session:b", "session:a", "session:c"])
+    }
+
+    func testJoiningLeavingAndCollapsingSplitNeverMovesRows() {
+        let sessions = [session("a", hoursAgo: 1), session("c", hoursAgo: 2), session("b", hoursAgo: 3)]
+        var order = DesktopSidebarProjection.StableOrder()
+        let baseline = DesktopSidebarProjection.sections(
+            sessions: sessions, layout: .empty, filter: "", order: &order, now: now, calendar: calendar
+        ).flatMap(\.items).map(\.id)
+        for collapsed in [false, true] {
+            let group = DesktopGroup(id: "g", name: "", members: ["b", "a"], collapsed: collapsed)
+            let result = DesktopSidebarProjection.sections(
+                sessions: sessions, layout: DesktopLayout(revision: 2, groups: [group], pinnedSessions: [:]),
+                filter: "", order: &order, now: now, calendar: calendar
+            )
+            XCTAssertEqual(result.flatMap(\.items).map(\.id), baseline)
+        }
+        let dissolved = DesktopSidebarProjection.sections(
+            sessions: sessions, layout: .empty, filter: "", order: &order, now: now, calendar: calendar
+        )
+        XCTAssertEqual(dissolved.flatMap(\.items).map(\.id), baseline)
+        XCTAssertTrue(dissolved.flatMap(\.items).allSatisfy { $0.split == nil })
+    }
+
 }

@@ -1,17 +1,8 @@
 import Foundation
 
-/// The desktop sidebar as the TUI lays it out, computed from the host session
-/// window plus the shared layout (groups and pins). Pure and portable so the
-/// rules stay testable: authority is the TUI knowledge base, "侧边栏会话组与置顶".
-///
-/// - Pinned block first (groups and independent sessions by newest pin time).
-/// - Unpinned items in local-calendar day buckets: today (and live), yesterday,
-///   weekday names within the last seven days, then one older bucket.
-/// - A group shows only when at least two of its members are visible after
-///   filtering; otherwise its members appear as independent rows.
-/// - Unpinned order is stable for the life of the window (`StableOrder`): rows
-///   that are already shown never move because their mtime changed; sessions
-///   first seen later are inserted at the top.
+/// Flat Mac session rows, with shared host split membership used only for
+/// metadata and inherited pins. Group collapse never hides a conversation.
+/// Dates and first-seen order belong to each session independently.
 enum DesktopSidebarProjection {
     enum Bucket: Hashable, Sendable {
         case today
@@ -21,30 +12,10 @@ enum DesktopSidebarProjection {
         case older
     }
 
-    enum Item: Identifiable, Equatable {
-        case session(SessionSummary)
-        case group(DesktopGroup, members: [SessionSummary])
-
-        var id: String {
-            switch self {
-            case .session(let session): "session:\(session.key)"
-            case .group(let group, _): "group:\(group.id)"
-            }
-        }
-
-        var newestMtime: Double {
-            switch self {
-            case .session(let session): session.mtime
-            case .group(_, let members): members.map(\.mtime).max() ?? 0
-            }
-        }
-
-        var isLive: Bool {
-            switch self {
-            case .session(let session): session.live
-            case .group(_, let members): members.contains(where: \.live)
-            }
-        }
+    struct Item: Identifiable, Equatable {
+        let session: SessionSummary
+        let split: DesktopGroup?
+        var id: String { "session:\(session.key)" }
     }
 
     struct Section: Identifiable, Equatable {
@@ -83,13 +54,7 @@ enum DesktopSidebarProjection {
 
         func position(of id: String) -> Int { rank[id] ?? Int.max }
 
-        /// A group ranks at its best-placed member.
-        func position(of item: Item) -> Int {
-            switch item {
-            case .session(let session): position(of: session.key)
-            case .group(_, let members): members.map { position(of: $0.key) }.min() ?? Int.max
-            }
-        }
+        func position(of item: Item) -> Int { position(of: item.session.key) }
     }
 
     static func sections(
@@ -104,29 +69,9 @@ enum DesktopSidebarProjection {
         // whose identities repeat.
         var seenKeys: Set<String> = []
         let visible = sessions.filter { matches($0, filter: filter) && seenKeys.insert($0.key).inserted }
-        let visibleByKey = Dictionary(uniqueKeysWithValues: visible.map { ($0.key, $0) })
+        let items = visible.map { Item(session: $0, split: layout.group(containing: $0.key)) }
 
-        var items: [Item] = []
-        var grouped: Set<String> = []
-        for group in layout.groups {
-            // The first group claiming a session keeps it; a later group left
-            // with fewer than two members dissolves into standalone rows.
-            var claimed: Set<String> = []
-            let members = group.members.compactMap { key -> SessionSummary? in
-                guard !grouped.contains(key), claimed.insert(key).inserted else { return nil }
-                return visibleByKey[key]
-            }
-            guard members.count >= 2 else { continue }
-            items.append(.group(group, members: members))
-            grouped.formUnion(members.map(\.key))
-        }
-        for session in visible where !grouped.contains(session.key) {
-            items.append(.session(session))
-        }
-
-        // First-seen order is per session (recency at that moment, newest first),
-        // so a group formed later — or whose layout arrives after the first
-        // render — sits where its members already were instead of jumping up.
+        // Layout arrival and split membership cannot reorder session rows.
         order.register(visible.sorted { $0.mtime > $1.mtime })
 
         var pinned: [(Double, Item)] = []
@@ -141,7 +86,9 @@ enum DesktopSidebarProjection {
 
         var result: [Section] = []
         if !pinned.isEmpty {
-            result.append(Section(kind: .pinned, items: pinned.sorted { $0.0 > $1.0 }.map(\.1)))
+            result.append(Section(kind: .pinned, items: pinned.sorted {
+                $0.0 == $1.0 ? order.position(of: $0.1) < order.position(of: $1.1) : $0.0 > $1.0
+            }.map(\.1)))
         }
         for bucket in orderedBuckets(now: now, calendar: calendar) {
             guard let bucketItems = buckets[bucket], !bucketItems.isEmpty else { continue }
@@ -162,17 +109,13 @@ enum DesktopSidebarProjection {
     }
 
     static func pinTime(of item: Item, layout: DesktopLayout) -> Double? {
-        switch item {
-        case .group(let group, _):
-            return group.pinned ? max(group.pinnedAt, 1) : nil
-        case .session(let session):
-            if let at = layout.pinnedSessions[session.key] { return max(at, 1) }
-            return nil
-        }
+        let ownPin = layout.pinnedSessions[item.session.key].map { max($0, 1) }
+        let splitPin = item.split.flatMap { $0.pinned ? max($0.pinnedAt, 1) : nil }
+        return [ownPin, splitPin].compactMap { $0 }.max()
     }
 
     static func bucket(for item: Item, now: Date, calendar: Calendar) -> Bucket {
-        let mtime = item.newestMtime
+        let mtime = item.session.mtime
         guard mtime > 0 else { return .older }
         let date = Date(timeIntervalSince1970: mtime)
         let today = calendar.startOfDay(for: now)
@@ -195,29 +138,5 @@ enum DesktopSidebarProjection {
         }
         buckets.append(.older)
         return buckets
-    }
-
-    /// Collapsed group summary: counts per dot in the TUI's fixed order.
-    /// Red unread is independent from the activity dots: a session with both
-    /// an activity and unread results counts once in each bucket, so the
-    /// counts can sum past the member count. `recent` shares the working bucket.
-    static func attentionSummary(_ members: [SessionSummary]) -> [(SessionPresentation.StatusMarker, Int)] {
-        let activities = members.compactMap { SessionPresentation.activityMarker(for: $0) }
-        let unreadCount = members.filter { SessionPresentation.hasUnread(for: $0) }.count
-        let order: [SessionPresentation.StatusMarker] = [.waiting, .working, .unread]
-        return order.compactMap { marker in
-            let count: Int
-            switch marker {
-            case .waiting:
-                count = activities.filter { $0 == .waiting }.count
-            case .working:
-                count = activities.filter { $0 == .working || $0 == .recent }.count
-            case .unread:
-                count = unreadCount
-            case .recent:
-                return nil
-            }
-            return count > 0 ? (marker, count) : nil
-        }
     }
 }
