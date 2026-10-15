@@ -208,15 +208,16 @@ struct SessionActionsMenuView: View {
             onCopy()
         } label: {
             if isBusy {
-                Label("session.actions.copy", systemImage: "doc.on.doc")
+                HStack {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("session.actions.copy")
+                }
             } else {
                 Label("session.actions.copy", systemImage: "doc.on.doc")
             }
         }
-        .disabled(!enabled)
-        if isBusy {
-            ProgressView()
-        }
+        .disabled(!enabled || isBusy)
     }
 
     @ViewBuilder

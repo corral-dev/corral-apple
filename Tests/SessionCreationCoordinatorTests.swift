@@ -100,6 +100,36 @@ final class SessionCreationCoordinatorTests: XCTestCase {
         await store.stop()
     }
 
+    func testReceiptedSendRetriesTransportFailureWithoutChangingIdentity() async throws {
+        let client = RemoteClient(devicePrivateKey: Data(repeating: 0, count: 32))
+        client.hostCapabilities.commandReceipts = true
+        defer { client.disconnect() }
+        let store = ConversationStore(sessionKey: "codex:a", client: client, live: false, hostID: "fixture")
+        var identities: [String] = []
+        store.inputRequestForTesting = { params in
+            identities.append(params["command_id"] as? String ?? "")
+            if identities.count == 1 { throw RemoteClient.ConnectionError.notConnected }
+            return ["status": "delivered"]
+        }
+        try await store.sendText("resume and deliver", commandID: "one-intent")
+        XCTAssertEqual(identities, ["one-intent", "one-intent"])
+        await store.stop()
+    }
+
+    func testLegacySendDoesNotRetryAnAmbiguousTransportFailure() async throws {
+        let client = RemoteClient(devicePrivateKey: Data(repeating: 0, count: 32))
+        defer { client.disconnect() }
+        let store = ConversationStore(sessionKey: "codex:a", client: client, live: true)
+        var attempts = 0
+        store.inputRequestForTesting = { _ in attempts += 1; throw URLError(.timedOut) }
+        do {
+            try await store.sendText("only once")
+            XCTFail("Legacy sends cannot safely retry an ambiguous outcome")
+        } catch is URLError {}
+        XCTAssertEqual(attempts, 1)
+        await store.stop()
+    }
+
     func testQueuedTextWaitsUntilEarlierMessageSettles() async throws {
         let client = RemoteClient(devicePrivateKey: Data(repeating: 0, count: 32))
         client.hostCapabilities.commandReceipts = true
@@ -124,8 +154,10 @@ final class SessionCreationCoordinatorTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(400))
         XCTAssertEqual(sent, ["first"], "A later message must wait while the earlier one is confirming")
         XCTAssertEqual(store.queuedOutboundCount, 1)
+        let releasedAt = ContinuousClock.now
         released = true
         try await second.value
+        XCTAssertLessThan(releasedAt.duration(to: .now), .seconds(3), "A queued send must not wait for its own receipt")
         XCTAssertEqual(sent, ["first", "second"])
         XCTAssertEqual(store.queuedOutboundCount, 0)
         await store.stop()

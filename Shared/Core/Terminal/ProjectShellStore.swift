@@ -48,7 +48,12 @@ final class ProjectShellStore {
 
     var selected: ProjectShell? { shells.first { $0.key == selectedKey } }
 
+    /// In-flight list fetch, so N shell panes reconnecting at once share one RPC.
+    private var refreshTask: Task<Bool, Never>?
+
     func reset() {
+        refreshTask?.cancel()
+        refreshTask = nil
         shells = []
         selectedKey = nil
         failure = nil
@@ -57,13 +62,24 @@ final class ProjectShellStore {
 
     @discardableResult
     func refresh(client: RemoteClient) async -> Bool {
-        do {
-            let payload = try await client.call(WireProtocol.mShellList, as: ShellListPayload.self)
-            apply(payload.shells)
-            return true
-        } catch {
-            return false
+        // Coalesce concurrent refreshes (one per shell pane per reconnect)
+        // into a single host RPC.
+        if let inFlight = refreshTask {
+            return await inFlight.value
         }
+        let task = Task { () -> Bool in
+            do {
+                let payload = try await client.call(WireProtocol.mShellList, as: ShellListPayload.self)
+                apply(payload.shells)
+                return true
+            } catch {
+                return false
+            }
+        }
+        refreshTask = task
+        let result = await task.value
+        refreshTask = nil
+        return result
     }
 
     /// Shows the project's shell: the selected one when it is already in that

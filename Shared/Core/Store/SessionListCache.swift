@@ -101,7 +101,7 @@ nonisolated final class SessionListWriter: @unchecked Sendable {
                     try? FileManager.default.createDirectory(
                         at: url.deletingLastPathComponent(), withIntermediateDirectories: true
                     )
-                    try? data.write(to: url, options: .atomic)
+                    try? data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
                 }
             }
             lock.lock()

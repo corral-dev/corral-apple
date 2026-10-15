@@ -88,7 +88,19 @@ final class MacNotifications: NSObject, UNUserNotificationCenterDelegate {
         }
         let previous = feed
         stopFeed()
-        await previous?.waitUntilUnwatched()
+        // Never block a machine switch on the old feed's unwatch RPC: bound
+        // the wait and let the new feed activate immediately. Different hosts
+        // subscribe on independent channels, so teardown and activation may overlap.
+        if let previous {
+            Task {
+                await withTaskGroup(of: Void.self) { group in
+                    group.addTask { await previous.waitUntilUnwatched() }
+                    group.addTask { try? await Task.sleep(for: .seconds(1.5)) }
+                    await group.next()
+                    group.cancelAll()
+                }
+            }
+        }
         let current = HostSessionFeed(host: host)
         feed = current
         current.onNotification = { [weak self, weak current] session, kind in
@@ -134,7 +146,13 @@ final class MacNotifications: NSObject, UNUserNotificationCenterDelegate {
         do {
             try await center.add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
             ledger.record(id)
-            try JSONEncoder().encode(ledger).write(to: ledgerURL, options: .atomic)
+            // Tiny payload; encode inline, write off the main thread.
+            if let data = try? JSONEncoder().encode(ledger) {
+                let url = ledgerURL
+                Task.detached(priority: .utility) {
+                    try? data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+                }
+            }
         } catch {
             failure = String(localized: "settings.notifications.registration_failed")
         }
@@ -143,7 +161,11 @@ final class MacNotifications: NSObject, UNUserNotificationCenterDelegate {
     private func savePreferences() {
         do {
             let values = ["enabled": enabled, "waiting": waiting, "completed": completed, "aborted": aborted]
-            try JSONEncoder().encode(values).write(to: preferencesURL, options: .atomic)
+            let data = try JSONEncoder().encode(values)
+            let url = preferencesURL
+            Task.detached(priority: .utility) {
+                try? data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            }
         } catch { failure = String(localized: "settings.notifications.registration_failed") }
     }
 
@@ -222,6 +244,11 @@ final class MacNotifications: NSObject, UNUserNotificationCenterDelegate {
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        let hostID = notification.request.content.userInfo["host_id"] as? String
+        let sessionKey = notification.request.content.userInfo["session_key"] as? String
+        Task { @MainActor [weak self] in
+            self?.model?.client?.refreshAfterNotification(hostID: hostID, sessionKey: sessionKey)
+        }
         completionHandler([.banner, .sound, .list])
     }
 }

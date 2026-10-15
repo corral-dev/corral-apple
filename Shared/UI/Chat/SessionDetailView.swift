@@ -796,6 +796,9 @@ struct SessionDetailView: View {
     /// Forwards composer state, scroll requests, error banner, haptics and the
     /// busy flag; maps restored staged images back onto the `UIImage`
     /// previews of the batch just sent.
+    ///
+    /// Main-actor bound: every member reads or writes the view's `@State`.
+    @MainActor
     private final class DetailSendDisplay: ConversationSendDisplay {
         var view: SessionDetailView
         let hapticScope: HapticScope

@@ -55,35 +55,46 @@ import Foundation
         )
         message[WireProtocol.clientInstanceKey] = Self.clientInstanceID
 
-        return try await withCheckedThrowingContinuation { continuation in
-            let timeout = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(timeoutSeconds))
-                guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    if let pending = self?.pendingRequests.removeValue(forKey: requestID) {
-                        pending.continuation.resume(throwing: ConnectionError.timeout)
+        return try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation { continuation in
+                let timeout = Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(timeoutSeconds))
+                    guard !Task.isCancelled else { return }
+                    await MainActor.run {
+                        if let pending = self?.pendingRequests.removeValue(forKey: requestID) {
+                            pending.continuation.resume(throwing: ConnectionError.timeout)
+                        }
                     }
                 }
-            }
-            // 先登记再发送：低延迟响应可能在 `send` 返回前抵达，反过来会被收包循环丢弃。
-            pendingRequests[requestID] = (continuation, timeout, ObjectIdentifier(target))
-            do {
-                // Encrypt + queue is one ordered step on the plane's single writer;
-                // never hand frames to the socket from separate tasks.
-                try target.enqueue(message, compress: compress) { [weak self] error in
-                    Task { @MainActor in
-                        guard let pending = self?.pendingRequests.removeValue(forKey: requestID) else { return }
+                // 先登记再发送：低延迟响应可能在 `send` 返回前抵达，反过来会被收包循环丢弃。
+                pendingRequests[requestID] = (continuation, timeout, ObjectIdentifier(target))
+                do {
+                    // Encrypt + queue is one ordered step on the plane's single writer;
+                    // never hand frames to the socket from separate tasks.
+                    try target.enqueue(message, compress: compress) { [weak self] error in
+                        Task { @MainActor in
+                            guard let pending = self?.pendingRequests.removeValue(forKey: requestID) else { return }
+                            pending.timeout.cancel()
+                            pending.continuation.resume(throwing: error)
+                        }
+                    }
+                } catch {
+                    if let pending = pendingRequests.removeValue(forKey: requestID) {
                         pending.timeout.cancel()
                         pending.continuation.resume(throwing: error)
                     }
                 }
-            } catch {
-                if let pending = pendingRequests.removeValue(forKey: requestID) {
-                    pending.timeout.cancel()
-                    pending.continuation.resume(throwing: error)
+            }.message
+        }, onCancel: {
+            Task { [weak self] in
+                await MainActor.run {
+                    if let pending = self?.pendingRequests.removeValue(forKey: requestID) {
+                        pending.timeout.cancel()
+                        pending.continuation.resume(throwing: CancellationError())
+                    }
                 }
             }
-        }.message
+        })
     }
 
     /// A request issued while an automatic reconnect is in flight waits briefly

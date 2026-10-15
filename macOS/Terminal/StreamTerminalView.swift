@@ -44,8 +44,13 @@ final class StreamTerminalView: SwiftTerm.TerminalView {
     }
 
     override func paste(_ sender: Any) {
-        guard let text = NSPasteboard.general.string(forType: .string) else { return }
-        onPaste?(text)
+        guard let text = NSPasteboard.general.string(forType: .string),
+              !text.isEmpty else { return }
+        // Cap a single paste at 1 MiB: larger blobs go through the host paste
+        // path in chunks via TerminalInputSender, but one paste event must not
+        // queue gigabytes behind the typing order.
+        let capped = text.count > 1_048_576 ? String(text.prefix(1_048_576)) : text
+        onPaste?(capped)
     }
 }
 

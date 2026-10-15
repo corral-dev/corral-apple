@@ -19,6 +19,16 @@ struct HostSettingsView: View {
     var body: some View {
         Form {
             Section("settings.display") {
+                Picker("settings.language", selection: Bindable(appModel).appLanguage) {
+                    ForEach(AppLanguage.allCases) { language in
+                        Text(language.title).tag(language)
+                    }
+                }
+                Picker("settings.appearance", selection: Bindable(appModel).appAppearance) {
+                    ForEach(AppAppearance.allCases) { appearance in
+                        Text(appearance.title).tag(appearance)
+                    }
+                }
                 NavigationLink {
                     SessionTextSizeSettingsView()
                 } label: {

@@ -31,6 +31,17 @@ private struct MacGeneralSettings: View {
         @Bindable var model = appModel
         Form {
             Section("settings.display") {
+                Picker("settings.language", selection: $model.appLanguage) {
+                    ForEach(AppLanguage.allCases) { language in
+                        Text(language.title).tag(language)
+                    }
+                }
+                Picker("settings.appearance", selection: $model.appAppearance) {
+                    ForEach(AppAppearance.allCases) { appearance in
+                        Text(appearance.title).tag(appearance)
+                    }
+                }
+                .pickerStyle(.segmented)
                 Picker("mac.zoom.size", selection: Binding(
                     get: { zoom.percentage }, set: { zoom.setPercentage($0) }
                 )) {

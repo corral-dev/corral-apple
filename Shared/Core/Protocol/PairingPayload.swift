@@ -45,13 +45,19 @@ nonisolated struct PairingPayload: Codable, Sendable, Equatable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         version = try container.decodeIfPresent(String.self, forKey: .version) ?? "1"
-        hostID = try container.decode(String.self, forKey: .hostID)
+        let storedHostID = try container.decode(String.self, forKey: .hostID)
         hostName = try container.decode(String.self, forKey: .hostName)
         pairingCode = try container.decode(String.self, forKey: .pairingCode)
         relayURL = try container.decodeIfPresent(String.self, forKey: .relayURL)
 
         let keyString = try container.decode(String.self, forKey: .hostPublicKeyHex)
         hostPublicKey = try Self.decodePublicKey(keyString)
+
+        // Single source of truth: hostID is derived from the public key.
+        // A stored `h` that disagrees means a stale/hand-edited payload: reject.
+        let derived = try RemoteCryptoKeys.routingID(fromX25519: hostPublicKey)
+        guard storedHostID == derived else { throw PairingParseError.hostIDMismatch }
+        hostID = derived
 
         if let hints = try container.decodeIfPresent(String.self, forKey: .localHints), !hints.isEmpty {
             localHints = hints.split(separator: ",").map(String.init)
@@ -106,6 +112,10 @@ nonisolated extension PairingPayload {
         }
         let hostPublicKey = try decodePublicKey(keyString)
         let hostID = try RemoteCryptoKeys.routingID(fromX25519: hostPublicKey)
+        // `h` is advisory only: if present it must match the derived routing ID.
+        if let claimed = value("h"), !claimed.isEmpty, claimed != hostID {
+            throw PairingParseError.hostIDMismatch
+        }
         let relay = value("r")
         let hintsRaw = value("l") ?? ""
         let hints = hintsRaw.isEmpty ? [] : hintsRaw.split(separator: ",").map(String.init)
@@ -186,6 +196,7 @@ nonisolated enum PairingParseError: Error, Sendable, LocalizedError {
     case missingField(String)
     case invalidPublicKey
     case unsupportedVersion
+    case hostIDMismatch
 
     var errorDescription: String? {
         switch self {
@@ -195,7 +206,7 @@ nonisolated enum PairingParseError: Error, Sendable, LocalizedError {
             String(localized: "pairing.error.unrecognized")
         case let .missingField(name):
             String(localized: "pairing.error.missing_field \(name)")
-        case .invalidPublicKey:
+        case .invalidPublicKey, .hostIDMismatch:
             String(localized: "pairing.error.invalid_key")
         }
     }

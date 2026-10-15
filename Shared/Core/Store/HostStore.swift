@@ -10,8 +10,10 @@ import Security
 @Observable
 final class HostStore {
     static let shared = HostStore()
-    /// 测试用覆盖目录：为 nil 时走 Application Support 真实路径。
+    /// Tests use coverage directory: nil means the real Application Support path.
     static var directoryOverride: URL?
+    /// File writes go here so pairing/rename never blocks the UI thread.
+    private static let io = DispatchQueue(label: "com.x0c.corral.paired-hosts", qos: .utility)
 
     private(set) var hosts: [HostInfo] = []
 
@@ -52,7 +54,13 @@ final class HostStore {
             hosts.append(host)
         }
         if let keyData = host.publicKeyData {
-            try? HostKeychain.saveHostPublicKey(hostID: host.hostID, publicKey: keyData)
+            do {
+                try HostKeychain.saveHostPublicKey(hostID: host.hostID, publicKey: keyData)
+            } catch {
+                // JSON must not claim paired while the NSE cannot decrypt:
+                // surface it in diagnostics instead of silently diverging.
+                debugTrace("host public key keychain save failed: \(error)")
+            }
         }
         saveHosts()
     }
@@ -169,7 +177,17 @@ final class HostStore {
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(hosts) else { return }
-        try? data.write(to: hostsFileURL, options: .atomic)
+        let url = hostsFileURL
+        // Tests assert the file synchronously via directoryOverride; persist
+        // those inline. Production writes go off the main thread.
+        if Self.directoryOverride != nil {
+            try? data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        } else {
+            // Encode on the caller (MainActor, tiny payload); write off-thread.
+            HostStore.io.async {
+                try? data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            }
+        }
     }
 }
 
@@ -274,8 +292,11 @@ extension HostInfo {
             let all = result.filter { candidate in
                 !loopbacks.contains { $0.url == candidate.url }
             }
-            let start = all.isEmpty ? 0 : (max(round, 0) % all.count) * min(3, all.count) % all.count
-            let window = (0..<min(3, all.count)).map { all[(start + $0) % all.count] }
+            // Round-robin window over non-loopback hints: each rebind round steps
+            // by one full window so every hint is tried across rounds.
+            let windowSize = min(3, all.count)
+            let start = all.isEmpty ? 0 : (max(round, 0) * windowSize) % all.count
+            let window = (0..<windowSize).map { all[(start + $0) % all.count] }
             result = loopbacks + window
             seen = Set(result.compactMap { $0.url?.absoluteString })
         }

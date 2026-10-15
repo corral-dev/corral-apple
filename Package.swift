@@ -69,6 +69,7 @@ let package = Package(
                 "NotificationReplyTests.swift",
                 "NotificationTapRoutingTests.swift",
                 "OneShotThrowingContinuationTests.swift",
+                "PairingCancellationTests.swift",
                 "PendingCommandStoreTests.swift",
                 "PushEnvironmentTests.swift",
                 "RecentSessionComboStoreTests.swift",

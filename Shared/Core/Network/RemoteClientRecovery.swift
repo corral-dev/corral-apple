@@ -1,6 +1,22 @@
 import Foundation
 
 @MainActor extension RemoteClient {
+    /// A queued send waits through a transient handshake/reconnect on this host.
+    /// Nothing is injected until an authenticated hello makes the path usable.
+    func waitForInputReadiness(timeout: Duration = .seconds(45)) async throws {
+        let hostID = reconnectHost?.hostID
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        while !isUsable {
+            try Task.checkCancellation()
+            guard allowReconnect, hostID != nil, reconnectHost?.hostID == hostID,
+                  terminalConnectionError == nil, ContinuousClock.now < deadline else {
+                throw ConnectionError.notConnected
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        guard reconnectHost?.hostID == hostID else { throw ConnectionError.notConnected }
+    }
+
     /// The encrypted host response, rather than socket creation, establishes usability.
     func confirmControl(_ hello: HelloResponse, source: PlaneIO) throws {
         guard isCurrentPlane(source, isControl: true), !Task.isCancelled else { throw CancellationError() }
@@ -52,6 +68,8 @@ import Foundation
             if raw["ok"] as? Bool == false { throw RemoteCallError(from: raw) ?? ConnectionError.invalidResponse }
             let hello = try RemoteJSONDecoder.decode(HelloResponse.self, from: raw["d"] ?? [:])
             try confirmControl(hello, source: source)
+            // A healthy socket does not establish that its retained views are current.
+            notifyReadyHandlers()
             retryDataPlaneIfNeeded()
             scheduleLocalUpgrade()
             return false

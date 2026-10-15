@@ -244,6 +244,11 @@ final class PushRegistrar: NSObject, UNUserNotificationCenterDelegate {
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
+        let hostID = notification.request.content.userInfo["host_id"] as? String
+        let sessionKey = notification.request.content.userInfo["session_key"] as? String
+        Task { @MainActor [weak self] in
+            self?.appModel?.client?.refreshAfterNotification(hostID: hostID, sessionKey: sessionKey)
+        }
         #if DEBUG
         let content = notification.request.content
         if ProcessInfo.processInfo.arguments.contains("-CorralInspectNotifications"),

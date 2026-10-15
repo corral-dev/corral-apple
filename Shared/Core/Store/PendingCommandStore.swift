@@ -63,6 +63,10 @@ struct PendingCommandRecord: Codable, Sendable, Equatable, Identifiable {
 /// Persists unresolved `command_id` metadata until receipt reconcile resolves them.
 enum PendingCommandStore {
     static var directoryOverride: URL?
+    /// Serializes file access off the caller (often MainActor) thread.
+    /// Writes are async; reads are sync on the same queue so a read observes
+    /// all previously queued writes.
+    private static let io = DispatchQueue(label: "com.x0c.corral.pending-commands", qos: .utility)
 
     private struct StoreFile: Codable, Equatable {
         var commands: [PendingCommandRecord]
@@ -86,35 +90,31 @@ enum PendingCommandStore {
     }
 
     static func upsert(_ record: PendingCommandRecord) {
-        var file = loadFile()
-        file.commands.removeAll { $0.commandID == record.commandID && $0.hostID == record.hostID }
-        file.commands.append(record)
-        saveFile(file)
+        mutate {
+            $0.commands.removeAll { $0.commandID == record.commandID && $0.hostID == record.hostID }
+            $0.commands.append(record)
+        }
     }
 
     static func updateDelivery(hostID: String, commandID: String, delivery: MessageDelivery, failureDetail: String? = nil) {
-        var file = loadFile()
-        guard let index = file.commands.firstIndex(where: {
-            $0.hostID == hostID && $0.commandID == commandID
-        }) else { return }
-        file.commands[index].delivery = delivery
-        if let failureDetail { file.commands[index].failureDetail = failureDetail }
-        if delivery == .sent || delivery == .failed {
-            file.commands.remove(at: index)
+        mutate {
+            guard let index = $0.commands.firstIndex(where: {
+                $0.hostID == hostID && $0.commandID == commandID
+            }) else { return }
+            $0.commands[index].delivery = delivery
+            if let failureDetail { $0.commands[index].failureDetail = failureDetail }
+            if delivery == .sent || delivery == .failed {
+                $0.commands.remove(at: index)
+            }
         }
-        saveFile(file)
     }
 
     static func remove(hostID: String, commandID: String) {
-        var file = loadFile()
-        file.commands.removeAll { $0.hostID == hostID && $0.commandID == commandID }
-        saveFile(file)
+        mutate { $0.commands.removeAll { $0.hostID == hostID && $0.commandID == commandID } }
     }
 
     static func removeAll(hostID: String) {
-        var file = loadFile()
-        file.commands.removeAll { $0.hostID == hostID }
-        saveFile(file)
+        mutate { $0.commands.removeAll { $0.hostID == hostID } }
     }
 
     /// Maps a host `command.status` string onto local bubble delivery.
@@ -155,6 +155,30 @@ enum PendingCommandStore {
     }
 
     private static func loadFile() -> StoreFile {
+        guard fileURL() != nil else { return StoreFile(commands: []) }
+        return io.sync { readUnqueued() }
+    }
+
+    private static func saveFile(_ file: StoreFile) {
+        guard let url = fileURL() else { return }
+        // Queued async to keep the caller off disk; reads use io.sync so they
+        // observe previously queued writes. Mutations below use mutate() for
+        // atomic read-modify-write instead of this path.
+        let data = try? JSONEncoder().encode(file)
+        guard let data else { return }
+        io.async { write(data, to: url) }
+    }
+
+    /// Atomic read-modify-write on the serial queue (no lost updates).
+    private static func mutate(_ transform: (inout StoreFile) -> Void) {
+        io.sync {
+            var file = readUnqueued()
+            transform(&file)
+            if let data = try? JSONEncoder().encode(file) { writeUnqueued(data) }
+        }
+    }
+
+    private static func readUnqueued() -> StoreFile {
         guard let url = fileURL(),
               let data = try? Data(contentsOf: url),
               let decoded = try? JSONDecoder().decode(StoreFile.self, from: data)
@@ -164,8 +188,12 @@ enum PendingCommandStore {
         return decoded
     }
 
-    private static func saveFile(_ file: StoreFile) {
+    private static func writeUnqueued(_ data: Data) {
         guard let url = fileURL() else { return }
+        write(data, to: url)
+    }
+
+    private nonisolated static func write(_ data: Data, to url: URL) {
         try? FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true
@@ -174,7 +202,6 @@ enum PendingCommandStore {
         var resourceValues = URLResourceValues()
         resourceValues.isExcludedFromBackup = true
         try? folder.setResourceValues(resourceValues)
-        guard let data = try? JSONEncoder().encode(file) else { return }
         try? data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         var mutable = url
         try? mutable.setResourceValues(resourceValues)

@@ -106,6 +106,7 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
         self.stream?.sink = nil
         self.stream = stream
         grid = nil
+        lastReportedFit = nil
         stream.sink = self
         stream.isInFront = { [weak self] in self?.isInFront ?? false }
         stream.updateTheme(palette.theme)
@@ -300,7 +301,9 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
     // MARK: - Geometry
 
     private var cell: CGSize { cellSize(for: fontSize) }
-
+    /// Last grid voted to the host: layout() runs on every drag/scroll step,
+    /// but the host only needs to hear about actual grid changes.
+    private var lastReportedFit: TerminalGrid?
     /// Cell size exactly as SwiftTerm computes it (advance of "W", line height
     /// snapped to the backing scale), so a frame of N cells yields N columns.
     private func cellSize(for size: CGFloat) -> CGSize {
@@ -329,6 +332,8 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
             cols: cols,
             rows: max(Self.minimumFit.rows, Int(usableHeight / rowCell.height))
         )
+        guard fit != lastReportedFit else { return }
+        lastReportedFit = fit
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-CorralInspectTerminalFit"), fit != lastInspectedFit {
             lastInspectedFit = fit
@@ -459,9 +464,13 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
 
     /// OSC 52 from host output. Project shells run arbitrary programs, so they
     /// may not write the clipboard (iTerm2's default; security review
-    /// 2026-10-07). Agent panes keep it for the agents' own copy commands.
+    /// 2026-10-07). Agent panes keep it for the agents' own copy commands, but
+    /// only while this pane is the focused, frontmost view: background output
+    /// must never silently replace what the person copied.
     func clipboardCopy(source: SwiftTerm.TerminalView, content: Data) {
         guard let key = stream?.sessionKey, !ProjectShell.isShellKey(key),
+              presentationEnabled, wantsKeyboardFocus, isInFront,
+              content.count <= 1_048_576,
               let text = String(data: content, encoding: .utf8) else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)

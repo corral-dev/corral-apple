@@ -37,9 +37,16 @@ struct MacTerminalPane: View {
         }
         .task(id: isPresented && isReady && needsStart) {
             guard isPresented, isReady, needsStart else { return }
-            // Unstructured: starting clears `needsStart`, which would cancel
-            // this task and drop the host's resume response.
-            Task { await start() }
+            // Detached so that flipping needsStart (startAttempted = true)
+            // does not cancel the in-flight resume: the guards inside re-check
+            // presentation, client and session before touching the host.
+            let key = session.key
+            let clientID = appModel.clientIdentity
+            Task { @MainActor in
+                guard isPresented, isReady, session.key == key,
+                      appModel.clientIdentity == clientID, needsStart else { return }
+                await start()
+            }
         }
         .onChange(of: stream?.phase) { _, phase in
             if phase == .live { sawLive = true }
@@ -180,6 +187,9 @@ struct MacTerminalPane: View {
 
     private func start() async {
         guard !isStarting else { return }
+        // The pane may have closed or switched hosts while the detached task
+        // was in flight: never resume a session nobody is watching.
+        guard isPresented, isReady else { return }
         startAttempted = true
         isStarting = true
         defer { isStarting = false }
@@ -188,6 +198,12 @@ struct MacTerminalPane: View {
             debugTrace("terminal start failed: \(error)")
             #endif
             startError = error
+            return
+        }
+        // Closed mid-resume: allow a later reopen to retry instead of sticking
+        // in attempted-but-never-started.
+        guard isPresented else {
+            startAttempted = false
             return
         }
         stream?.stop()

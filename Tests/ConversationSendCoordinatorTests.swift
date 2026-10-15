@@ -73,6 +73,21 @@ final class ConversationSendCoordinatorTests: XCTestCase {
         XCTAssertEqual(display.sendingStates, [true, false])
     }
 
+    func testCapabilityNegotiationCannotRemoveQueuedSendIdentity() async throws {
+        store.supportsCommandReceipts = false
+        let plan = try XCTUnwrap(coordinator.beginTextSend(
+            "resume and send", store: store, display: display,
+            reuseCommandID: nil, reuseSeq: nil, clearDraftOnStart: true,
+            isBusy: false, isHostReady: true
+        ))
+        let identity = try XCTUnwrap(plan.commandID)
+        store.supportsCommandReceipts = true
+        await coordinator.runTextSend(plan, store: store, display: display)
+        XCTAssertEqual(store.sentTexts.map(\.commandID), [identity])
+        XCTAssertTrue(display.errors.isEmpty)
+        XCTAssertEqual(store.messageDelivery(forSeq: plan.localSeq), .accepted)
+    }
+
     func testBusySendIsBlockedWithNoSideEffects() {
         let plan = coordinator.beginTextSend(
             "hello",

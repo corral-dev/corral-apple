@@ -37,6 +37,18 @@ final class AppModel {
     var sessionTextSize: SessionTextSize {
         didSet { UserDefaults.standard.set(sessionTextSize.rawValue, forKey: SessionTextSize.storageKey) }
     }
+    /// 应用内语言（写入 UserDefaults；同时同步 AppleLanguages 供下次启动的
+    /// Foundation 文案使用，SwiftUI 文案经 locale 环境即时切换）。
+    var appLanguage: AppLanguage {
+        didSet {
+            UserDefaults.standard.set(appLanguage.rawValue, forKey: AppLanguage.storageKey)
+            AppLanguageSynchronizer.apply(appLanguage)
+        }
+    }
+    /// 浅色 / 深色 / 跟随系统（写入 UserDefaults）。
+    var appAppearance: AppAppearance {
+        didSet { UserDefaults.standard.set(appAppearance.rawValue, forKey: AppAppearance.storageKey) }
+    }
 
     private let hostStore: HostStore
     private var stateWatchTask: Task<Void, Never>?
@@ -58,6 +70,12 @@ final class AppModel {
         }
         sessionTextSize = SessionTextSize.resolve(
             stored: UserDefaults.standard.string(forKey: SessionTextSize.storageKey)
+        )
+        appLanguage = AppLanguage.resolve(
+            stored: UserDefaults.standard.string(forKey: AppLanguage.storageKey)
+        )
+        appAppearance = AppAppearance.resolve(
+            stored: UserDefaults.standard.string(forKey: AppAppearance.storageKey)
         )
         startPathMonitor()
         ChatMarkdown.prewarm()

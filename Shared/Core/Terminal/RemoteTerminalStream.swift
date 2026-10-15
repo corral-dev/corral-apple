@@ -116,9 +116,9 @@ final class RemoteTerminalStream {
         readyHandlerID = nil
         guard wasRunning, let client else { return }
         let key = sessionKey
-        // Ordered behind any in-flight attach and ahead of a replacement view's
-        // attach on this same client/session. Never release the newer view's vote.
-        TerminalLifecycleQueue.enqueue(client: client, key: key) {
+        // Detach jumps the queue (see TerminalLifecycleQueue.detach): a failing
+        // attach must not hold the host channel for tens of seconds.
+        TerminalLifecycleQueue.detach(client: client, key: key) {
             _ = try? await client.call(WireProtocol.mTerminalDetach, params: ["key": key])
         }
     }
@@ -379,6 +379,21 @@ private enum TerminalLifecycleQueue {
         pending[key] = Pending(id: id, task: task)
         return task
     }
+
+    /// Detach jumps the queue: it must not wait behind a failing attach
+    /// (4 retries x 20s RPC) while holding a host channel. The attach checks
+    /// its generation after each attempt and aborts once `stop()` bumps it.
+    static func detach(client: RemoteClient, key session: String, operation: @escaping @MainActor () async -> Void) {
+        let key = Key(client: ObjectIdentifier(client), session: session)
+        // Leave the previous attach running to abort on its own generation
+        // check; do not block detach behind it.
+        let id = UUID()
+        let task = Task {
+            await operation()
+            if pending[key]?.id == id { pending[key] = nil }
+        }
+        pending[key] = Pending(id: id, task: task)
+    }
 }
 
 /// Serializes terminal input so the agent receives it in typing order, each
@@ -438,10 +453,13 @@ final class TerminalInputSender {
     }
 
     private func drain() async {
+        var retriedHead = false
         while !queue.isEmpty {
             let next = takeBatch()
             guard let client else {
                 debugTrace("terminal input lost its client")
+                // Client is gone: keep the batch for the next client instead of dropping keys.
+                queue.insert(next, at: 0)
                 break
             }
             do {
@@ -461,8 +479,21 @@ final class TerminalInputSender {
                         ]
                     )
                 }
+                retriedHead = false
+            } catch is CancellationError {
+                queue.insert(next, at: 0)
+                break
             } catch {
                 debugTrace("terminal input failed: \(error)")
+                if !retriedHead {
+                    // Transport blip: one requeue, then give up to avoid a hot loop.
+                    retriedHead = true
+                    queue.insert(next, at: 0)
+                    try? await Task.sleep(for: .milliseconds(300))
+                } else {
+                    // Second failure: drop this batch, allow the next one its own retry.
+                    retriedHead = false
+                }
             }
         }
         draining = false

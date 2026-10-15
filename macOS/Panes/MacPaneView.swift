@@ -19,6 +19,10 @@ struct MacPaneView: View {
     @State private var bodySize: CGSize = .zero
     @State private var paneFrame: CGRect = .zero
     @State private var terminalVisited = false
+    /// Bumped on every (re)appearance; a disappear-triggered stop only runs
+    /// when no reappearance has happened since, so a fast close→reopen can
+    /// never stop the revived store from underneath its new start().
+    @State private var visibilitySerial = 0
 
     init(session: SessionSummary, metadataStore: SessionListStore?, allowsClose: Bool = true,
          autoFocusComposer: Bool = false, retainedStore: ConversationStore? = nil,
@@ -155,7 +159,17 @@ struct MacPaneView: View {
             guard lifetime == nil else { return }
             workspace.paneFrames[session.key] = nil
             let owned = store
-            Task { await owned?.stop() }
+            let ticket = visibilitySerial
+            let key = session.key
+            Task { @MainActor in
+                // A reappearance bumps the serial in prepareStore(); skip the
+                // stop so it cannot land after the new start(). The key check
+                // covers a fresh view instance (new @State) reopening the same
+                // retained store while this task was in flight.
+                guard ticket == visibilitySerial,
+                      !workspace.paneKeys.contains(key) else { return }
+                await owned?.stop()
+            }
         }
     }
 
@@ -207,6 +221,7 @@ struct MacPaneView: View {
 
     @discardableResult
     private func prepareStore() -> ConversationStore? {
+        visibilitySerial &+= 1
         if let store {
             lifetime?.bind(store)
             #if DEBUG
@@ -509,6 +524,12 @@ struct MacPaneHeader: View {
     }
 
     private func loadRuntimes() async {
+        // The workspace already loads the runtime list once per connection;
+        // per-pane fetch is only a fallback for headers mounted before it.
+        if !workspace.runtimes.isEmpty {
+            runtimes = workspace.runtimes
+            return
+        }
         guard runtimes.isEmpty, let client = appModel.client,
               let data = try? await client.call(WireProtocol.mRuntimesList) as? [String: Any],
               let items = data["runtimes"] as? [[String: Any]] else { return }
@@ -519,6 +540,9 @@ struct MacPaneHeader: View {
 extension EnvironmentValues {
     /// Session keys of the panes currently on screen (split or board page).
     @Entry var macVisiblePaneKeys: [String] = []
+    /// Sidebar minute clock, ticked once per minute by the sidebar itself so
+    /// a hundred rows do not run a hundred per-minute timers.
+    @Entry var sidebarNow: Date = Date()
 }
 
 /// Identity of the connection a pane's subscriptions belong to.

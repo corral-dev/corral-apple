@@ -155,7 +155,8 @@ private struct MessageImageTile: View {
     private func displaySize(of image: PlatformImage) -> CGSize {
         let width = max(image.size.width / max(displayScale, 1), 1)
         let height = max(image.size.height / max(displayScale, 1), 1)
-        let scale = min(1, Self.maxSide / width, Self.maxSide / height)
+        let maxSide = Self.maxSide * interfaceScale
+        let scale = min(1, maxSide / width, maxSide / height)
         return CGSize(width: (width * scale).rounded(), height: (height * scale).rounded())
     }
 

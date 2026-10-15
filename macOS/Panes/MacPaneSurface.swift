@@ -228,6 +228,9 @@ struct MacPaneSurface: NSViewRepresentable {
         let allowsClose: Bool
         let autoFocusComposer: Bool
         let interfaceScale: CGFloat
+        /// Excluded from equality: focus/peer state already flows through
+        /// `lifetime.updateFocus` on every update, so a pane add/remove must
+        /// not rebuild every visible pane's root view.
         let visibleKeys: [String]
         let colorScheme: ColorScheme
         let locale: Locale
@@ -238,6 +241,24 @@ struct MacPaneSurface: NSViewRepresentable {
         let controlSize: ControlSize
         let dynamicTypeSize: DynamicTypeSize
         let reduceMotion: Bool
+
+        static func == (lhs: Configuration, rhs: Configuration) -> Bool {
+            lhs.session == rhs.session
+                && lhs.client == rhs.client
+                && lhs.metadata == rhs.metadata
+                && lhs.allowsClose == rhs.allowsClose
+                && lhs.autoFocusComposer == rhs.autoFocusComposer
+                && lhs.interfaceScale == rhs.interfaceScale
+                && lhs.colorScheme == rhs.colorScheme
+                && lhs.locale == rhs.locale
+                && lhs.calendar == rhs.calendar
+                && lhs.timeZone == rhs.timeZone
+                && lhs.layoutDirection == rhs.layoutDirection
+                && lhs.font == rhs.font
+                && lhs.controlSize == rhs.controlSize
+                && lhs.dynamicTypeSize == rhs.dynamicTypeSize
+                && lhs.reduceMotion == rhs.reduceMotion
+        }
     }
 
     final class Coordinator {
@@ -268,17 +289,19 @@ struct MacPaneSurface: NSViewRepresentable {
 
         override func layout() {
             super.layout()
-            DispatchQueue.main.async { [weak self] in
-                guard let self, let entry = self.entry, entry.lifetime.isPresented,
-                      entry.view.superview === self, let content = self.window?.contentView,
-                      let workspace = self.workspace else { return }
-                let native = self.convert(self.bounds, to: content)
-                let frame = CGRect(x: native.minX,
-                                   y: content.isFlipped ? native.minY : content.bounds.height - native.maxY,
-                                   width: native.width, height: native.height)
-                entry.lastFrame = frame
-                if workspace.paneFrames[self.key] != frame { workspace.paneFrames[self.key] = frame }
-            }
+            // Synchronous: click-to-focus reads paneFrames on the click event,
+            // and a deferred write is always one layout behind during resizes.
+            // AppKit layout runs outside SwiftUI body evaluation, so assigning
+            // the observable here is safe.
+            guard let entry = self.entry, entry.lifetime.isPresented,
+                  entry.view.superview === self, let content = self.window?.contentView,
+                  let workspace = self.workspace else { return }
+            let native = self.convert(self.bounds, to: content)
+            let frame = CGRect(x: native.minX,
+                               y: content.isFlipped ? native.minY : content.bounds.height - native.maxY,
+                               width: native.width, height: native.height)
+            entry.lastFrame = frame
+            if workspace.paneFrames[self.key] != frame { workspace.paneFrames[self.key] = frame }
         }
     }
 

@@ -112,6 +112,112 @@ final class ConnectionRecoveryTests: XCTestCase {
         XCTAssertEqual(count, 2, "One initial hello and one coalesced health check")
     }
 
+    func testMissingFinalDeltaRecoversOnHealthyForegroundAndNotification() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        ConversationTailCache.directoryOverride = directory
+        PendingCommandStore.directoryOverride = directory
+        defer {
+            ConversationTailCache.directoryOverride = nil
+            PendingCommandStore.directoryOverride = nil
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let server = try RecoveryHost()
+        let host = try await server.start()
+        defer { server.stop() }
+        let client = RemoteClient(devicePrivateKey: RemoteCryptoKeys.generatePrivateKey())
+        defer { client.disconnect() }
+        try await client.connect(host: host)
+        _ = try await client.hello(name: "review")
+        let plane = client.controlPlane
+        let store = ConversationStore(sessionKey: "codex:fixture", client: client, live: true, hostID: host.hostID)
+        await store.start()
+        XCTAssertEqual(store.messages.map(\.text), ["question"])
+        XCTAssertTrue(store.isAssistantWorking)
+
+        // The host has a final answer, but deliberately sends no live delta.
+        await server.setFinalAnswer("foreground final")
+        let reconnected = await client.probeAndMigrateIfNeeded()
+        XCTAssertFalse(reconnected)
+        try await waitForText("foreground final", in: store)
+        XCTAssertFalse(store.isAssistantWorking)
+        XCTAssertTrue(client.controlPlane === plane)
+
+        await server.setFinalAnswer("notification final")
+        XCTAssertFalse(client.refreshAfterNotification(hostID: "another-host", sessionKey: "codex:fixture"))
+        XCTAssertFalse(client.refreshAfterNotification(hostID: host.hostID, sessionKey: nil))
+        XCTAssertTrue(client.refreshAfterNotification(hostID: host.hostID, sessionKey: "codex:fixture"))
+        try await waitForText("notification final", in: store)
+        XCTAssertTrue(client.controlPlane === plane)
+
+        // No notification permission is needed when a terminal attention event arrives.
+        await store.handle(RemoteEvent(channel: "session:codex:fixture", data: ["kind": "attention", "attention": "working"]))
+        await server.setFinalAnswer("settled final")
+        await store.handle(RemoteEvent(channel: "session:codex:fixture", data: ["kind": "attention", "attention": "unread"]))
+        try await waitForText("settled final", in: store)
+        await store.stop()
+        await server.setFinalAnswer("after stop")
+        client.refreshAfterNotification(hostID: host.hostID, sessionKey: "codex:fixture")
+        XCTAssertFalse(store.messages.contains { $0.text == "after stop" })
+    }
+
+    func testQueuedInputWaitsForAuthenticatedHello() async throws {
+        let server = try RecoveryHost()
+        let host = try await server.start()
+        defer { server.stop() }
+        let client = RemoteClient(devicePrivateKey: RemoteCryptoKeys.generatePrivateKey())
+        defer { client.disconnect() }
+        try await client.connect(host: host)
+        let store = ConversationStore(sessionKey: "codex:fixture", client: client, live: false)
+        let sending = Task { try await store.sendText("old conversation", commandID: "retained-intent") }
+        try await Task.sleep(for: .milliseconds(120))
+        let beforeHello = await server.receivedInputIDs()
+        XCTAssertTrue(beforeHello.isEmpty)
+        _ = try await client.hello(name: "review")
+        try await sending.value
+        let afterHello = await server.receivedInputIDs()
+        XCTAssertEqual(afterHello, ["retained-intent"])
+        await store.stop()
+    }
+
+    func testDeliveredQuestionRetiresEvenWhenHostPromptsAreStillStale() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        ConversationTailCache.directoryOverride = directory
+        defer {
+            ConversationTailCache.directoryOverride = nil
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let server = try RecoveryHost(pendingQuestion: true)
+        let host = try await server.start()
+        defer { server.stop() }
+        let client = RemoteClient(devicePrivateKey: RemoteCryptoKeys.generatePrivateKey())
+        defer { client.disconnect() }
+        try await client.connect(host: host)
+        _ = try await client.hello(name: "review")
+        let store = ConversationStore(sessionKey: "codex:fixture", client: client, live: true, hostID: host.hostID)
+        await store.start()
+        XCTAssertEqual(store.prompts.first?.requestID, "question-one")
+        await store.submitQuestion(requestID: "question-one", answers: [
+            NativeQuestionAnswer(questionID: "0", selected: [], text: "Use the existing machine")
+        ])
+        XCTAssertTrue(store.prompts.isEmpty)
+        // The host deliberately keeps returning the old request during propagation.
+        client.refreshAfterNotification(hostID: host.hostID, sessionKey: "codex:fixture")
+        await store.handle(RemoteEvent(channel: "session:codex:fixture", data: [
+            "kind": "delta", "messages": [["seq": 3, "role": "assistant", "text": "Answer accepted"]]
+        ]))
+        try await Task.sleep(for: .milliseconds(250))
+        XCTAssertTrue(store.prompts.isEmpty, "An old host response must not revive an answered request")
+        await store.stop()
+    }
+
+    private func waitForText(_ text: String, in store: ConversationStore) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while !store.messages.contains(where: { $0.text == text }), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(store.messages.contains { $0.text == text }, "Missing final answer: \(text)")
+    }
+
     func testUpgradeIsConfirmedBeforeReplacingTheOldPath() async throws {
         let server = try RecoveryHost()
         let host = try await server.start()
@@ -159,9 +265,13 @@ nonisolated private final class RecoveryHost: @unchecked Sendable {
     private let paired: Bool
     private var rejectFirst: Bool
     private var hellos = 0
+    private var inputIDs: [String] = []
+    private var finalAnswer: String?
+    private let pendingQuestion: Bool
     private var connections: [NWConnection] = []
 
-    init(paired: Bool = true, rejectFirst: Bool = false) throws {
+    init(paired: Bool = true, rejectFirst: Bool = false, pendingQuestion: Bool = false) throws {
+        self.pendingQuestion = pendingQuestion
         self.paired = paired
         self.rejectFirst = rejectFirst
         let parameters = NWParameters.tcp
@@ -196,6 +306,16 @@ nonisolated private final class RecoveryHost: @unchecked Sendable {
                         localHints: ["127.0.0.1:\(port)"])
     }
 
+    func setFinalAnswer(_ text: String) async {
+        await withCheckedContinuation { continuation in
+            queue.async { self.finalAnswer = text; continuation.resume() }
+        }
+    }
+
+    func receivedInputIDs() async -> [String] {
+        await withCheckedContinuation { c in queue.async { c.resume(returning: self.inputIDs) } }
+    }
+
     func helloCount() async -> Int { await withCheckedContinuation { c in queue.async { c.resume(returning: self.hellos) } } }
     func stop() { queue.async { self.connections.forEach { $0.cancel() }; self.listener.cancel() } }
 
@@ -225,9 +345,28 @@ nonisolated private final class RecoveryHost: @unchecked Sendable {
                     send(try WireFrame.encode(type: WireProtocol.frameHello, channelID: channel, payload: ep), on: connection)
                 } else if frame.type == WireProtocol.frameData, let secure {
                     let message = try WireMessage.unpack(secure.decrypt(frame.payload))
-                    hellos += 1
-                    let reply: [String: Any] = ["t": "res", "id": message["id"] ?? 0, "ok": true,
-                        "d": ["paired": paired, "host_id": "review-fixture", "access": "readonly"]]
+                    let method = message["m"] as? String
+                    var payload: [String: Any] = [:]
+                    if method == WireProtocol.mHello {
+                        hellos += 1
+                        payload = ["paired": paired, "host_id": "review-fixture", "access": "readonly"]
+                    } else if method == WireProtocol.mSessionWatch {
+                        var messages: [[String: Any]] = [["seq": 1, "role": "user", "text": "question"]]
+                        if let finalAnswer { messages.append(["seq": 2, "role": "assistant", "text": finalAnswer]) }
+                        payload = ["messages": messages, "generation": 1, "oldest_seq": 1,
+                                   "newest_seq": messages.count, "has_more": false, "resume": "tail",
+                                   "attention": finalAnswer == nil ? "working" : "unread", "live": true]
+                    } else if method == WireProtocol.mSessionPrompts {
+                        payload = ["prompts": pendingQuestion ? [["id": "question-one", "request_id": "question-one",
+                            "question_id": "0", "prompt": "Which machine?", "options": [], "allow_custom": true]] : []]
+                    } else if method == WireProtocol.mInputQuestion {
+                        payload = ["status": "delivered"]
+                    } else if method == WireProtocol.mInputText {
+                        let params = message["p"] as? [String: Any] ?? [:]
+                        inputIDs.append(params["command_id"] as? String ?? "")
+                        payload = ["status": "delivered"]
+                    }
+                    let reply: [String: Any] = ["t": "res", "id": message["id"] ?? 0, "ok": true, "d": payload]
                     send(try WireFrame.encode(type: WireProtocol.frameData, channelID: channel,
                         payload: secure.encrypt(WireMessage.pack(reply))), on: connection)
                 }

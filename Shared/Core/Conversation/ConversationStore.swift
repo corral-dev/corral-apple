@@ -63,6 +63,7 @@ final class ConversationStore {
     /// Host `session.prompts` answered once: its native request identity wins over the
     /// rough message-derived fallback, so incoming messages never reset question drafts.
     private var hostPromptsLoaded = false
+    private var retiredQuestionRequestIDs = Set<String>()
     private(set) var isLive = false
     private(set) var loadError: String?
     private(set) var isLoading = false
@@ -105,6 +106,8 @@ final class ConversationStore {
     private var eventTask: Task<Void, Never>?
     private var receiptPollTask: Task<Void, Never>?
     private var readyHandlerID: UUID?
+    private var catchUpTask: Task<Void, Never>?
+    private var catchUpRequested = false
     /// 将一批实时增量收敛为一次提示选项查询，避免每条消息都占用同一条远程连接。
     private var promptRefreshTask: Task<Void, Never>?
     /// 上次成功应用到的历史代次；重连时带给开发机，对不上则改取尾部。
@@ -118,14 +121,14 @@ final class ConversationStore {
     private var outboundTail: Task<Void, Never>?
     /// Sends handed to the outgoing order that have not finished their request yet.
     private(set) var queuedOutboundCount = 0
-    /// Receipt polling settles an earlier send within 45 s; this only bounds a stuck wait.
-    static let outboundSettleTimeout: Duration = .seconds(60)
+    /// Bounds startup, reconnect and receipt settlement before a later send leaves.
+    static let outboundSettleTimeout: Duration = .seconds(120)
 
 #if DEBUG
     /// Tests suspend an actual detail request while events alter the retained window.
     var commandStatusRequestForTesting: ((String) async throws -> Any)?
     /// Tests observe the order in which outgoing text reaches the host.
-    var inputRequestForTesting: (([String: Any]) async throws -> Any)?
+    var inputRequestForTesting: (@MainActor ([String: Any]) async throws -> Any)?
     /// Tests move local bubbles back in time (e.g. restored from an old cache).
     func ageLocalMessagesForTesting(by seconds: Double) {
         for index in messages.indices where messages[index].isLocal {
@@ -323,6 +326,9 @@ final class ConversationStore {
     }
 
     func start() async {
+        catchUpTask?.cancel()
+        catchUpTask = nil
+        catchUpRequested = false
         lifecycleRevision &+= 1
         let revision = lifecycleRevision
         hasStopped = false
@@ -387,6 +393,9 @@ final class ConversationStore {
         }
         receiptPollTask?.cancel()
         receiptPollTask = nil
+        catchUpTask?.cancel()
+        catchUpTask = nil
+        catchUpRequested = false
         eventTask?.cancel()
         eventTask = nil
         promptRefreshTask?.cancel()
@@ -435,13 +444,16 @@ final class ConversationStore {
 
     /// Runs `operation` after every earlier send in this conversation has left and its
     /// host outcome has settled, so input reaches the assistant in tap order.
-    private func inOutboundOrder(_ operation: @escaping @MainActor () async throws -> Void) async throws {
+    private func inOutboundOrder(
+        excludingCommandID: String? = nil,
+        _ operation: @escaping @MainActor () async throws -> Void
+    ) async throws {
         let previous = outboundTail
         queuedOutboundCount += 1
         defer { queuedOutboundCount -= 1 }
         let turn = Task { @MainActor [weak self] in
             await previous?.value
-            await self?.waitForEarlierDeliveries()
+            await self?.waitForEarlierDeliveries(excludingCommandID: excludingCommandID)
             try await operation()
         }
         outboundTail = Task { _ = try? await turn.value }
@@ -452,18 +464,20 @@ final class ConversationStore {
     /// command identity inside the settle window. Identity-less echoes and stale
     /// bubbles (e.g. restored from the reopen cache) are never confirmed by
     /// receipt polling, so they must not hold back new sends.
-    private func waitForEarlierDeliveries() async {
+    private func waitForEarlierDeliveries(excludingCommandID: String?) async {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: Self.outboundSettleTimeout)
-        while !hasStopped, clock.now < deadline, hasConfirmingSend(now: Date()) {
+        while !hasStopped, clock.now < deadline,
+              hasConfirmingSend(now: Date(), excludingCommandID: excludingCommandID) {
             try? await Task.sleep(for: .milliseconds(200))
         }
     }
 
-    private func hasConfirmingSend(now: Date) -> Bool {
+    private func hasConfirmingSend(now: Date, excludingCommandID: String?) -> Bool {
         let window = Double(Self.outboundSettleTimeout.components.seconds)
         return messages.contains { message in
             guard message.isLocal, message.delivery == .accepted, message.commandID != nil,
+                  message.commandID != excludingCommandID,
                   let sentAt = message.timestamp else { return false }
             return now.timeIntervalSince1970 - sentAt < window
         }
@@ -473,7 +487,7 @@ final class ConversationStore {
     /// available, callers must already have persisted a pending bubble + `command_id`
     /// and cleared the composer.
     func sendText(_ text: String, submit: Bool = true, commandID: String? = nil) async throws {
-        try await inOutboundOrder { [weak self] in
+        try await inOutboundOrder(excludingCommandID: commandID) { [weak self] in
             try await self?.deliverText(text, submit: submit, commandID: commandID)
         }
     }
@@ -482,40 +496,31 @@ final class ConversationStore {
         guard let client else {
             throw RemoteClient.ConnectionError.notConnected
         }
-        var params: [String: Any] = [
-            "key": sessionKey,
+#if DEBUG && os(iOS)
+        let targetKey = InspectionLaunchOptions.claimRejectedSend(sessionKey: sessionKey, text: text)
+            ? "codex:corral-phone-acceptance-missing-target" : sessionKey
+#else
+        let targetKey = sessionKey
+#endif
+        let params: [String: Any] = [
+            "key": targetKey,
             "text": text,
             "submit": submit,
+            "command_id": commandID.flatMap { $0.isEmpty ? nil : $0 } ?? UUID().uuidString,
+            "lease_sec": 90,
         ]
-#if DEBUG && os(iOS)
-        if InspectionLaunchOptions.claimRejectedSend(sessionKey: sessionKey, text: text) {
-            params["key"] = "codex:corral-phone-acceptance-missing-target"
-        }
-#endif
-        let useReceipts = client.supportsCommandReceipts
-        if useReceipts, let commandID, !commandID.isEmpty {
-            params["command_id"] = commandID
-        }
         let startsTurn = submit && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         if startsTurn {
             beginProvisionalWorking()
         }
         let payload: Any
         do {
-#if DEBUG
-            if let inputRequestForTesting {
-                payload = try await inputRequestForTesting(params)
-            } else {
-                payload = try await client.call(WireProtocol.mInputText, params: params)
-            }
-#else
-            payload = try await client.call(WireProtocol.mInputText, params: params)
-#endif
+            payload = try await requestInputText(params, client: client)
         } catch {
             if startsTurn { cancelProvisionalWorking() }
             throw error
         }
-        if useReceipts, let commandID,
+        if let commandID = params["command_id"] as? String,
            let receipt = CommandStatusResponse.receipt(from: payload),
            let status = receipt.status {
             applyCommandStatus(commandID: commandID, status: status, failureDetail: receipt.detail)
@@ -529,17 +534,50 @@ final class ConversationStore {
         }
     }
 
+    private func requestInputText(_ params: [String: Any], client: RemoteClient) async throws -> Any {
+        let hostID = client.reconnectHost?.hostID
+        let deadline = ContinuousClock.now.advanced(by: .seconds(45))
+        var receiptCapable = client.supportsCommandReceipts
+        for attempt in 0..<3 {
+            do {
+#if DEBUG
+                if let hook = inputRequestForTesting { return try await hook(params) }
+#endif
+                guard ContinuousClock.now < deadline else { throw RemoteClient.ConnectionError.notConnected }
+                try await client.waitForInputReadiness(timeout: ContinuousClock.now.duration(to: deadline))
+                guard client.reconnectHost?.hostID == hostID else { throw CancellationError() }
+                receiptCapable = receiptCapable || client.supportsCommandReceipts
+                return try await client.call(WireProtocol.mInputText, params: params)
+            } catch {
+                // Only a durable receipt permits retry after a potentially sent
+                // frame. Reuse the same command identity; never retry a rejection.
+                guard receiptCapable, attempt < 2, client.allowReconnect,
+                      client.reconnectHost?.hostID == hostID,
+                      Self.isInputTransportFailure(error) else { throw error }
+                try await Task.sleep(for: .milliseconds(300 * (attempt + 1)))
+            }
+        }
+        throw RemoteClient.ConnectionError.notConnected
+    }
+
+    private static func isInputTransportFailure(_ error: Error) -> Bool {
+        if error is URLError { return true }
+        guard let error = error as? RemoteClient.ConnectionError else { return false }
+        switch error {
+        case .notConnected, .timeout, .sendFailed: return true
+        default: return false
+        }
+    }
+
     func sendKeys(_ keys: [String], commandID: String? = nil) async throws {
         guard let client else {
             throw RemoteClient.ConnectionError.notConnected
         }
-        var params: [String: Any] = [
+        let params: [String: Any] = [
             "key": sessionKey,
             "keys": keys,
+            "command_id": commandID.flatMap { $0.isEmpty ? nil : $0 } ?? UUID().uuidString,
         ]
-        if client.supportsCommandReceipts, let commandID, !commandID.isEmpty {
-            params["command_id"] = commandID
-        }
         _ = try await client.call(WireProtocol.mInputKeys, params: params)
     }
 
@@ -562,16 +600,13 @@ final class ConversationStore {
         guard let client else {
             throw RemoteClient.ConnectionError.notConnected
         }
-        var params: [String: Any] = [
+        let params: [String: Any] = [
             "key": sessionKey,
             "data": base64,
+            "command_id": commandID.flatMap { $0.isEmpty ? nil : $0 } ?? UUID().uuidString,
         ]
-        let useReceipts = client.supportsCommandReceipts
-        if useReceipts, let commandID, !commandID.isEmpty {
-            params["command_id"] = commandID
-        }
         let payload = try await client.call(WireProtocol.mInputImage, params: params)
-        if useReceipts, let commandID,
+        if let commandID = params["command_id"] as? String,
            let receipt = CommandStatusResponse.receipt(from: payload),
            let status = receipt.status {
             applyCommandStatus(commandID: commandID, status: status, failureDetail: receipt.detail)
@@ -629,7 +664,7 @@ final class ConversationStore {
         guard receiptPollTask == nil, !hasStopped, let client else { return }
         receiptPollTask = Task { [weak self] in
             defer { self?.receiptPollTask = nil }
-            let deadline = Date().addingTimeInterval(45)
+            let deadline = Date().addingTimeInterval(95)
             while !Task.isCancelled, Date() < deadline {
                 try? await Task.sleep(for: .seconds(1))
                 guard let self, !self.hasStopped, !Task.isCancelled else { return }
@@ -662,8 +697,25 @@ final class ConversationStore {
     private func registerReadyHandler(_ client: RemoteClient) {
         guard readyHandlerID == nil else { return }
         readyHandlerID = client.addReadyHandler { [weak self] in
+            self?.requestCatchUp()
+        }
+    }
+
+    private func requestCatchUp() {
+        guard !hasStopped, client != nil else { return }
+        catchUpRequested = true
+        guard catchUpTask == nil else { return }
+        let revision = lifecycleRevision
+        catchUpTask = Task { [weak self] in
             guard let self else { return }
-            Task { await self.repullAfterReconnect() }
+            defer {
+                if self.lifecycleRevision == revision { self.catchUpTask = nil }
+            }
+            while self.catchUpRequested, !self.hasStopped,
+                  self.lifecycleRevision == revision, !Task.isCancelled {
+                self.catchUpRequested = false
+                await self.repullAfterReconnect()
+            }
         }
     }
 
@@ -949,7 +1001,10 @@ final class ConversationStore {
                   prompts.contains(where: { $0.requestID == requestID }) else { return }
             switch response.status {
             case .delivered:
-                questionSubmissionState = .init(requestID: requestID, status: .delivered)
+                retiredQuestionRequestIDs.insert(requestID)
+                promptRequestRevision &+= 1
+                applyPrompts(prompts.filter { $0.requestID != requestID })
+                await loadPrompts()
             case .stale:
                 questionSubmissionState = .init(requestID: requestID, status: .stale(response.detail))
                 await loadPrompts()
@@ -967,11 +1022,12 @@ final class ConversationStore {
     }
 
     private func applyPrompts(_ newPrompts: [SessionPrompt]) {
-        let nextRequestID = newPrompts.first?.requestID
+        let pending = newPrompts.filter { !retiredQuestionRequestIDs.contains($0.requestID) }
+        let nextRequestID = pending.first?.requestID
         if nextRequestID != questionSubmissionState?.requestID {
             questionSubmissionState = nil
         }
-        let filtered = newPrompts.filter { $0.requestID == nextRequestID }
+        let filtered = pending.filter { $0.requestID == nextRequestID }
         if filtered != prompts {
             prompts = filtered
         }
@@ -991,7 +1047,9 @@ final class ConversationStore {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased() ?? ""
         if kind == "attention" {
+            let wasWorking = isAssistantWorking
             applyAttention(from: event.data)
+            if wasWorking, !isAssistantWorking { requestCatchUp() }
             return
         }
         if kind == "metadata" {
@@ -1065,7 +1123,9 @@ final class ConversationStore {
               let summary = try? RemoteJSONDecoder.decode(SessionSummary.self, from: summaryDict)
         else { return }
         attentionRevision += 1
+        let wasWorking = isAssistantWorking
         applyAuthoritativeAttention(summary.attention)
+        if wasWorking, !isAssistantWorking { requestCatchUp() }
         if summary.live != isLive {
             isLive = summary.live
         }

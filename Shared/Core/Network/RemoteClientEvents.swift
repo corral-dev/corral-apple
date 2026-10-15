@@ -20,6 +20,16 @@ import Foundation
         }
     }
 
+    /// APNs/local notification delivery is independent of the live socket.
+    /// Reconcile retained subscriptions only on the notification's current host.
+    @discardableResult
+    func refreshAfterNotification(hostID: String?, sessionKey: String?) -> Bool {
+        guard isUsable, let hostID, hostID == reconnectHost?.hostID,
+              let sessionKey, !sessionKey.isEmpty else { return false }
+        notifyReadyHandlers()
+        return true
+    }
+
     // MARK: - 事件订阅（多播）
 
     /// 订阅指定通道；返回的流在取消订阅或 disconnect 时结束。

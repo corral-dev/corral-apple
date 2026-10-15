@@ -1,6 +1,18 @@
 import AppKit
 import SwiftUI
 
+/// Group-header time text on the shared sidebar minute clock.
+private struct TimeText: View {
+    @Environment(\.sidebarNow) private var now
+    let session: SessionSummary
+
+    var body: some View {
+        Text(verbatim: MacSidebarMetrics.compactTime(for: session, now: now))
+            .interfaceFont(.subheadline.monospacedDigit())
+            .foregroundStyle(.secondary)
+    }
+}
+
 /// Session sidebar in the TUI's structure: quick filters (Active, runtime,
 /// project), pinned block, local-calendar day buckets, split groups shared
 /// with the TUI, and a local filter (title, project). Full-text body search is ⌘F.
@@ -43,8 +55,13 @@ struct MacSidebar: View {
     }
 
     var body: some View {
-        content
-            .modifier(MacZoomContent())
+        // One shared minute tick for every row's relative time (see
+        // `sidebarNow`): a hundred rows must not run a hundred per-minute timers.
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            content
+                .modifier(MacZoomContent())
+                .environment(\.sidebarNow, context.date)
+        }
             .task {
                   feed.listStore.refreshCalendar()
                 #if DEBUG
@@ -379,12 +396,8 @@ struct MacSidebar: View {
                     attentionSummary(DesktopSidebarProjection.attentionSummary(members))
                         .fixedSize()
                     if let newest = members.max(by: { $0.mtime < $1.mtime }) {
-                        TimelineView(.periodic(from: .now, by: 60)) { context in
-                            Text(verbatim: MacSidebarMetrics.compactTime(for: newest, now: context.date))
-                                .interfaceFont(.subheadline.monospacedDigit())
-                                .foregroundStyle(.secondary)
-                        }
-                        .fixedSize()
+                        TimeText(session: newest)
+                            .fixedSize()
                     }
                 }
                 .interfaceFrame(height: MacSidebarMetrics.titleLineHeight)

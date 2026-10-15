@@ -49,13 +49,19 @@ final class MacLocalHostSetup {
             state = .hidden
             return
         }
+        generation &+= 1
+        let current = generation
         state = .checking
         if let corral = await MacHostCommand.locateCorral() {
+            guard generation == current else { return }
             let hostID = await MacHostCommand.localHostID(corral: corral)
+            guard generation == current else { return }
             state = hostID.map(pairedHostIDs.contains) == true ? .hidden : .ready(corral: corral)
         } else if let brew = MacHostCommand.locateHomebrew() {
+            guard generation == current else { return }
             state = .needsInstall(brew: brew)
         } else {
+            guard generation == current else { return }
             state = .needsHomebrew
         }
     }
@@ -157,11 +163,17 @@ nonisolated enum MacHostCommand {
             .first { FileManager.default.isExecutableFile(atPath: $0.path) }
     }
 
-    /// The `corral` the user runs in Terminal (interactive login shell, which
-    /// reads the same startup files as Terminal) wins, so the
-    /// app never switches a working setup to another copy; known install
-    /// locations cover shells that fail or time out.
+    /// Known install locations first (instant `stat`); the interactive
+    /// login-shell lookup only runs when nothing is found there. A shell with
+    /// nvm/pyenv can take 3–5 s, and the user's Terminal `corral` still wins
+    /// whenever the known paths come up empty.
     static func locateCorral() async -> URL? {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let known = homebrewPrefixes.map { URL(fileURLWithPath: $0).appending(path: "bin/corral") }
+            + [home.appending(path: ".local/bin/corral")]
+        if let found = known.first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) {
+            return found
+        }
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         if let output = try? await run(URL(fileURLWithPath: shell), ["-ilc", "command -v corral"], timeout: 5),
            output.status == 0,
@@ -170,10 +182,7 @@ nonisolated enum MacHostCommand {
            path.hasPrefix("/"), FileManager.default.isExecutableFile(atPath: path) {
             return URL(fileURLWithPath: path)
         }
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let known = homebrewPrefixes.map { URL(fileURLWithPath: $0).appending(path: "bin/corral") }
-            + [home.appending(path: ".local/bin/corral")]
-        return known.first { FileManager.default.isExecutableFile(atPath: $0.path) }
+        return nil
     }
 
     /// This machine's host ID when its remote service has one; nil otherwise.
@@ -221,6 +230,10 @@ nonisolated enum MacHostCommand {
     }
 
     /// Runs a program to completion; cancelling the task terminates it.
+    ///
+    /// Pipes are drained with non-blocking `availableData` polling instead of
+    /// `readDataToEndOfFile`: a child that inherits the pipes (Homebrew build
+    /// steps do) would otherwise hold EOF open forever after the parent exits.
     static func run(_ executable: URL, _ arguments: [String], timeout: TimeInterval?) async throws -> Output {
         let process = Process()
         process.executableURL = executable
@@ -244,12 +257,26 @@ nonisolated enum MacHostCommand {
         }
         defer { timer?.cancel() }
         return try await withTaskCancellationHandler {
-            // Drain both pipes concurrently so a full buffer cannot stall the child.
-            async let out = Task.detached { stdout.fileHandleForReading.readDataToEndOfFile() }.value
-            async let err = Task.detached { stderr.fileHandleForReading.readDataToEndOfFile() }.value
-            let (outData, errData) = await (out, err)
+            var outData = Data(), errData = Data()
+            let outHandle = stdout.fileHandleForReading, errHandle = stderr.fileHandleForReading
+            while process.isRunning {
+                try Task.checkCancellation()
+                outData += outHandle.availableData
+                errData += errHandle.availableData
+                try? await Task.sleep(for: .milliseconds(50))
+            }
             await Task.detached { process.waitUntilExit() }.value
             try Task.checkCancellation()
+            // Trailing output grace: two short windows, then whatever arrived.
+            for _ in 0..<4 {
+                outData += outHandle.availableData
+                errData += errHandle.availableData
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+            outData += outHandle.availableData
+            errData += errHandle.availableData
+            try? outHandle.close()
+            try? errHandle.close()
             return Output(status: process.terminationStatus, stdout: outData, stderr: errData)
         } onCancel: {
             if process.isRunning { terminateTree(process.processIdentifier) }
@@ -258,11 +285,22 @@ nonisolated enum MacHostCommand {
 
     /// Homebrew starts downloads and builds as child processes that would keep
     /// running (and keep the output pipes open) after only the parent stops.
-    /// Children first, so none is reparented before it is signalled.
+    /// Children first, so none is reparented before it is signalled; survivors
+    /// get SIGKILL after a grace period. Never signals PID 1 or ourselves.
     static func terminateTree(_ pid: pid_t) {
-        guard pid > 0 else { return }
-        for child in childProcesses(of: pid) { terminateTree(child) }
-        kill(pid, SIGTERM)
+        guard pid > 1, pid != getpid() else { return }
+        var tree = [pid]
+        collectTree(pid, into: &tree)
+        for member in tree { kill(member, SIGTERM) }
+        usleep(500_000)
+        for member in tree where kill(member, 0) == 0 { kill(member, SIGKILL) }
+    }
+
+    private static func collectTree(_ pid: pid_t, into tree: inout [pid_t]) {
+        for child in childProcesses(of: pid) {
+            tree.append(child)
+            collectTree(child, into: &tree)
+        }
     }
 
     private static func childProcesses(of pid: pid_t) -> [pid_t] {

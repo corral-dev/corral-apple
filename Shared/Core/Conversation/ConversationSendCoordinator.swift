@@ -171,7 +171,7 @@ struct ConversationSendCoordinator: Sendable {
         display.scrollToLatest()
         let imageDrafts = images.map { image in
             var image = image
-            if store.supportsCommandReceipts, image.commandID == nil {
+            if image.commandID == nil {
                 image.commandID = UUID().uuidString
             }
             return image
@@ -218,10 +218,12 @@ struct ConversationSendCoordinator: Sendable {
             for image in plan.images {
                 let commandID = image.commandID
                 if let commandID {
+                    // Give each image its own bubble seq (multi-image failure mapping).
+                    let seq = store.enqueueLocalUser("[image]", commandID: commandID, reusingSeq: nil)
                     store.recordPendingCommand(
                         commandID: commandID,
                         text: "[image]",
-                        localSeq: 0
+                        localSeq: seq
                     )
                 }
                 try await store.sendImage(base64: image.base64, commandID: commandID)
@@ -372,7 +374,9 @@ struct ConversationSendCoordinator: Sendable {
             localSeq = reuseSeq
             store.applyCommandStatus(commandID: reuseCommandID, status: "unseen", failureDetail: nil)
         } else {
-            commandID = useReceipts ? UUID().uuidString : nil
+            // Identity belongs to the user's intent, before hello/capability
+            // state can change while this send waits in the outgoing queue.
+            commandID = UUID().uuidString
             localSeq = store.enqueueLocalUser(text, commandID: commandID, reusingSeq: reuseSeq)
             if let commandID, let localSeq {
                 store.recordPendingCommand(commandID: commandID, text: text, localSeq: localSeq)
@@ -395,8 +399,11 @@ struct ConversationSendCoordinator: Sendable {
             submit: true,
             commandID: plan.commandID
         )
-        if !plan.useReceipts {
+        if !store.supportsCommandReceipts {
             store.markLocalSent(text: nil, seq: plan.localSeq)
+            if let commandID = plan.commandID {
+                store.applyCommandStatus(commandID: commandID, status: "delivered", failureDetail: nil)
+            }
         } else if let commandID = plan.commandID,
                   store.messages.first(where: {
                       if let localSeq = plan.localSeq { return $0.seq == localSeq }

@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""把官方 SVG 归一成同一画布的透明 PNG，写入 Asset Catalog。禁止改色或重绘轮廓。"""
+"""把官方 SVG 归一成同一画布的透明 PNG，写入 Asset Catalog。禁止改轮廓、拉伸、重绘。
+
+黑白规则（机主 2026-10-15）：客户端展示的助手标识一律黑白化，不搞特殊。
+每个助手提供浅色底（近黑）与深色底（近白）两套官方轮廓，Claude 用 Anthropic
+官方单色标（press kit one-color），不再用陶土橙。新增助手必须同样提供
+浅/深两套单色源文件，否则不进 Asset Catalog。"""
 
 from __future__ import annotations
 
@@ -13,7 +18,7 @@ from PIL import Image
 HERE = Path(__file__).resolve().parent
 SOURCE = HERE / "source"
 NORMALIZED = HERE / "normalized"
-ASSET_ROOT = HERE.parent.parent / "Corral" / "Assets.xcassets"
+ASSET_ROOT = HERE.parent.parent / "Shared" / "Resources" / "SharedAssets.xcassets"
 
 CANVAS = 256
 PAD_RATIO = 0.16  # 四周留白，让各家在 36pt 方块里视觉重量接近
@@ -21,7 +26,7 @@ SCALES = (("1x", 36), ("2x", 72), ("3x", 108))
 
 # (asset 名, 浅色底源, 深色底源；深色为 None 表示深浅共用)
 ITEMS: list[tuple[str, str, str | None]] = [
-    ("RuntimeClaude", "claude.svg", None),
+    ("RuntimeClaude", "claude-light.svg", "claude-dark.svg"),
     ("RuntimeCodex", "codex-light.svg", "codex-dark.svg"),
     ("RuntimeCursor", "cursor-light.svg", "cursor-dark.svg"),
     ("RuntimeKimi", "kimi-light.svg", "kimi-dark.svg"),

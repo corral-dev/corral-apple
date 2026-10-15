@@ -23,8 +23,9 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-# Every Apple client target shares one string catalog.
-DEFAULT_SOURCES = [REPO / "iOS", REPO / "Shared", REPO / "macOS"]
+# Every Apple client target shares one string catalog (including the NSE,
+# which compiles its own copy of the crypto/keychain sources + catalog).
+DEFAULT_SOURCES = [REPO / "iOS", REPO / "Shared", REPO / "macOS", REPO / "NotificationService"]
 DEFAULT_XCSTRINGS = REPO / "Shared" / "Resources" / "Localizable.xcstrings"
 
 # First string argument of view constructors that resolve via LocalizedStringKey.

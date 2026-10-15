@@ -317,4 +317,10 @@ enum SessionListFiltering {
         while out.count > 1 && out.hasSuffix("/") { out.removeLast() }
         return out
     }
+
+    /// Raw-path form of the canonical identity, for non-session callers
+    /// (e.g. the Mac split project check) that only hold a directory string.
+    static func directoryIdentity(ofPath raw: String) -> String {
+        normalizeDirectory(raw)
+    }
 }

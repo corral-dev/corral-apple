@@ -103,6 +103,9 @@ final class MacWorkspace {
         feed = nil
         shells.reset()
         pendingTerminalClose = nil
+        // Drop the previous host's mode signals; the persisted modes table is
+        // pruned lazily on write, signals are cheap to rebuild.
+        modeSignals = modeSignals.filter { $0.key.hasPrefix("\(id ?? ""):") }
     }
 
     // MARK: - Chat / terminal per session (chat by default, remembered)
@@ -116,7 +119,8 @@ final class MacWorkspace {
     func mode(for key: String) -> PaneMode {
         if ProjectShell.isShellKey(key) { return .terminal }
         let storageKey = modeKey(key)
-        _ = modeSignal(storageKey).revision
+        // Read-only: observing the signal must not grow the table on every render.
+        if let signal = modeSignals[storageKey] { _ = signal.revision }
         return modes[storageKey].flatMap(PaneMode.init(rawValue:)) ?? .chat
     }
 
@@ -125,7 +129,26 @@ final class MacWorkspace {
         guard modes[storageKey] != mode.rawValue else { return }
         modes[storageKey] = mode.rawValue
         modeSignal(storageKey).revision &+= 1
+        pruneModesIfNeeded()
         UserDefaults.standard.set(modes, forKey: Self.modesKey)
+    }
+
+    /// Modes are keyed by host+session and would otherwise grow without bound
+    /// across machines and history. Cap the table; eviction only forgets a
+    /// remembered chat/terminal choice (defaults back to chat).
+    private func pruneModesIfNeeded(limit: Int = 500) {
+        guard modes.count > limit else { return }
+        let hostPrefix = "\(hostID ?? ""):"
+        // Prefer evicting other hosts' entries first.
+        for key in modes.keys where !key.hasPrefix(hostPrefix) {
+            modes.removeValue(forKey: key)
+            modeSignals.removeValue(forKey: key)
+            if modes.count <= limit { break }
+        }
+        while modes.count > limit, let key = modes.keys.first {
+            modes.removeValue(forKey: key)
+            modeSignals.removeValue(forKey: key)
+        }
     }
 
     private func modeSignal(_ storageKey: String) -> ModeSignal {
@@ -284,7 +307,12 @@ final class MacWorkspace {
         leavingPanes[key] = nil
         let before = drawnPaneKeys
         if paneKeys.count >= Self.maxPanes, let focusedKey, let index = paneKeys.firstIndex(of: focusedKey) {
+            // Full split: the replaced pane fades out of its slot like a close.
+            let replaced = paneKeys[index]
             paneKeys[index] = key
+            let slot = before.firstIndex(of: replaced) ?? index
+            beginLeaving(replaced, slot: slot)
+            paneSurfaces.evict(replaced)
         } else {
             paneKeys.append(key)
         }
@@ -313,9 +341,7 @@ final class MacWorkspace {
     }
 
     private static func projectIdentity(_ path: String) -> String {
-        var value = path.trimmingCharacters(in: .whitespacesAndNewlines)
-        while value.count > 1 && value.hasSuffix("/") { value.removeLast() }
-        return value
+        SessionListFiltering.directoryIdentity(ofPath: path)
     }
 
     /// Pane ✕ / ⌘W: the hosted session keeps running; the pane leaves the split
@@ -376,9 +402,12 @@ final class MacWorkspace {
     private func beginLeaving(_ key: String, slot: Int) {
         pendingEntrances.remove(key)
         leavingPanes[key] = slot
+        glideSerial += 1
+        let serial = glideSerial
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(MacMotion.seconds(MacMotion.paneExitSeconds)))
-            guard let self, self.leavingPanes[key] != nil, !self.paneKeys.contains(key) else { return }
+            guard let self, self.glideSerial == serial,
+                  self.leavingPanes[key] != nil, !self.paneKeys.contains(key) else { return }
             let before = self.drawnPaneKeys
             self.leavingPanes[key] = nil
             self.glide(from: before)
@@ -556,14 +585,20 @@ final class MacWorkspace {
         layoutGeneration = UUID()
         layoutTask?.cancel()
         layoutTask = nil
-        if let readyHandlerID, let layoutClient {
-            layoutClient.removeReadyHandler(readyHandlerID)
-        }
+        let readyID = readyHandlerID
+        let client = layoutClient
         readyHandlerID = nil
-        if let client = layoutClient {
-            Task { _ = try? await client.call(WireProtocol.mLayoutUnwatch) }
-        }
         layoutClient = nil
+        // Unwatch the exact client that was watched. A bare Task would race a
+        // just-started watch on the new host and could unwatch the new
+        // subscription; binding the call to the captured client avoids that.
+        if let readyID, let client {
+            client.removeReadyHandler(readyID)
+        }
+        if let client {
+            let captured = client
+            Task { _ = try? await captured.call(WireProtocol.mLayoutUnwatch) }
+        }
     }
 
     private func loadRuntimes(_ client: RemoteClient) async {
@@ -589,7 +624,13 @@ final class MacWorkspace {
         #if DEBUG
         guard !ProcessInfo.processInfo.arguments.contains("-CorralInspectToolActivity") else { return }
         #endif
-        guard snapshot.revision >= layout.revision || snapshot.revision == 0 else { return }
+        // Revision 0 means the host reset its counter: only accept it over an
+        // empty local layout, otherwise a reset snapshot could roll back newer state.
+        if snapshot.revision == 0 {
+            guard layout.revision == 0 else { return }
+        } else {
+            guard snapshot.revision >= layout.revision else { return }
+        }
         layout = snapshot
     }
 
@@ -721,7 +762,13 @@ final class MacWorkspace {
         } catch {
             guard !Task.isCancelled, appModel?.client === client, hostID == host else { return nil }
             if !(error is CancellationError) {
-                report(SessionActionsMenu.failureMessage(for: error))
+                if background {
+                    // Background group/focus/remove syncs retry on the next
+                    // change; trace the drop so a permanently forked split is diagnosable.
+                    debugTrace("mac layout background \(method) failed: \(error)")
+                } else {
+                    report(SessionActionsMenu.failureMessage(for: error))
+                }
             }
             return nil
         }

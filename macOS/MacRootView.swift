@@ -196,9 +196,8 @@ struct MacRootView: View {
         }
         .onChange(of: canUseTerminal, initial: true) { _, usable in commands.canUseTerminal = usable }
         .onChange(of: appModel.selectedHost?.hostID) { _, _ in shellSupported = false }
-        .onChange(of: commands.focusPaneRequest) { _, index in
-            if let index { workspace.focusPane(at: index) }
-            commands.focusPaneRequest = nil
+        .onChange(of: commands.focusPaneRequest) { _, _ in
+            workspace.focusPane(at: commands.focusPaneIndex)
         }
         .onChange(of: commands.pinRequest) { _, _ in
             if let key = workspace.focusedKey { Task { await workspace.togglePin(key) } }
@@ -276,7 +275,7 @@ struct MacRootView: View {
                 Label("mac.pane.add", systemImage: "rectangle.split.2x1")
             }
             .help(Text("mac.pane.add.help"))
-            .disabled(!canCreateSession || workspace.paneKeys.isEmpty)
+            .disabled(!canCreateSession)
         }
     }
 
@@ -334,6 +333,11 @@ struct MacRootView: View {
             return
         }
         let current = await notifications.sessionFeed(host: host, model: appModel)
+        guard !Task.isCancelled, appModel.selectedHost?.hostID == host.hostID else {
+            restoringHostID = nil
+            return
+        }
+        feedClientIdentity = nil
         feed = current
         workspace.feed = current
         current.onSessionMigrated = { [weak workspace] old, new in workspace?.carryMode(from: old, to: new) }
@@ -341,7 +345,10 @@ struct MacRootView: View {
             if let current { await notifications.resolvePending(feed: current, workspace: workspace) }
         }
         guard !Task.isCancelled, appModel.selectedHost?.hostID == host.hostID,
-              feed === current else { return }
+              feed === current else {
+            restoringHostID = nil
+            return
+        }
         feedClientIdentity = appModel.clientIdentity
         workspace.startLayoutWatch()
         restorePanes(from: current)
@@ -500,15 +507,15 @@ struct MacRootView: View {
     /// (text selection, buttons and the terminal still receive it).
     private func installClickToFocus() {
         guard clickMonitor == nil else { return }
-        clickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [workspace] event in
-            if let window = event.window, let content = window.contentView {
+        clickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak workspace] event in
+            if let workspace, let window = event.window, let content = window.contentView {
                 let point = CGPoint(x: event.locationInWindow.x, y: content.bounds.height - event.locationInWindow.y)
                 if let key = workspace.paneKey(atWindowPoint: point) {
                     workspace.focus(key)
                     // Once the click is handled: keep a text selection or the
                     // pane's composer, else put the caret in the composer.
-                    DispatchQueue.main.async { [weak window] in
-                        workspace.claimKeysAfterClick(in: key, window: window)
+                    DispatchQueue.main.async { [weak workspace, weak window] in
+                        if let workspace { workspace.claimKeysAfterClick(in: key, window: window) }
                     }
                 }
             }

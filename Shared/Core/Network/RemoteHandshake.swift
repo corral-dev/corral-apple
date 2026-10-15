@@ -18,6 +18,7 @@ import Foundation
     ) async throws -> HandshakeRace.Win {
         // 没人要的赢家（迟到 / 已取消）直接关 socket。
         let arena = HandshakeArbiter<HandshakeRace.Win> { win in win.close() }
+        let raceStart = Date()
         for candidate in candidates {
             arena.launch {
                 let race = HandshakeRace(
@@ -42,8 +43,11 @@ import Foundation
                         .filter { $0.transport == .local && !known.contains($0.url?.absoluteString ?? "") }
                 }
                 guard !fresh.isEmpty else { throw CancellationError() }
+                // Nested race must not extend the outer budget: pass the remainder.
+                let remaining = overallTimeout - Date().timeIntervalSince(raceStart)
+                guard remaining > 1 else { throw CancellationError() }
                 return try await raceHandshakes(candidates: fresh, devicePrivateKey: devicePrivateKey,
-                    hostPublicKey: hostPublicKey, overallTimeout: overallTimeout)
+                    hostPublicKey: hostPublicKey, overallTimeout: remaining)
             }
         }
         return try await arena.awaitWinner(overallTimeout: overallTimeout)

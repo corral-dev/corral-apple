@@ -103,15 +103,18 @@ nonisolated final class PlaneIO: @unchecked Sendable {
     private static func send(_ frame: Data, on socket: URLSessionWebSocketTask) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let gate = OneShotThrowingContinuation(continuation)
+            let watchdog = Task.detached {
+                try? await Task.sleep(for: .seconds(sendTimeout))
+                guard !Task.isCancelled else { return }
+                gate.resume(throwing: RemoteClient.ConnectionError.timeout)
+            }
             socket.send(.data(frame)) { error in
+                watchdog.cancel()
                 if let error {
                     gate.resume(throwing: error)
                 } else {
                     gate.resume()
                 }
-            }
-            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + sendTimeout) {
-                gate.resume(throwing: RemoteClient.ConnectionError.timeout)
             }
         }
     }

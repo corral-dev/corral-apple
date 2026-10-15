@@ -19,6 +19,23 @@ struct CorralMacApp: App {
 
     private static let baseMinimumWidth: CGFloat = 760
 
+    /// Debug inspection captures keep precedence; otherwise the Settings choice
+    /// applies (nil follows the system appearance).
+    private var resolvedColorScheme: ColorScheme? {
+        #if DEBUG
+        InspectionLaunchOptions.forcedColorScheme ?? appModel.appAppearance.colorScheme
+        #else
+        appModel.appAppearance.colorScheme
+        #endif
+    }
+
+    /// The in-app language as a SwiftUI locale (system follows the OS).
+    /// Foundation `String(localized:)` strings pick the same language up from
+    /// AppleLanguages on the next launch.
+    private var resolvedLocale: Locale {
+        appModel.appLanguage.locale ?? Locale.autoupdatingCurrent
+    }
+
     init() {
         #if CORRAL_DIRECT_DOWNLOAD
         // Keep scheduled updates alive independently of menus and Settings.
@@ -37,6 +54,8 @@ struct CorralMacApp: App {
                 .environment(commands)
                 .tint(Palette.accent)
                 .focusEffectDisabled()
+                .environment(\.locale, resolvedLocale)
+                .preferredColorScheme(resolvedColorScheme)
                 .frame(minWidth: minimumWidth, minHeight: 480)
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .active {
@@ -51,7 +70,6 @@ struct CorralMacApp: App {
                     minimumWidth = max(Self.baseMinimumWidth, required)
                 }
                 #if DEBUG
-                .preferredColorScheme(InspectionLaunchOptions.forcedColorScheme)
                 .draftImageInspection()
                 // Standalone polish fixture: real question/error views over the
                 // main window, no pairing or session. Captured by window id.
@@ -92,6 +110,8 @@ struct CorralMacApp: App {
             MacSettingsView()
                 .modifier(MacZoomScope(zoom: zoom))
                 .environment(appModel)
+                .environment(\.locale, resolvedLocale)
+                .preferredColorScheme(resolvedColorScheme)
                 .tint(Palette.accent)
                 .focusEffectDisabled()
         }
@@ -108,7 +128,10 @@ final class MacCommandCenter {
     var toggleViewRequest = 0
     var searchRequest = 0
     var pinRequest = 0
-    var focusPaneRequest: Int?
+    /// Focus-pane requests need a counter, not an assigned index: pressing ⌘2
+    /// twice before the window clears the value must deliver two requests.
+    var focusPaneIndex = 0
+    var focusPaneRequest = 0
     var pairRequest = 0
     var nextAttentionRequest = 0
     var previousAttentionRequest = 0
@@ -151,8 +174,11 @@ struct MacCommands: Commands {
                 .disabled(!center.hasFocusedPane)
             Divider()
             ForEach(0..<4, id: \.self) { index in
-                Button("mac.pane.focus \(index + 1)") { center.focusPaneRequest = index }
-                    .keyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: .command)
+                Button("mac.pane.focus \(index + 1)") {
+                    center.focusPaneIndex = index
+                    center.focusPaneRequest += 1
+                }
+                .keyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: .command)
             }
             Divider()
             Button("mac.menu.next_needs_you") { center.nextAttentionRequest += 1 }

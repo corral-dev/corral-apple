@@ -236,7 +236,10 @@ struct MacFulltextSearch: View {
     }
 
     private func openMatch(_ key: String) {
-        guard openingKey == nil, !searchStore.isSearching else { return }
+        guard openingKey == nil else { return }
+        // Opening wins over a running search: cancel the search first so
+        // Return never looks dead while results stream in.
+        if searchStore.isSearching { searchStore.invalidate() }
         openingKey = key
         openingError = nil
         let mine = UUID()

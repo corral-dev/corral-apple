@@ -31,6 +31,14 @@ struct CorralApp: App {
             }
             .tint(Palette.accent)
             .environment(appModel)
+            .environment(\.locale, appModel.appLanguage.locale ?? Locale.autoupdatingCurrent)
+            #if DEBUG
+            // Inspection captures keep precedence; otherwise the Settings choice
+            // applies. Release builds carry no inspection override.
+            .preferredColorScheme(InspectionLaunchOptions.forcedColorScheme ?? appModel.appAppearance.colorScheme)
+            #else
+            .preferredColorScheme(appModel.appAppearance.colorScheme)
+            #endif
             .task {
                 let arguments = ProcessInfo.processInfo.arguments
                 guard arguments.contains("-CorralInspectConversation")
@@ -45,9 +53,6 @@ struct CorralApp: App {
                 navigationPath.append(host)
             }
             #if DEBUG
-            // Inspection only: lets one installed Debug build be photographed in both
-            // appearances. Release builds carry neither the switch nor the override.
-            .preferredColorScheme(InspectionLaunchOptions.forcedColorScheme)
             .draftImageInspection()
             .task {
                 guard let raw = ProcessInfo.processInfo.environment["CORRAL_INSPECTION_PAIR_URL"],

@@ -7,6 +7,7 @@ import SwiftUI
 struct MacSessionRow: View {
     @Environment(\.interfaceScale) private var interfaceScale
     @Environment(\.sidebarRowSize) private var rowSize
+    @Environment(\.sidebarNow) private var now
     let session: SessionSummary
     /// Project name already shown by the enclosing split header, if any.
     var groupProject: String?
@@ -25,13 +26,11 @@ struct MacSessionRow: View {
                         .truncationMode(.tail)
                     Spacer(minLength: Space.xs * interfaceScale)
                     statusDot
-                    TimelineView(.periodic(from: .now, by: 60)) { context in
-                        Text(verbatim: MacSidebarMetrics.compactTime(for: session, now: context.date))
-                            .interfaceFont(.subheadline.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                    .fixedSize()
+                    Text(verbatim: MacSidebarMetrics.compactTime(for: session, now: now))
+                        .interfaceFont(.subheadline.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .fixedSize()
                 }
                 .interfaceFrame(height: MacSidebarMetrics.titleLineHeight)
 

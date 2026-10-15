@@ -453,6 +453,12 @@ final class RemoteClient: NSObject {
                 win.close()
                 return
             }
+            // In-flight RPCs are tied to the old plane: swapping now would fail
+            // them all. Stay on relay; the next upgrade attempt retries when idle.
+            guard pendingRequests.isEmpty else {
+                win.close()
+                return
+            }
             teardownSocket(keepSubscriptions: true)
             adopt(win)
         } catch {

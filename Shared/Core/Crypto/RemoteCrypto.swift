@@ -162,7 +162,7 @@ nonisolated final class SecureChannel: @unchecked Sendable {
         guard frame.count >= 8 + 16 else {
             throw RemoteCryptoError.channel("密文帧过短")
         }
-        let counter = frame.prefix(8).withUnsafeBytes { $0.load(as: UInt64.self).bigEndian }
+        let counter = frame.prefix(8).withUnsafeBytes { UInt64(bigEndian: $0.load(as: UInt64.self)) }
         guard counter == recvCounter else {
             throw RemoteCryptoError.channel("加密帧顺序异常")
         }

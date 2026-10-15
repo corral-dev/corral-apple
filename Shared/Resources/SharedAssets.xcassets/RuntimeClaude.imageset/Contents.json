@@ -7,13 +7,46 @@
     },
     {
       "idiom": "universal",
+      "scale": "1x",
+      "filename": "runtimeclaude-dark@1x.png",
+      "appearances": [
+        {
+          "appearance": "luminosity",
+          "value": "dark"
+        }
+      ]
+    },
+    {
+      "idiom": "universal",
       "scale": "2x",
       "filename": "runtimeclaude-light@2x.png"
     },
     {
       "idiom": "universal",
+      "scale": "2x",
+      "filename": "runtimeclaude-dark@2x.png",
+      "appearances": [
+        {
+          "appearance": "luminosity",
+          "value": "dark"
+        }
+      ]
+    },
+    {
+      "idiom": "universal",
       "scale": "3x",
       "filename": "runtimeclaude-light@3x.png"
+    },
+    {
+      "idiom": "universal",
+      "scale": "3x",
+      "filename": "runtimeclaude-dark@3x.png",
+      "appearances": [
+        {
+          "appearance": "luminosity",
+          "value": "dark"
+        }
+      ]
     }
   ],
   "info": {
