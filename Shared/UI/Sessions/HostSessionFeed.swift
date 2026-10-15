@@ -1,5 +1,10 @@
 import Foundation
 import Observation
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
 
 /// One host's live session list: cache-first bootstrap, `sessions.watch`
 /// subscription, reconnect rewatch, periodic reconciliation, host search and the
@@ -18,7 +23,7 @@ final class HostSessionFeed {
     static let listRecheckInterval: Duration = .seconds(20)
 
     let host: HostInfo
-    let listStore = SessionListStore()
+    let listStore: SessionListStore
     private(set) var isLoading = true
     var loadError: String?
     /// True while the owning surface is visible; work is consumed only then.
@@ -40,9 +45,12 @@ final class HostSessionFeed {
     @ObservationIgnored private var watchTask: Task<Void, Never>?
     @ObservationIgnored private var unwatchTask: Task<Void, Never>?
     @ObservationIgnored private var searchTask: Task<Void, Never>?
+    @ObservationIgnored private var calendarTask: Task<Void, Never>?
+    @ObservationIgnored private var calendarObservers: [(NotificationCenter, NSObjectProtocol)] = []
 
-    init(host: HostInfo) {
+    init(host: HostInfo, listStore: SessionListStore = SessionListStore()) {
         self.host = host
+        self.listStore = listStore
     }
 
     // MARK: - Lifecycle
@@ -52,11 +60,13 @@ final class HostSessionFeed {
     func activate(appModel: AppModel, beforeConnect: (() async -> Void)? = nil) async {
         self.appModel = appModel
         isActive = true
+        startCalendarUpdates()
         listStore.loadPersisted(hostID: host.hostID)
         if !listStore.sections.isEmpty {
             isLoading = false
         }
         await beforeConnect?()
+        guard !Task.isCancelled, isActive else { return }
         if appModel.isConnected(to: host) {
             appModel.selectHost(host)
         } else {
@@ -76,6 +86,7 @@ final class HostSessionFeed {
     func runRecheckLoop() async {
         while !Task.isCancelled {
             try? await Task.sleep(for: Self.listRecheckInterval)
+            listStore.refreshCalendar()
             guard !Task.isCancelled, isActive,
                   let appModel, appModel.isConnected(to: host) else { continue }
             await refresh(showLoading: false)
@@ -95,6 +106,10 @@ final class HostSessionFeed {
 
     func deactivate() {
         isActive = false
+        calendarTask?.cancel()
+        calendarTask = nil
+        for (center, token) in calendarObservers { center.removeObserver(token) }
+        calendarObservers.removeAll()
         watchTask?.cancel()
         watchTask = nil
         searchTask?.cancel()
@@ -125,7 +140,55 @@ final class HostSessionFeed {
 
     // MARK: - Refresh and watch
 
+    /// Use local midnight rather than 24-hour intervals (DST days can differ).
+    private func scheduleCalendarBoundary() {
+        calendarTask?.cancel()
+        calendarTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self, self.isActive else { return }
+                self.listStore.refreshCalendar()
+                let now = Date()
+                guard let end = Calendar.current.dateInterval(of: .day, for: now)?.end else { return }
+                do { try await Task.sleep(for: .seconds(max(0.01, end.timeIntervalSince(now)))) }
+                catch { return }
+            }
+        }
+    }
+
+    private func startCalendarUpdates() {
+        listStore.refreshCalendar()
+        scheduleCalendarBoundary()
+        guard calendarObservers.isEmpty else { return }
+        var sources: [(NotificationCenter, Notification.Name)] = [
+            (.default, .NSCalendarDayChanged),
+            (.default, .NSSystemTimeZoneDidChange),
+            (.default, .NSSystemClockDidChange),
+        ]
+        #if os(macOS)
+        sources += [(.default, NSApplication.didBecomeActiveNotification),
+                    (NSWorkspace.shared.notificationCenter, NSWorkspace.didWakeNotification)]
+        #else
+        sources += [(.default, UIApplication.significantTimeChangeNotification),
+                    (.default, UIApplication.willEnterForegroundNotification),
+                    (.default, UIApplication.didBecomeActiveNotification)]
+        #endif
+        for (center, name) in sources {
+            let token = center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self, self.isActive else { return }
+                    self.listStore.refreshCalendar()
+                    self.scheduleCalendarBoundary()
+                    if self.appModel?.isConnected(to: self.host) == true {
+                        await self.refresh(showLoading: false)
+                    }
+                }
+            }
+            calendarObservers.append((center, token))
+        }
+    }
+
     func refresh(showLoading: Bool) async {
+        listStore.refreshCalendar()
         guard let appModel, let client = appModel.client else {
             loadError = String(localized: String.LocalizationValue("error.not_connected"))
             isLoading = false

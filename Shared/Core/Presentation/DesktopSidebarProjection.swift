@@ -172,7 +172,6 @@ enum DesktopSidebarProjection {
     }
 
     static func bucket(for item: Item, now: Date, calendar: Calendar) -> Bucket {
-        if item.isLive { return .today }
         let mtime = item.newestMtime
         guard mtime > 0 else { return .older }
         let date = Date(timeIntervalSince1970: mtime)

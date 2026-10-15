@@ -46,6 +46,7 @@ struct MacSidebar: View {
         content
             .modifier(MacZoomContent())
             .task {
+                  feed.listStore.refreshCalendar()
                 #if DEBUG
                 await MacScrollbarInspection.runIfRequested()
                 if ProcessInfo.processInfo.arguments.contains("-CorralInspectDateDisclosures") {
@@ -182,7 +183,8 @@ struct MacSidebar: View {
 
     private var list: some View {
         let sections = DesktopSidebarProjection.sections(
-            sessions: filteredSessions, layout: sidebarLayout, filter: filter, order: &orderBox.order
+            sessions: filteredSessions, layout: sidebarLayout, filter: filter, order: &orderBox.order,
+            now: feed.listStore.presentationDate, calendar: feed.listStore.presentationCalendar
         )
         return List(selection: selectionBinding) {
             ForEach(sections) { section in

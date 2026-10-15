@@ -66,9 +66,36 @@ final class SessionListStore {
     private var locallyReadMtime: [String: Double] = [:]
     /// Bumped on every metadata merge so SwiftUI detail headers invalidate reliably.
     private(set) var metadataEpoch: UInt64 = 0
-    private let calendar = Calendar.current
+    private(set) var presentationDate: Date
+    private(set) var presentationCalendar: Calendar
+    @ObservationIgnored private let now: () -> Date
+    @ObservationIgnored private let currentCalendar: () -> Calendar
+
+    init(now: @escaping () -> Date = { Date() }, calendar: @escaping () -> Calendar = { .current }) {
+        self.now = now
+        currentCalendar = calendar
+        presentationDate = now()
+        presentationCalendar = calendar()
+    }
+
+    /// Date buckets are local presentation, independent of the host's data version.
+    func refreshCalendar() {
+        if updateCalendarContext() { rebuildSections() }
+    }
+
+    @discardableResult
+    private func updateCalendarContext() -> Bool {
+        let date = now()
+        let calendar = currentCalendar()
+        guard calendar != presentationCalendar
+            || calendar.startOfDay(for: date) != calendar.startOfDay(for: presentationDate) else { return false }
+        presentationDate = date
+        presentationCalendar = calendar
+        return true
+    }
 
     func loadPersisted(hostID: String) {
+        refreshCalendar()
         guard self.hostID != hostID else { return }
         if self.hostID != hostID {
             recordsByKey.removeAll()
@@ -107,6 +134,7 @@ final class SessionListStore {
     }
 
     func applyListResponse(_ response: SessionsListResponse, persist: Bool = true) {
+        refreshCalendar()
         if response.unchanged {
             if let next = response.version, !next.isEmpty {
                 version = next
@@ -406,6 +434,7 @@ final class SessionListStore {
     }
 
     private func rebuildSections() {
+        updateCalendarContext()
         let source = filteredSessions
         // Waiting membership follows the activity dot only; an independent red
         // unread overlay never moves a session in or out of this section.
@@ -451,8 +480,10 @@ final class SessionListStore {
     private func timeBucket(for mtime: Double) -> TimeBucket {
         guard mtime > 0 else { return .earlier }
         let date = Date(timeIntervalSince1970: mtime)
-        if calendar.isDateInToday(date) { return .today }
-        if calendar.isDateInYesterday(date) { return .yesterday }
+        let calendar = presentationCalendar
+        let today = calendar.startOfDay(for: presentationDate)
+        if date >= today { return .today }
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: today), date >= yesterday { return .yesterday }
         return .earlier
     }
 

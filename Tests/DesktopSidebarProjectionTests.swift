@@ -96,7 +96,21 @@ final class DesktopSidebarProjectionTests: XCTestCase {
             layout: .empty, filter: "", order: &order, now: now, calendar: calendar
         )
         XCTAssertEqual(result.map(\.id), ["today", "yesterday", "weekday-6", "older"])
-        XCTAssertEqual(Set(result[0].items.map(\.id)), ["session:today", "session:live-old"])
+        XCTAssertEqual(Set(result[0].items.map(\.id)), ["session:today"])
+        XCTAssertEqual(Set(result.last!.items.map(\.id)), ["session:old", "session:live-old"])
+    }
+
+    func testLiveGroupUsesActivityAndMovesAcrossMidnightWithoutMetadataChanges() {
+        let group = DesktopGroup(id: "g", name: "", members: ["a", "b"])
+        let layout = DesktopLayout(revision: 0, groups: [group], pinnedSessions: [:])
+        let sessions = [session("a", hoursAgo: 1, live: true), session("b", hoursAgo: 2, live: true)]
+        var order = DesktopSidebarProjection.StableOrder()
+        let before = DesktopSidebarProjection.sections(sessions: sessions, layout: layout, filter: "", order: &order, now: now, calendar: calendar)
+        let nextDay = calendar.date(byAdding: .day, value: 1, to: now)!
+        let after = DesktopSidebarProjection.sections(sessions: sessions, layout: layout, filter: "", order: &order, now: nextDay, calendar: calendar)
+        XCTAssertEqual(before.map(\.id), ["today"])
+        XCTAssertEqual(after.map(\.id), ["yesterday"])
+        XCTAssertEqual(before.first?.items.map(\.id), after.first?.items.map(\.id))
     }
 
     func testStableOrderKeepsShownRowsAndInsertsOldNewcomersByTime() {

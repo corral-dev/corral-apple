@@ -1,6 +1,6 @@
 # iPhone agent terminal
 
-Status: adopted 2026-10-14; implemented; physical acceptance pending because the paired iPhone and the paired iPad require passcodes.
+Status: adopted 2026-10-14; implemented; physical menu and terminal-input acceptance remains pending; current evidence limits are recorded below.
 
 ## Product behavior
 
@@ -47,3 +47,9 @@ The owner moved the display choice into the existing More menu. The native inlin
 Source `2d6a6a7` passes iOS/Mac Debug and Release compilation, universal Mac archive/export, and all 496 localization usages. No new diagnostics arose from the mode/menu code; existing assessed Markdown, camera and App Intents diagnostics remain as documented above. Public native UI source was verified byte-identical to the committed private source.
 
 The corrected iPhone 1.0.164 (174) was installed and read back, and ios-deliver independently verified distribution-shelf release 258. Its newly captured screen remained black with passcodeRequired true; physical menu selection, appearance and input acceptance remain pending. Mac 0.3.100 (104) was installed with matching committed binary hash and reported a fresh, locally alive ready client with data attached. Mac publication continues in the durable release workflow, independently of the verified installation.
+
+## Icon-and-label refinement verification (2026-10-14)
+
+The iOS-only menu choices now use native Label with titleAndIcon and the inspected Mac chat-bubble/terminal symbols. Localization remains unchanged (496 usages checked). Source `c90c71e` passes signed iOS Release and Debug builds plus a Mac Debug compatibility build. The Release diagnostics contain only the existing individually assessed Markdown/camera warnings; this refinement adds none. Public native UI source matches the committed private source byte-for-byte.
+
+iPhone 1.0.165 (175) was installed, read back and launched; distribution-shelf release 259 independently succeeded. The phone was now unlocked. Inspected captures showed the existing conversation before installation and the normal hosts screen after installation; neither shows the expanded mode menu, so icon placement, selection and terminal-input acceptance are not claimed. The existing conversation inspection argument navigates to a host in Release but its detail routing is Debug-only; the installed app was relaunched without inspection arguments. Mac 0.3.100 publication completed and its installed app's notarization ticket was stapled/validated; this icon-only iOS branch requires no newer Mac artifact. TUI keeps its existing live-pane presentation.

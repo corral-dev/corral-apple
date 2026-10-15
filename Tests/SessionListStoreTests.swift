@@ -21,6 +21,49 @@ final class SessionListStoreTests: XCTestCase {
         try await super.tearDown()
     }
 
+    func testCalendarRefreshesUnchangedOfflineAndReopenedSnapshots() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        var now = calendar.date(from: DateComponents(year: 2026, month: 10, day: 14, hour: 23, minute: 59))!
+        let activity = now.timeIntervalSince1970
+        let store = SessionListStore(now: { now }, calendar: { calendar })
+        store.loadPersisted(hostID: "calendar-host")
+        let row = SessionSummary(key: "codex:last-night", runtime: "codex", title: "Last night", cwd: "/p", mtime: activity, live: true)
+        store.updateSessions([row])
+        XCTAssertEqual(store.sections.map(\.id), ["today"])
+        now = now.addingTimeInterval(120)
+        store.applyListResponse(SessionsListResponse(sessions: [], version: store.version, unchanged: true))
+        XCTAssertEqual(store.sections.map(\.id), ["yesterday"])
+        XCTAssertEqual(store.windowSessions, [row])
+        store.searchQuery = "Last"
+        now = now.addingTimeInterval(86400)
+        store.refreshCalendar()
+        XCTAssertEqual(store.sections.map(\.id), ["earlier"])
+        XCTAssertEqual(store.searchQuery, "Last")
+        // Reopening the same host must not keep yesterday's projection.
+        now = now.addingTimeInterval(-86400)
+        store.loadPersisted(hostID: "calendar-host")
+        XCTAssertEqual(store.sections.map(\.id), ["yesterday"])
+    }
+
+    func testCalendarUsesNewTimeZoneAndDSTDayLength() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/Los_Angeles")!
+        var now = calendar.date(from: DateComponents(year: 2026, month: 3, day: 8, hour: 0, minute: 1))!
+        let row = SessionSummary(key: "claude:dst", runtime: "claude", title: "DST", cwd: "/p", mtime: now.timeIntervalSince1970, live: false)
+        let store = SessionListStore(now: { now }, calendar: { calendar })
+        store.updateSessions([row])
+        XCTAssertEqual(store.sections.map(\.id), ["today"])
+        now = calendar.date(from: DateComponents(year: 2026, month: 3, day: 9, hour: 0, minute: 1))!
+        store.refreshCalendar()
+        XCTAssertEqual(store.sections.map(\.id), ["yesterday"])
+        now = Date(timeIntervalSince1970: row.mtime + 3600)
+        calendar.timeZone = TimeZone(identifier: "Pacific/Honolulu")!
+        store.refreshCalendar()
+        XCTAssertEqual(store.presentationCalendar.timeZone.identifier, "Pacific/Honolulu")
+        XCTAssertEqual(store.sections.map(\.id), ["today"])
+    }
+
     func testConfirmedDeleteRejectsDelayedListSearchAndDetailAcrossReconnect() throws {
         let store = SessionListStore()
         store.loadPersisted(hostID: "delete-host")
