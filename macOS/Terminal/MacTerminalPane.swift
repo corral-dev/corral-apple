@@ -12,7 +12,6 @@ struct MacTerminalPane: View {
     let isFocused: Bool
     let isPresented: Bool
     var promptRequest: TerminalPromptRequest? = nil
-    @State private var promptError: String?
 
     @State private var stream: RemoteTerminalStream?
     @State private var isStarting = false
@@ -68,18 +67,10 @@ struct MacTerminalPane: View {
         .task(id: promptRequest?.id) {
             guard isPresented, let request = promptRequest else { return }
             await Task.yield()
-            guard !Task.isCancelled, let stream else {
-                promptError = String(localized: "terminal.prompt.unavailable")
-                return
-            }
-            promptError = await stream.navigatePrompt(seq: request.seq, historyGeneration: request.generation)
-        }
-        .alert("session.detail.user_prompts", isPresented: Binding(
-            get: { promptError != nil }, set: { if !$0 { promptError = nil } }
-        )) {
-            Button("action.ok", role: .cancel) { promptError = nil }
-        } message: {
-            Text(verbatim: promptError ?? "")
+            // Owner requirement: prompt jumps never surface anything visible.
+            // A miss is a silent no-op by design; the error is intentionally dropped.
+            guard !Task.isCancelled, let stream else { return }
+            _ = await stream.navigatePrompt(seq: request.seq, historyGeneration: request.generation)
         }
         .onDisappear {
             stream?.stop()
