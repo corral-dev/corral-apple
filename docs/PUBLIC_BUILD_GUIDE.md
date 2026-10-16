@@ -56,6 +56,8 @@ Pinned-clone pushes (observed 2026-10-12, Mac 0.3.82): publication pushes the cl
 Public source export details that are easy to miss:
 
 - The sanitized public `project.yml` is a complete replacement file kept with the private export recipe, so its iPhone and Mac version lines do not follow the private file. It stayed at Mac 0.3.70 through the 0.3.71 and 0.3.73 releases. Update its four version values in every release. Environment improvement (not implemented): derive them from the private `project.yml` during export.
+- Recipe drift after updater/terminal changes (2026-10-16): literal multiline updater blocks can stop matching new `SU*` keys, and an old whole-file public instruction replacement can reintroduce retired terminal rules. Preserve the current reviewed public instruction/fixture-exception authorities; redact updater keys from non-UI configuration, preserve generated app/extension `CorralKeychainAccessGroup` values, and verify all UI/resource bytes against the private commit. Remove private shared-standard links from distributed docs rather than publishing unresolved local paths. The task-owned recipe and privacy preflight passed; the maintainer-only release-script test is excluded with its unpublished script. Follow-up: refresh the maintained export recipe generation from current public authorities so later releases do not repeat manual template repair. This does not authorize changing product UI during export.
+
 - The export privacy preflight rejects any recipe private value that survives a document's own replacements. A private install-shelf address written into the Mac design document blocked the 0.3.74 export; refer to it as "the private install shelf" in exported documents.
 
 ## Publication privacy verification

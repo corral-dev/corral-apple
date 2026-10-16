@@ -7,7 +7,6 @@ import SwiftUI
 /// Accessibility sizes reflow for readability.
 struct SessionRowView: View {
     @Environment(\.interfaceScale) private var interfaceScale
-    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let session: SessionSummary
 
@@ -116,7 +115,7 @@ struct SessionRowView: View {
             }
         }
         .interfaceFont(Typography.sessionMeta.weight(.semibold))
-        .foregroundStyle(Palette.sessionProject(in: colorScheme))
+        .foregroundStyle(Palette.sessionProject())
         .lineLimit(1)
         .truncationMode(.tail)
     }

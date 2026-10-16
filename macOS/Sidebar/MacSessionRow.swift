@@ -7,12 +7,12 @@ import SwiftUI
 /// preview. See docs/design/MACOS_CLIENT_DESIGN.md, sidebar density redesign.
 struct MacSessionRow: View {
     @Environment(\.interfaceScale) private var interfaceScale
-    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.sidebarRowSize) private var rowSize
     @Environment(\.sidebarNow) private var now
     let session: SessionSummary
     /// Present for every host split member, even when its peers are filtered out.
     var splitHelp: String?
+    var isSelected = false
 
     var body: some View {
         HStack(alignment: .top, spacing: Space.xs * interfaceScale) {
@@ -68,7 +68,7 @@ struct MacSessionRow: View {
     }
 
     /// Project then preview; a blank string keeps the line when both are empty.
-    /// The project uses semibold Pine/neutral ink before the secondary preview.
+    /// The project uses semibold green ink before the secondary preview.
     private var secondaryLine: Text {
         let preview = SessionPresentation.preview(for: session)
         let project = visibleProject
@@ -83,9 +83,9 @@ struct MacSessionRow: View {
     private var visibleProject: Text? {
         let name = SessionPresentation.projectName(from: session)
         switch name {
-        case "~": return Text("sessions.project.home").fontWeight(.semibold).foregroundStyle(Palette.sessionProject(in: colorScheme))
-        case "": return Text("sessions.project.unknown").fontWeight(.semibold).foregroundStyle(Palette.sessionProject(in: colorScheme))
-        default: return Text(verbatim: name).fontWeight(.semibold).foregroundStyle(Palette.sessionProject(in: colorScheme))
+        case "~": return Text("sessions.project.home").fontWeight(.semibold).foregroundStyle(Palette.sessionProject(selected: isSelected))
+        case "": return Text("sessions.project.unknown").fontWeight(.semibold).foregroundStyle(Palette.sessionProject(selected: isSelected))
+        default: return Text(verbatim: name).fontWeight(.semibold).foregroundStyle(Palette.sessionProject(selected: isSelected))
         }
     }
 

@@ -265,7 +265,8 @@ struct MacSidebar: View {
     }
 
     private func sessionRow(_ session: SessionSummary, split: DesktopGroup?) -> some View {
-        MacSessionRow(session: session, splitHelp: split.map(splitHelp))
+        MacSessionRow(session: session, splitHelp: split.map(splitHelp),
+                      isSelected: workspace.focusedKey == session.key)
             .listRowInsets(.vertical, 0)
             .listRowSeparator(.visible, edges: .bottom)
             .listRowSeparatorTint(Color(nsColor: .separatorColor).opacity(0.5), edges: .bottom)
