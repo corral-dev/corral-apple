@@ -1,5 +1,7 @@
 import Foundation
 import AppKit
+import Observation
+import os
 
 /// Transport double deliberately ignores cancellation, like an in-flight RPC.
 @MainActor
@@ -460,7 +462,35 @@ struct LifecycleProbe {
         print("PASS flat sidebar: collapsed split restoration, member focus, standalone, saved split return")
     }
 
+    @MainActor static func modeObservationRegressions() {
+        let suiteKey = "corral.mac.paneModes"
+        let saved = UserDefaults.standard.object(forKey: suiteKey)
+        defer {
+            if let saved { UserDefaults.standard.set(saved, forKey: suiteKey) }
+            else { UserDefaults.standard.removeObject(forKey: suiteKey) }
+        }
+        for initial in [MacWorkspace.PaneMode.chat, .terminal] {
+            let host = "mode-observation-fixture"
+            UserDefaults.standard.set(["\(host):subject": initial.rawValue], forKey: suiteKey)
+            let workspace = MacWorkspace()
+            workspace.selectHost(host)
+            let changes = ModeChangeCounter()
+            withObservationTracking {
+                check(workspace.mode(for: "subject") == initial, "initial persisted mode was lost")
+            } onChange: { changes.increment() }
+            workspace.setMode(initial == .chat ? .terminal : .chat, for: "subject")
+            check(changes.value == 1, "first persisted-mode toggle did not notify its observer")
+            let peer = ModeChangeCounter()
+            withObservationTracking { _ = workspace.mode(for: "peer") }
+                onChange: { peer.increment() }
+            workspace.setMode(initial, for: "subject")
+            check(peer.value == 0, "one pane's mode toggle invalidated its peer")
+        }
+        print("PASS first mode toggle: persisted Chat/Terminal observation and pane isolation")
+    }
+
     @MainActor static func main() async throws {
+        modeObservationRegressions()
         await sidebarSplitRestorationRegressions()
         await splitProjectRegressions()
         selectionCopyRegressions()
@@ -478,4 +508,12 @@ struct LifecycleProbe {
         let payload = try await call(WireProtocol.mSessionNew, ["runtime": runtimeID, "cwd": cwd])
         return try SessionActionsMenu.decodeNewSession(from: payload)
     }
+}
+
+
+/// Observation callbacks are Sendable; count synchronously under a lock.
+private final class ModeChangeCounter: Sendable {
+    private let lock = OSAllocatedUnfairLock(initialState: 0)
+    nonisolated func increment() { lock.withLock { $0 += 1 } }
+    nonisolated var value: Int { lock.withLock { $0 } }
 }

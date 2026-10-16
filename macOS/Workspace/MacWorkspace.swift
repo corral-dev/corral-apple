@@ -119,8 +119,10 @@ final class MacWorkspace {
     func mode(for key: String) -> PaneMode {
         if ProjectShell.isShellKey(key) { return .terminal }
         let storageKey = modeKey(key)
-        // Read-only: observing the signal must not grow the table on every render.
-        if let signal = modeSignals[storageKey] { _ = signal.revision }
+        // Establish observation on the first read, including a remembered
+        // Terminal choice. Creating the signal only in setMode leaves that
+        // first toggle unobserved until an unrelated view update arrives.
+        _ = modeSignal(storageKey).revision
         return modes[storageKey].flatMap(PaneMode.init(rawValue:)) ?? .chat
     }
 

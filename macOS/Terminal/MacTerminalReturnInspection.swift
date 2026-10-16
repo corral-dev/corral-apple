@@ -253,6 +253,20 @@ enum MacTerminalReturnInspection {
             result["firstContentMs"] = firstContentMs
             result["measurements"] = MacConversationTableCounters.measurements - before
             result["stalls"] = probe.end()
+            func descendants(_ view: NSView) -> [NSView] {
+                [view] + view.subviews.flatMap(descendants)
+            }
+            if let scroll = descendants(root).compactMap({ $0 as? MacConversationTable.ConversationScrollView }).first,
+               let table = scroll.documentView as? NSTableView {
+                let initialRows = table.numberOfRows
+                scroll.coordinator?.readerScrollWillChange(phase: .began, momentum: [])
+                scroll.contentView.scroll(to: .zero)
+                scroll.reflectScrolledClipView(scroll.contentView)
+                scroll.coordinator?.readerScrollDidChange(phase: [], momentum: [])
+                _ = await waitUntil { table.numberOfRows > initialRows }
+                result["earlierRowsRevealed"] = table.numberOfRows > initialRows
+                result["earlierGeometry"] = MacSessionSwitchInspection.renderGeometry(root, store: store)
+            }
             results.append(result)
             window.close()
             try? await Task.sleep(for: .milliseconds(100))
