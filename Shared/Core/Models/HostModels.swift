@@ -198,6 +198,7 @@ nonisolated struct HostCapabilities: Codable, Sendable, Equatable {
     var desktopLayout: Bool = false
     /// Host streams raw pane output and takes desktop size votes (`terminal.*`).
     var terminalStream: Bool = false
+    var terminalPrompt: Bool = false
     /// Host lists every human prompt of a session (`session.userPrompts`).
     var userPrompts: Bool = false
     /// Host runs project shells for the project terminal (`shell.*`).
@@ -214,6 +215,7 @@ nonisolated struct HostCapabilities: Codable, Sendable, Equatable {
         case sessionInterrupt = "session_interrupt"
         case desktopLayout = "desktop_layout"
         case terminalStream = "terminal_stream"
+        case terminalPrompt = "terminal_prompt"
         case userPrompts = "user_prompts"
         case projectShell = "project_shell"
     }
@@ -231,6 +233,7 @@ nonisolated struct HostCapabilities: Codable, Sendable, Equatable {
         sessionRestart = (try? container.decode(Bool.self, forKey: .sessionRestart)) ?? features.contains("session_restart")
         sessionInterrupt = (try? container.decode(Bool.self, forKey: .sessionInterrupt)) ?? features.contains("session_interrupt")
         desktopLayout = (try? container.decode(Bool.self, forKey: .desktopLayout)) ?? features.contains("desktop_layout")
+        terminalPrompt = (try? container.decode(Bool.self, forKey: .terminalPrompt)) ?? features.contains("terminal_prompt")
         terminalStream = (try? container.decode(Bool.self, forKey: .terminalStream)) ?? features.contains("terminal_stream")
         userPrompts = (try? container.decode(Bool.self, forKey: .userPrompts)) ?? features.contains("user_prompts")
         projectShell = (try? container.decode(Bool.self, forKey: .projectShell)) ?? features.contains("project_shell")

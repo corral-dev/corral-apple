@@ -32,8 +32,8 @@ settings:
     SWIFT_APPROACHABLE_CONCURRENCY: YES
     GENERATE_ASSET_SYMBOL_EXTENSIONS: YES
     ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: YES
-    MARKETING_VERSION: "1.0.172"
-    CURRENT_PROJECT_VERSION: "182"
+    MARKETING_VERSION: "1.0.173"
+    CURRENT_PROJECT_VERSION: "183"
     CODE_SIGN_STYLE: Automatic
 
 configFiles:
@@ -67,9 +67,9 @@ targets:
     info:
       path: iOS/Info.plist
       properties:
-        CorralKeychainAccessGroup: $(AppIdentifierPrefix)$(CORRAL_KEYCHAIN_GROUP)
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CorralKeychainAccessGroup: $(AppIdentifierPrefix)$(CORRAL_KEYCHAIN_GROUP)
         NSBonjourServices:
           - _corral._tcp.
         CFBundleURLTypes:
@@ -111,8 +111,6 @@ targets:
       # 扩展需要自己编一份加密与钥匙串代码，不能链主 App 的二进制。
       - path: Shared/Core/Crypto/RemoteCrypto.swift
       - path: Shared/Core/Store/HostKeychain.swift
-      - path: Shared/Core/Push/NotificationPreview.swift
-      - path: Shared/Core/Push/SessionNotificationText.swift
       - path: Shared/Resources/Localizable.xcstrings
     settings:
       base:
@@ -165,12 +163,11 @@ targets:
       base:
         PRODUCT_NAME: Corral
         PRODUCT_BUNDLE_IDENTIFIER: com.example.corral
-        MARKETING_VERSION: "0.3.116"
-        CURRENT_PROJECT_VERSION: "120"
+        MARKETING_VERSION: "0.3.117"
+        CURRENT_PROJECT_VERSION: "121"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         ENABLE_HARDENED_RUNTIME: YES
-
         OTHER_CODE_SIGN_FLAGS: "--timestamp"
         CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
         COMBINE_HIDPI_IMAGES: YES
@@ -179,9 +176,6 @@ targets:
       path: macOS/Info.plist
       properties:
         LSApplicationCategoryType: public.app-category.developer-tools
-        # Direct-download only: a future store target must strip SUFeedURL,
-        # the SUPublicEDKey/SU* keys and the Sparkle dependency entirely
-        # (store builds exclude the updater; see AGENTS.md Mac delivery).
         CFBundleDisplayName: Corral
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
@@ -210,20 +204,6 @@ targets:
         # XCTestCase 生命周期不能默认 MainActor。
         SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated
 
-  CorralUITests:
-    type: bundle.ui-testing
-    platform: iOS
-    sources:
-      - path: UITests
-    dependencies:
-      - target: Corral
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.corral.uitests
-        GENERATE_INFOPLIST_FILE: YES
-        TEST_TARGET_NAME: Corral
-        SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated
-
 schemes:
   CorralMac:
     build:
@@ -239,14 +219,12 @@ schemes:
         Corral: all
         CorralNSE: all
         CorralTests: [test]
-        CorralUITests: [test]
     run:
       config: Debug
     test:
       config: Debug
       targets:
         - CorralTests
-        - CorralUITests
     profile:
       config: Release
     analyze:

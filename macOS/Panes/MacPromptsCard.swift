@@ -106,12 +106,9 @@ struct MacPromptsCard: View {
 
     private func row(_ prompt: RichMessage) -> some View {
         Button {
-            if onTerminal {
-                setOpen(false)
-            } else {
-                currentID = prompt.id
-                onSelect(prompt)
-            }
+            currentID = prompt.id
+            onSelect(prompt)
+            if onTerminal { setOpen(false) }
         } label: {
             VStack(alignment: .leading, spacing: 2 * interfaceScale) {
                 if let stamp = Self.timeLabel(prompt) {
@@ -134,10 +131,9 @@ struct MacPromptsCard: View {
         }
         .buttonStyle(.plain)
         .onHover { inside in
-            guard !onTerminal else { return }
             if inside { hoveredID = prompt.id } else if hoveredID == prompt.id { hoveredID = nil }
         }
-        .help(Text(onTerminal ? "mac.prompts.hide" : "mac.prompts.jump"))
+        .help(Text("mac.prompts.jump"))
     }
 
     /// Concentric with the card: card radius minus the row inset.
@@ -146,7 +142,6 @@ struct MacPromptsCard: View {
     }
 
     private func rowFill(_ id: RichMessage.ID) -> Color {
-        guard !onTerminal else { return .clear }
         if currentID == id { return Color.accentColor.opacity(0.16) }
         if hoveredID == id { return Color.primary.opacity(0.06) }
         return .clear

@@ -19,6 +19,7 @@ struct MacPaneView: View {
     @State private var bodySize: CGSize = .zero
     @State private var paneFrame: CGRect = .zero
     @State private var terminalVisited = false
+    @State private var terminalPromptRequest: TerminalPromptRequest?
     @State private var chatVisited = false
     /// Bumped on every (re)appearance; a disappear-triggered stop only runs
     /// when no reappearance has happened since, so a fast close→reopen can
@@ -83,8 +84,11 @@ struct MacPaneView: View {
                 // Over content the card covers at most about half the pane.
                 maxListHeight: max(120, bodySize.height * (cardFitsBeside ? 0.7 : 0.45) - 56),
                 onSelect: { prompt in
-                    guard mode == .chat else { return }
-                    workspace.scrollToPrompt(ConversationTimelineItem.message(prompt).id, in: session.key)
+                    if mode == .terminal {
+                        terminalPromptRequest = TerminalPromptRequest(seq: prompt.seq, generation: store?.promptHistoryGeneration ?? 0)
+                    } else {
+                        workspace.scrollToPrompt(ConversationTimelineItem.message(prompt).id, in: session.key)
+                    }
                 }
             )
             .interfacePadding(.top, Space.md)
@@ -188,7 +192,8 @@ struct MacPaneView: View {
                 MacTerminalPane(
                     session: session,
                     isFocused: isFocused && mode == .terminal,
-                    isPresented: mode == .terminal && (lifetime?.isPresented ?? true)
+                    isPresented: mode == .terminal && (lifetime?.isPresented ?? true),
+                    promptRequest: terminalPromptRequest
                 )
                 .environment(\.conversationScrollReadAction, acknowledgeTerminalScrollRead)
                 .id(session.key)

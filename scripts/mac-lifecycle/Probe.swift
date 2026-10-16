@@ -7,7 +7,7 @@ import os
 @MainActor
 final class RemoteClient {
     var calls: [(String, [String: Any])] = []
-    struct Capabilities { var sessionCreateReceipts = false; var desktopLayout = true }
+    struct Capabilities { var sessionCreateReceipts = false; var desktopLayout = true; var terminalPrompt = true }
     var hostCapabilities = Capabilities()
     var readyHandlers: [UUID: @MainActor () -> Void] = [:]
     var subscriptions: [String: AsyncStream<RemoteEvent>.Continuation] = [:]
@@ -104,6 +104,9 @@ final class Gate {
 enum ProbeError: Error { case failed }
 @MainActor final class Flag { var value = false }
 @MainActor final class Sink: TerminalStreamSink {
+    var reveals: [String] = []
+    var revealResult = true
+    func terminalRevealPrompt(_ query: String) -> Bool { reveals.append(query); return revealResult }
     var resets = 0, outputs = 0
     func terminalReset(grid: TerminalGrid, data: Data) { resets += 1 }
     func terminalFeed(_ data: Data) { outputs += 1 }
@@ -347,6 +350,34 @@ struct LifecycleProbe {
         fitted.stop(); await settle()
         print("PASS terminal: reattach/snapshot, close during attach, replacement ordering, resize retry")
     }
+    @MainActor static func promptNavigationRegressions() async {
+        let client = RemoteClient(), stream = RemoteTerminalStream(sessionKey: "prompt", client: client), sink = Sink()
+        stream.sink = sink; stream.start(); stream.updateFit(TerminalGrid(cols: 80, rows: 24)); await settle()
+        client.emit(["kind": "snapshot", "seq": 1, "cols": 80, "rows": 24,
+                     "data": Data("screen".utf8).base64EncodedString()], channel: "term:prompt")
+        await settle()
+        client.handler = { _, _ in ["query": "host resolved text"] }
+        let error = await stream.navigatePrompt(seq: 7, historyGeneration: 9)
+        check(error == nil && sink.reveals == ["host resolved text"], "local navigation did not use host identity")
+        check(!client.calls.contains { $0.1["native"] as? Bool == true }, "local jump sent agent input")
+        sink.revealResult = false
+        _ = await stream.navigatePrompt(seq: 8, historyGeneration: 9)
+        check(client.calls.last?.1["native"] as? Bool == true, "missing local buffer did not request native navigation")
+        let gate = Gate()
+        client.handler = { method, _ in
+            if method == "terminal.prompt" { return try await gate.wait() }
+            return [:]
+        }
+        let pending = Task { await stream.navigatePrompt(seq: 9, historyGeneration: 9) }
+        await settle()
+        let reveals = sink.reveals.count
+        stream.stop()
+        gate.succeed(["query": "late old session"])
+        _ = await pending.value
+        check(sink.reveals.count == reveals, "late resolve navigated a retired terminal")
+        print("PASS prompt lifecycle: host identity, local read-only path, native fallback, retired response")
+    }
+
     @MainActor static func selectionCopyRegressions() {
         _ = NSApplication.shared
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 400),
@@ -499,6 +530,7 @@ struct LifecycleProbe {
         try await resumeRegressions()
         try await workspaceRegressions()
         try await terminalRegressions()
+        await promptNavigationRegressions()
     }
 }
 

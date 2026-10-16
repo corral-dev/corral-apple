@@ -62,8 +62,35 @@ struct TerminalSelectionProbe {
         view.selection.setSelection(start: Position(col: 0, row: 0), end: Position(col: 6, row: 0))
         view.getTerminal().resetToInitialState()
         require(!view.selection.active, "snapshot reset discards the old buffer selection")
+        verifyPromptNavigation()
         if let path = CommandLine.arguments.dropFirst().first { verifyPiOutput(path) }
         print("PASS: 30 live redraws, continued range extension, Unicode, mouse mode and native scroll invalidation")
+    }
+
+    @MainActor
+    private static func verifyPromptNavigation() {
+        let view = StreamTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 500))
+        view.resize(cols: 40, rows: 12)
+        view.changeScrollback(1000)
+        let chinese = "USER_15 中文提问需要跨行匹配以及保留正确定位，这是目标文字"
+        for i in 0..<120 {
+            feed(view, (i == 15 ? chinese : "synthetic row \(i)") + "\r\n")
+        }
+        let bottom = view.scrollPosition
+        require(view.revealPrompt(chinese), "full CJK query preserves final wide glyph at wrap")
+        require(view.scrollPosition < bottom, "prompt navigation reveals retained native history")
+        view.resize(cols: 24, rows: 12)
+        require(view.revealPrompt(chinese), "prompt navigation re-resolves after resize")
+        feed(view, "duplicate query\r\nduplicate query\r\n")
+        let previous = view.scrollPosition
+        require(!view.revealPrompt("duplicate query"), "duplicate text cannot choose the wrong row")
+        require(view.scrollPosition == previous, "ambiguity leaves viewport unchanged")
+        feed(view, "\u{1b}[?1049h\u{1b}[2J\u{1b}[HCURRENT_ALT_PROMPT")
+        require(view.revealPrompt("CURRENT_ALT_PROMPT"), "active alternate text is available")
+        require(!view.revealPrompt(chinese), "normal buffer cannot leak through active alternate screen")
+        feed(view, "\u{1b}[2J\u{1b}[Hnew screen")
+        require(!view.revealPrompt("CURRENT_ALT_PROMPT"), "overwritten alternate text is unavailable")
+        print("PASS prompt navigation: complete CJK wrap, resize, duplicate refusal, alternate overwrite")
     }
 
     @MainActor

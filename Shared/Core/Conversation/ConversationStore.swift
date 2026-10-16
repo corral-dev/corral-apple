@@ -154,6 +154,8 @@ final class ConversationStore {
     /// runs only when its inputs actually change (seq-keyed fast path first).
     @ObservationIgnored private var userPromptsCacheSeqs: (loaded: [Int], session: [Int], usable: Bool)?
     @ObservationIgnored private var userPromptsCacheValue: [RichMessage] = []
+    var promptHistoryGeneration: Int { sessionPromptsGeneration > 0 ? sessionPromptsGeneration : generation }
+
     var userPrompts: [RichMessage] {
         let usable = forkMessages == nil
             && (sessionPromptsGeneration == 0 || generation == 0 || sessionPromptsGeneration == generation)

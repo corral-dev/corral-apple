@@ -64,6 +64,8 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
         scheduleFit()
     }
 
+    func terminalRevealPrompt(_ query: String) -> Bool { revealPrompt(query) }
+
     func unbind() {
         cancelPendingFit()
         lastReportedFit = nil

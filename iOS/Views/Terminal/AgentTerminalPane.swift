@@ -8,6 +8,8 @@ struct AgentTerminalPane: View {
     @Environment(\.colorScheme) private var colorScheme
     let session: SessionSummary
     let isPresented: Bool
+    var promptRequest: TerminalPromptRequest? = nil
+    @State private var promptError: String?
 
     @State private var stream: RemoteTerminalStream?
     @State private var isResuming = false
@@ -45,6 +47,22 @@ struct AgentTerminalPane: View {
         .onChange(of: scenePhase) { _, phase in
             visibility.active = isPresented && phase == .active
             if phase != .active { stream?.stop() }
+        }
+        .task(id: promptRequest?.id) {
+            guard isPresented, let request = promptRequest else { return }
+            await Task.yield()
+            guard !Task.isCancelled, let stream else {
+                promptError = String(localized: "terminal.prompt.unavailable")
+                return
+            }
+            promptError = await stream.navigatePrompt(seq: request.seq, historyGeneration: request.generation)
+        }
+        .alert("session.detail.user_prompts", isPresented: Binding(
+            get: { promptError != nil }, set: { if !$0 { promptError = nil } }
+        )) {
+            Button("action.ok", role: .cancel) { promptError = nil }
+        } message: {
+            Text(verbatim: promptError ?? "")
         }
         .onDisappear {
             visibility.active = false

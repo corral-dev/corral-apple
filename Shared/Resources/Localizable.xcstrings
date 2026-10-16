@@ -5627,6 +5627,22 @@
           }
         }
       }
+    },
+    "terminal.prompt.unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This prompt is not available in the current terminal."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "当前终端无法定位这条提问。"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

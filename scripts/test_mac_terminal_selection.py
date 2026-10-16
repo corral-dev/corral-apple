@@ -25,6 +25,7 @@ with tempfile.TemporaryDirectory(prefix="corral-mac-terminal-selection-") as dir
         "swiftc", "-swift-version", "6", "-default-isolation", "MainActor",
         "-parse-as-library", "-I", str(products),
         str(ROOT / "Shared/UI/Terminal/TerminalHostFeed.swift"),
+        str(ROOT / "Shared/UI/Terminal/TerminalPromptNavigation.swift"),
         str(ROOT / "macOS/Terminal/StreamTerminalView.swift"),
         str(ROOT / "scripts/mac-terminal-selection/Probe.swift"),
         str(library), "-o", executable,

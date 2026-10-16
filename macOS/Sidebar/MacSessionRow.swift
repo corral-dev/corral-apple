@@ -58,12 +58,12 @@ struct MacSessionRow: View {
         .accessibilityElement(children: .combine)
     }
 
-    /// Waiting for an answer or unread: the title is semibold, the Mail
-    /// convention (design: Visual guidance pass); the trailing dots stay.
-    /// Red unread is independent from the yellow waiting activity: either one
-    /// (or both together) keeps the emphasis.
+    /// Any status dot keeps the title semibold, the Mail convention
+    /// (design: Visual guidance pass); the trailing dots stay.
+    /// Yellow waiting, green working/recent and red unread all count:
+    /// owner request 2026-10-16, every dotted row emphasizes its title.
     private var needsPerson: Bool {
-        SessionPresentation.activityMarker(for: session) == .waiting
+        SessionPresentation.activityMarker(for: session) != nil
             || SessionPresentation.hasUnread(for: session)
     }
 

@@ -78,6 +78,8 @@ struct SessionDetailView: View {
     @State private var blockedQuestionRequestID: String? = nil
     /// Prompt chosen in the Your prompts sheet, applied after the sheet closes.
     @State private var pendingPromptJump: String?
+    @State private var pendingTerminalPrompt: TerminalPromptRequest?
+    @State private var terminalPromptRequest: TerminalPromptRequest?
     @State private var draftHostID = ""
     @State private var didLoadDraft = false
 
@@ -120,6 +122,11 @@ struct SessionDetailView: View {
         #endif
         .sheet(isPresented: $showUserPrompts, onDismiss: {
             // Jump once the sheet is gone, so the glide is seen, not hidden behind it.
+            if let pendingTerminalPrompt {
+                self.pendingTerminalPrompt = nil
+                terminalPromptRequest = pendingTerminalPrompt
+                return
+            }
             guard let pendingPromptJump else { return }
             self.pendingPromptJump = nil
             scrollToMessageID = pendingPromptJump
@@ -127,7 +134,11 @@ struct SessionDetailView: View {
             UserPromptsView(
                 prompts: userPrompts,
                 onSelect: { message in
-                    pendingPromptJump = ConversationTimelineItem.message(message).id
+                    if pane == .terminal {
+                        pendingTerminalPrompt = TerminalPromptRequest(seq: message.seq, generation: conversationStore?.promptHistoryGeneration ?? 0)
+                    } else {
+                        pendingPromptJump = ConversationTimelineItem.message(message).id
+                    }
                 }
             )
             .environment(\.sessionTextScale, appModel.sessionTextSize.scale)
@@ -309,7 +320,8 @@ struct SessionDetailView: View {
                 if visitedTerminal && canShowAgentTerminal {
                     AgentTerminalPane(
                         session: session,
-                        isPresented: pane == .terminal && !showProjectTerminal && !showUserPrompts
+                        isPresented: pane == .terminal && !showProjectTerminal && !showUserPrompts,
+                        promptRequest: terminalPromptRequest
                     )
                 }
                 #endif

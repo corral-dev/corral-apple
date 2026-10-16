@@ -134,6 +134,8 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
         readScrollMonitor = nil
     }
 
+    func terminalRevealPrompt(_ query: String) -> Bool { terminal.revealPrompt(query) }
+
     // MARK: - Appearance
 
     private var palette = TerminalPalette.dark
