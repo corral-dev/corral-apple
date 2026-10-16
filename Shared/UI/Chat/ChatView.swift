@@ -49,6 +49,57 @@ struct ChatView: View {
     /// panes, where the selection modifier owns a private document).
     #if os(macOS)
     @Environment(\.macConversationTextDocument) private var textDocument
+    /// Native tables need exact row heights. Cold open measures only this tail,
+    /// even when a terminal-only session has accumulated hundreds of turns.
+    @State private var macHistoryStartID: String?
+    private let macInitialItemCount = 12
+
+    private var macVisibleItems: [ConversationTimelineItem] {
+        let items = store.timelineItems
+        if let id = macHistoryStartID, let start = items.firstIndex(where: { $0.id == id }) {
+            return Array(items[start...])
+        }
+        return Array(items[macPageStart(in: items, before: items.count)...])
+    }
+
+    private func macPageStart(in items: [ConversationTimelineItem], before end: Int) -> Int {
+        // A few very long replies cost more than many short messages. Bound
+        // both row count and text work for initial paint and upward reading.
+        var start = end
+        var bytes = 0
+        for index in (0..<end).reversed().prefix(macInitialItemCount) {
+            let cost: Int
+            if case .message(let message) = items[index] {
+                cost = message.text?.utf8.count ?? 0
+            } else {
+                cost = 256
+            }
+            if start < end - 1, bytes + cost > 4_096 { break }
+            bytes += cost
+            start = index
+        }
+        return start
+    }
+
+    private var macHasHiddenHistory: Bool {
+        macVisibleItems.count < store.timelineItems.count
+    }
+
+    private func macLoadEarlier() async -> Bool {
+        let items = store.timelineItems
+        if let first = macVisibleItems.first, let start = items.firstIndex(where: { $0.id == first.id }), start > 0 {
+            macHistoryStartID = items[macPageStart(in: items, before: start)].id
+            return true
+        }
+        let firstID = macVisibleItems.first?.id
+        let oldest = store.oldestSequence
+        await store.loadEarlier()
+        let updated = store.timelineItems
+        if let firstID, let start = updated.firstIndex(where: { $0.id == firstID }) {
+            macHistoryStartID = updated[macPageStart(in: updated, before: start)].id
+        }
+        return store.oldestSequence < oldest
+    }
     #endif
     /// Host-decided activity dot (waiting/working/recent); the activity footer
     /// follows it. Red unread is an independent overlay and never passed here.
@@ -131,6 +182,11 @@ struct ChatView: View {
            let seq = Int(messageID.dropFirst(prefix.count)), seq > 0 {
             await store.loadEarlier(through: seq)
         }
+        #if os(macOS)
+        if let index = store.timelineItems.firstIndex(where: { $0.id == messageID }) {
+            macHistoryStartID = store.timelineItems[max(0, index - 1)].id
+        }
+        #endif
         revealedMessageID = messageID
     }
 
@@ -170,7 +226,11 @@ struct ChatView: View {
     }
 
     private var messageList: some View {
+        #if os(macOS)
+        let items = macVisibleItems
+        #else
         let items = store.timelineItems
+        #endif
         var localCalendar = calendar
         localCalendar.timeZone = timeZone
         let timeSeparators = ConversationTimePolicy.separators(
@@ -312,7 +372,7 @@ struct ChatView: View {
         if let loadError = store.loadError {
             rows.append(MacConversationRow(id: "load-error", value: .loadError(loadError)))
         }
-        if store.hasMoreHistory {
+        if macHasHiddenHistory || store.hasMoreHistory {
             // Owner correction 2026-10-11: no Load earlier control on the Mac.
             // Reaching the top loads by itself; the reserved row only shows
             // progress and keeps its height so nothing shifts.
@@ -364,11 +424,14 @@ struct ChatView: View {
             jumpGlides: { target, visible in
                 ChatJumpPlan.glides(in: store.timelineItems.map(\.id), target: target, visible: visible)
             },
-            onLoadEarlier: store.hasMoreHistory ? {
-                let oldest = store.oldestSequence
-                await store.loadEarlier()
-                return store.oldestSequence < oldest
-            } : nil
+            onLoadEarlier: macHasHiddenHistory || store.hasMoreHistory ? {
+                await macLoadEarlier()
+            } : nil,
+            onFollowChange: { follows in
+                if !follows, macHistoryStartID == nil {
+                    macHistoryStartID = macVisibleItems.first?.id
+                }
+            }
         )
     }
     #endif

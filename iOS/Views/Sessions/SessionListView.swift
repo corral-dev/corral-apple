@@ -281,12 +281,8 @@ struct SessionListView: View {
         )
         .modifier(SessionListSystemSearchPlacement())
         .onChange(of: listStore.searchQuery) { _, query in
-            filteredSectionExpansion.removeAll()
             scheduleRemoteSearch(query)
         }
-        .onChange(of: activeOnly) { _, _ in filteredSectionExpansion.removeAll() }
-        .onChange(of: runtimeFilter) { _, _ in filteredSectionExpansion.removeAll() }
-        .onChange(of: projectFilter) { _, _ in filteredSectionExpansion.removeAll() }
         .onChange(of: listStore.windowSessions, initial: true) { _, window in
             // Reconcile, never re-sort: existing choices keep their positions
             // while labels refresh and genuinely new identities append.
@@ -504,7 +500,7 @@ struct SessionListView: View {
     }
 
     private func isSectionExpanded(_ section: SessionListStore.Section) -> Bool {
-        if hasActiveScope { return filteredSectionExpansion[section.id] ?? true }
+        if let filtered = filteredSectionExpansion[section.id] { return filtered }
         if let expanded = sectionExpansion[section.id] { return expanded }
         switch section {
         case .waiting, .pinned, .today: return true

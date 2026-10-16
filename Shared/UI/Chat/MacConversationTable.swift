@@ -396,7 +396,8 @@ struct MacConversationTable: NSViewRepresentable {
             if let cached = heights.measured[item.id], cached.key == key { return cached.height }
             let height = measure(item, isFirst: row == 0, width: width)
             heights.measured[item.id] = Measured(key: key, height: height)
-            measuredWidth = width
+            // One delegate query must not acknowledge a width change for all
+            // rows. tableWillLayout invalidates the table-wide geometry.
             return height
         }
 
@@ -836,6 +837,7 @@ struct MacConversationScroller: View {
     @Binding var scrollToMessageID: String?
     var jumpGlides: (_ target: String, _ visible: String?) -> Bool
     var onLoadEarlier: (() async -> Bool)?
+    var onFollowChange: (Bool) -> Void = { _ in }
 
     @State private var insets = EdgeInsets()
     @State private var followsLatest = true
@@ -851,7 +853,7 @@ struct MacConversationScroller: View {
             scrollToMessageID: $scrollToMessageID,
             jumpGlides: jumpGlides,
             onLoadEarlier: onLoadEarlier,
-            onFollowChange: { followsLatest = $0 }
+            onFollowChange: { followsLatest = $0; onFollowChange($0) }
         )
         .ignoresSafeArea(.container, edges: .vertical)
         .onGeometryChange(for: EdgeInsets.self) { $0.safeAreaInsets } action: { insets = $0 }

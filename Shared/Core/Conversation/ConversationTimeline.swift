@@ -17,7 +17,7 @@ enum ConversationTimelineItem: Identifiable, Equatable, Sendable {
 
 /// 将远端富消息收敛成用户可读的对话时间线。
 enum ConversationMessagePolicy {
-    /// 本会话真人提问（旧→新），与电脑端 Your prompts 同过滤规则。
+    /// 本会话真人提示词（旧→新），与电脑端 Your prompts 同过滤规则。
     static func userPrompts(from messages: [RichMessage]) -> [RichMessage] {
         var prompts: [RichMessage] = []
         for message in ConversationMessageMerge.displayOrdered(messages) {

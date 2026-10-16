@@ -3,7 +3,7 @@ import SwiftUI
 /// Leading-aligned conversation identity in the system navigation bar.
 struct SessionHeaderTitleView: View {
     let model: SessionHeaderModel
-    /// Nil = 标题按钮整体仍只进提问史（旧调用方）；非 nil = caption 独立进工作区。
+    /// Nil = 标题按钮整体仍只进提示词（旧调用方）；非 nil = caption 独立进工作区。
     var workspaceRequest: Binding<Bool>? = nil
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
@@ -70,7 +70,7 @@ struct SessionHeaderTitleView: View {
     /// Workspace caption: same footnote line-family as the state row, quieter
     /// color, single line. Lives inside the existing header block — zero new rows
     /// in the conversation layout (the bar only grows if the title already wraps).
-    /// 点 caption 进工作区详情（外层标题按钮仍进提问史，互不抢）。
+    /// 点 caption 进工作区详情（外层标题按钮仍进提示词，互不抢）。
     @ViewBuilder
     private var workspaceCaption: some View {
         if let workspaceRequest {

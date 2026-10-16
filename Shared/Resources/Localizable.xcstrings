@@ -2294,7 +2294,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "收起本会话提问"
+            "value": "收起本会话提示词"
           }
         }
       }
@@ -2311,7 +2311,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "把对话滚动到这条提问"
+            "value": "把对话滚动到这条提示词"
           }
         }
       }
@@ -2345,7 +2345,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "展开本会话提问"
+            "value": "展开本会话提示词"
           }
         }
       }
@@ -2362,7 +2362,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "本会话提问（%lld）"
+            "value": "本会话提示词（%lld）"
           }
         }
       }
@@ -3352,7 +3352,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "本会话提问"
+            "value": "本会话提示词"
           }
         }
       }
@@ -3369,7 +3369,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "你在本会话发出的提问会出现在这里。"
+            "value": "你在本会话发出的提示词会出现在这里。"
           }
         }
       }
@@ -3386,7 +3386,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "还没有提问"
+            "value": "还没有提示词"
           }
         }
       }
@@ -3403,7 +3403,7 @@
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "跳到对话里这条提问"
+            "value": "跳到对话里这条提示词"
           }
         }
       }
@@ -3414,13 +3414,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Show questions in this session"
+            "value": "Show prompts in this session"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "查看本会话里你发过的提问"
+            "value": "查看本会话里你发过的提示词"
           }
         }
       }

@@ -1,12 +1,14 @@
 #if DEBUG
 import AppKit
 import Foundation
+import SwiftUI
 
 /// Exercises the real Mac pane presentation with a running, hosted agent.
 /// Uses in-memory workspace changes and never sends terminal input.
 @MainActor
 enum MacTerminalReturnInspection {
     private static var started = false
+    private static var coldStarted = false
 
     static func runIfRequested(workspace: MacWorkspace, session: SessionSummary,
                                stream: RemoteTerminalStream) {
@@ -113,6 +115,7 @@ enum MacTerminalReturnInspection {
         var preservedEveryTime = true
         var warmChatStallMs: [Int] = []
         var chatMeasurements: [Int] = []
+        var chatGeometry: [[String: Any]] = []
         var chatRows: [Int] = []
         var iterationAt: [Int] = []
         let loopStart = clock.now
@@ -128,6 +131,9 @@ enum MacTerminalReturnInspection {
             warmChatStallMs.append(chatProbe.end()["maxMainStallMs"] as? Int ?? -1)
             chatMeasurements.append(MacConversationTableCounters.measurements - measuredBefore)
             chatRows.append(workspace.paneSurfaces.store(for: session.key)?.timelineItems.count ?? -1)
+            chatGeometry.append(MacSessionSwitchInspection.renderGeometry(
+                workspace.paneSurfaces.existingEntry(for: session.key)?.view,
+                store: workspace.paneSurfaces.store(for: session.key)))
             let modeProbe = MainThreadStallProbe()
             modeProbe.begin()
             let modeStarted = clock.now
@@ -183,13 +189,77 @@ enum MacTerminalReturnInspection {
             "revealCaptured": revealCaptured,
             "chatCaptured": chatCaptured,
             "sessionRuntime": session.runtime ?? "",
+            "sessionKey": session.key,
             "sessionCwd": SessionPresentation.fullWorkspacePath(from: session),
             "sessionAttention": String(describing: session.attention),
             "warmChatMaxStallMs": warmChatStallMs,
             "chatMeasurements": chatMeasurements,
+            "chatGeometry": chatGeometry,
             "chatTimelineItems": chatRows,
             "iterationAtMs": iterationAt,
         ])
+    }
+
+    /// Cold production chat against disposable in-memory histories. No host
+    /// request, saved tail or user session is changed by this fixture.
+    static func inspectColdChatIfRequested(appModel: AppModel) async {
+        guard ProcessInfo.processInfo.arguments.contains("-CorralInspectColdChat"), !coldStarted else { return }
+        coldStarted = true
+        // The owner scenario starts in an already running terminal, not during
+        // application/connection startup or restoration of the other panes.
+        try? await Task.sleep(for: .seconds(3))
+        var results: [[String: Any]] = []
+        for (count, width, scale) in [(80, 900.0, 1.0), (400, 900.0, 1.0),
+                                      (2000, 900.0, 1.0), (2000, 420.0, 1.5)] {
+            let store = ConversationStore(sessionKey: "inspection-cold-\(count)", client: nil, live: false)
+            let messages = (1...count).map { index in
+                RichMessage(seq: index, role: index.isMultiple(of: 2) ? "assistant" : "user",
+                            text: index.isMultiple(of: 2)
+                                ? "## Reply \(index)\n\n" + String(repeating: "Native chat paragraph 中文 with **bold** and `code`. ", count: 60)
+                                : "Question \(index): inspect this conversation.")
+            }
+            guard let data = try? JSONEncoder().encode(messages),
+                  let list = try? JSONSerialization.jsonObject(with: data),
+                  let payload = try? JSONSerialization.data(withJSONObject: ["messages": list, "oldest_seq": 1, "newest_seq": count]),
+                  let snapshot = try? JSONDecoder().decode(SessionMessagesResponse.self, from: payload) else { continue }
+            let clock = ContinuousClock()
+            let projectionStart = clock.now
+            store.applySnapshot(snapshot)
+            let projectionMs = milliseconds(projectionStart.duration(to: clock.now))
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 780),
+                                  styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            let document = MacConversationTextDocument()
+            let root = NSHostingView(rootView: AnyView(ChatView(store: store, runtimeID: "codex")
+                .environment(appModel).environment(\.interfaceScale, scale)
+                .environment(\.macConversationTextDocument, document)))
+            root.sizingOptions = []
+            let before = MacConversationTableCounters.measurements
+            let probe = MainThreadStallProbe()
+            probe.begin()
+            let start = clock.now
+            window.contentView = root
+            window.orderBack(nil)
+            _ = await waitUntil {
+                !(MacSessionSwitchInspection.renderGeometry(root, store: store)["blank"] as? Bool ?? true)
+            }
+            let firstContentMs = milliseconds(start.duration(to: clock.now))
+            try? await Task.sleep(for: .milliseconds(150))
+            var result = MacSessionSwitchInspection.renderGeometry(root, store: store)
+            result["retainedItems"] = store.timelineItems.count
+            result["width"] = width
+            result["scale"] = scale
+            result["projectionMs"] = projectionMs
+            result["firstContentMs"] = firstContentMs
+            result["measurements"] = MacConversationTableCounters.measurements - before
+            result["stalls"] = probe.end()
+            results.append(result)
+            window.close()
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        if let data = try? JSONSerialization.data(withJSONObject: results, options: [.prettyPrinted]) {
+            try? data.write(to: URL(fileURLWithPath: "/tmp/corral-cold-chat.json"), options: .atomic)
+        }
     }
 
     /// Window content through `NSView.cacheDisplay`; not a desktop screenshot.

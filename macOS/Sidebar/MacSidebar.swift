@@ -100,10 +100,6 @@ struct MacSidebar: View {
                 #endif
             }
             .searchable(text: $filter, placement: .sidebar, prompt: Text("mac.sidebar.filter"))
-            .onChange(of: filter) { _, _ in filteredSectionExpansion.removeAll() }
-            .onChange(of: activeOnly) { _, _ in filteredSectionExpansion.removeAll() }
-            .onChange(of: runtimeFilter) { _, _ in filteredSectionExpansion.removeAll() }
-            .onChange(of: projectFilter) { _, _ in filteredSectionExpansion.removeAll() }
             .onChange(of: feed.host.id) { _, _ in
                 filter = ""
                 activeOnly = false
@@ -121,7 +117,7 @@ struct MacSidebar: View {
                     .id(feed.host.id)
                     .modifier(MacZoomContent())
                     .interfacePadding(.horizontal, Space.md)
-                    .interfacePadding(.vertical, Space.xs / 2)
+                    .interfacePadding(.vertical, 6)
             }
             .safeAreaBar(edge: .bottom, spacing: 0) {
                 HStack(spacing: Space.sm * interfaceScale) {
@@ -130,7 +126,7 @@ struct MacSidebar: View {
                 }
                 .modifier(MacZoomContent())
                 .interfacePadding(.horizontal, Space.md)
-                .interfacePadding(.vertical, Space.sm)
+                .interfacePadding(.vertical, 12)
             }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
@@ -205,12 +201,24 @@ struct MacSidebar: View {
                         Button {
                             toggleSection(section)
                         } label: {
-                            Text(verbatim: title(for: section))
-                                .interfaceFont(.body.weight(.semibold))
-                                .foregroundStyle(.primary)
-                                .interfaceFrame(height: MacSidebarMetrics.sectionHeight)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .contentShape(Rectangle())
+                            HStack(spacing: Space.sm * interfaceScale) {
+                                Text(verbatim: title(for: section))
+                                    .interfaceFont(.system(size: 12, weight: .semibold))
+                                    .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                                    .fixedSize()
+                                VStack(spacing: 0) {
+                                    Divider()
+                                        .overlay(Color(nsColor: .separatorColor).opacity(0.65))
+                                }
+                                .frame(maxWidth: .infinity)
+                                Text(verbatim: section.items.count.formatted())
+                                    .interfaceFont(.system(size: 11).monospacedDigit())
+                                    .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+                                    .fixedSize()
+                            }
+                            .interfaceFrame(height: MacSidebarMetrics.sectionHeight)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .accessibilityIdentifier("corral.date-section.\(section.id)")
@@ -385,7 +393,7 @@ struct MacSidebar: View {
     private func expansion(for section: DesktopSidebarProjection.Section) -> Binding<Bool> {
         Binding(
             get: {
-                if hasActiveScope { return filteredSectionExpansion[section.id] ?? true }
+                if let filtered = filteredSectionExpansion[section.id] { return filtered }
                 if let expanded = sectionExpansion[section.id] { return expanded }
                 switch section.kind {
                 case .pinned, .bucket(.today): return true
@@ -491,6 +499,21 @@ struct MacSidebar: View {
         if let data = try? JSONSerialization.data(withJSONObject: evidence, options: .prettyPrinted) {
             try? data.write(to: URL(fileURLWithPath: "/tmp/corral-sidebar-geometry.json"), options: .atomic)
         }
+        // Export the app's own content for spacing review when desktop capture
+        // is unavailable. This does not include WindowServer compositing.
+        if !sessions.isEmpty,
+           let path = ProcessInfo.processInfo.environment["CORRAL_INSPECTION_SIDEBAR_OUTPUT"],
+           !FileManager.default.fileExists(atPath: path),
+           let bitmap = root.bitmapImageRepForCachingDisplay(in: root.bounds) {
+            root.layoutSubtreeIfNeeded()
+            root.effectiveAppearance.performAsCurrentDrawingAppearance {
+                root.cacheDisplay(in: root.bounds, to: bitmap)
+            }
+            if let data = bitmap.representation(using: .png, properties: [:]) {
+                do { try data.write(to: URL(fileURLWithPath: path), options: .atomic) }
+                catch { NSLog("Sidebar inspection export failed: %@", error.localizedDescription) }
+            }
+        }
     }
     #endif
 }
@@ -524,7 +547,7 @@ struct MachineSwitcher: View {
                 MachineIconTile(size: 26)
                 VStack(alignment: .leading, spacing: 1 * interfaceScale) {
                     Text(verbatim: appModel.selectedHost?.displayName ?? "")
-                        .interfaceFont(.callout.weight(.semibold))
+                        .interfaceFont(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                     ConnectionBanner(state: appModel.connectionState, transport: appModel.activeTransport)

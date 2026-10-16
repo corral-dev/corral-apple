@@ -135,6 +135,14 @@ Physical acceptance: the console initially prevented reliable capture; the paire
 
 Acceptance-tooling follow-up: keep capture completion bounded and distinguish unavailable display/motion evidence from product failures. A capture process waiting indefinitely for an external marker can hold `corral-mac-acceptance`; never bypass ownership or terminate another owner's process. The maintained workflow needs an explicit bounded capture handoff; this recurring obstacle does not explain the product's measured stalls. Fixture probes that inspect shared TextKit networks must attribute rows through each view's own container glyphs (`MacPooledConversationList` probe's `displayedSeqs` pattern): every native view shares one storage, so `view.string` is the whole conversation for all of them and row-identity assertions built on it misfire.
 
+### Terminal-to-chat return stability (owner report, 2026-10-16)
+
+Owner clarification: a session may start in terminal and accumulate hundreds of turns before its first chat presentation. That cold return must reveal useful recent messages immediately, without synchronous work proportional to the entire retained transcript. Bound the initial native presentation to recent items; expose earlier content automatically on upward reading and keep prompt jumps complete. Warm retention alone does not satisfy this requirement. User experience and observed responsiveness take precedence over cache-hit or build-success metrics.
+
+Switching an agent pane from its native terminal to chat must preserve readable message geometry, reading position, selection and the draft, including while the agent streams and the pane width or zoom changes. Previous height-cache optimization does not establish correctness or acceptable return latency: the owner reports both severe pauses and frequent broken layout. This is Corral client presentation ownership; no native-history parser change is implied.
+
+Inspect the existing `MacPaneSurface` native retention/visibility implementation and the production conversation table before choosing the change. Reuse public AppKit hosting, visibility and exact-height APIs. Measure the same running session before/after with the terminal-return probe, and include repeated switches, changed width/zoom, streaming content and native glyph/row geometry. Keep timing, app-rendered snapshots, WindowServer screenshots and physical pointer interaction as separate evidence. iPhone has independently hosted chat/terminal content; TUI has no Mac chat presentation.
+
 ### Shared processing budget
 
 Every frame is ~8 ms at 120 Hz. Work that scales with payload size must not run on the main actor; the main actor only applies already-decoded values.

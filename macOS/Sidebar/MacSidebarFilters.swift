@@ -18,8 +18,8 @@ struct MacSidebarFilters: View {
     @Environment(\.controlActiveState) private var activeState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4 * interfaceScale) {
-            HStack(spacing: 4 * interfaceScale) {
+        VStack(alignment: .leading, spacing: Space.sm * interfaceScale) {
+            MacFilterChoices {
                 MacQuickFilterButton(selected: activeOnly, sidebar: true) {
                     Text("sessions.filter.active")
                     Text(verbatim: activeCount.formatted()).monospacedDigit().opacity(0.75)
@@ -29,29 +29,26 @@ struct MacSidebarFilters: View {
                 .accessibilityValue(Text(verbatim: activeCount.formatted()))
                 .accessibilityIdentifier("corral.filter.active")
                 Divider().interfaceFrame(width: 1, height: 16)
-                HStack(spacing: 4 * interfaceScale) {
-                    ForEach(SessionRuntimeFilter.ordered.filter { $0 != .all }, id: \.self) { runtime in
-                        MacQuickFilterButton(selected: runtimes.contains(runtime), sidebar: true, labelWidth: 20) {
-                            if let logo = Palette.runtimeLogoName(runtime.rawValue) {
-                                Image(logo)
-                                    .resizable()
-                                    .renderingMode(.original)
-                                    .scaledToFit()
-                                    .interfaceFrame(width: 18, height: 18)
-                                    // All assistant logos ship as monochrome light/dark
-                                    // pairs; the flipped scheme picks the contrasting
-                                    // variant on the accent fill. No per-assistant cases.
-                                    .environment(\.colorScheme, logoScheme(selected: runtimes.contains(runtime)))
-                            }
-                        } action: {
-                            SessionListFiltering.toggle(runtime, all: .all, in: &runtimes)
+                ForEach(SessionRuntimeFilter.ordered.filter { $0 != .all }, id: \.self) { runtime in
+                    MacQuickFilterButton(selected: runtimes.contains(runtime), sidebar: true, labelWidth: 20) {
+                        if let logo = Palette.runtimeLogoName(runtime.rawValue) {
+                            Image(logo)
+                                .resizable()
+                                .renderingMode(.original)
+                                .scaledToFit()
+                                .interfaceFrame(width: 18, height: 18)
+                                // All assistant logos ship as monochrome light/dark
+                                // pairs; the flipped scheme picks the contrasting
+                                // variant on the accent fill. No per-assistant cases.
+                                .environment(\.colorScheme, logoScheme(selected: runtimes.contains(runtime)))
                         }
-                        .accessibilityLabel(Text(verbatim: Palette.runtimeDisplayName(runtime.rawValue)))
-                        .help(Text(verbatim: Palette.runtimeDisplayName(runtime.rawValue)))
-                        .accessibilityIdentifier("corral.filter.runtime." + runtime.rawValue)
+                    } action: {
+                        SessionListFiltering.toggle(runtime, all: .all, in: &runtimes)
                     }
+                    .accessibilityLabel(Text(verbatim: Palette.runtimeDisplayName(runtime.rawValue)))
+                    .help(Text(verbatim: Palette.runtimeDisplayName(runtime.rawValue)))
+                    .accessibilityIdentifier("corral.filter.runtime." + runtime.rawValue)
                 }
-                Spacer(minLength: 0)
             }
             .accessibilityLabel(Text("sessions.filter.runtime"))
 
@@ -161,13 +158,14 @@ struct MacSidebarFilters: View {
 
 }
 
-/// Native capsules; macOS `.bordered` ignores tint, so a selected choice is
+/// Native buttons; macOS `.bordered` ignores tint, so a selected choice is
 /// the accent-filled `.borderedProminent` capsule. When macOS mutes an
 /// inactive window's fill, the label contrast keeps the selection readable.
 /// Shared with the New Session dialog.
 struct MacQuickFilterButton<Content: View>: View {
     @Environment(\.controlActiveState) private var activeState
     @Environment(\.interfaceScale) private var interfaceScale
+    @State private var labelContentWidth: CGFloat = 0
     let selected: Bool
     var sidebar = false
     var labelWidth: CGFloat? = nil
@@ -178,6 +176,8 @@ struct MacQuickFilterButton<Content: View>: View {
         Group {
             if selected {
                 button.buttonStyle(.borderedProminent)
+            } else if sidebar {
+                button.buttonStyle(.borderless)
             } else {
                 button.buttonStyle(.bordered)
             }
@@ -185,7 +185,10 @@ struct MacQuickFilterButton<Content: View>: View {
         .buttonBorderShape(.capsule)
         .controlSize(.small)
         .tint(Palette.accent)
-        .interfaceFrame(height: MacSidebarMetrics.filterHeight)
+        // A borderless native button has less intrinsic padding. Reserve the
+        // bordered button's footprint so a selection never shifts its peers.
+        .frame(width: sidebar && labelContentWidth > 0 ? labelContentWidth + 20 * interfaceScale : nil)
+        .interfaceFrame(height: sidebar ? MacSidebarMetrics.sidebarFilterHeight : MacSidebarMetrics.filterHeight)
         .accessibilityAddTraits(selected ? .isSelected : [])
         #if DEBUG
         .environment(\.controlActiveState, InspectionLaunchOptions.forcesKeyWindowControls ? .key : activeState)
@@ -205,10 +208,15 @@ struct MacQuickFilterButton<Content: View>: View {
         Button(action: action) {
             HStack(spacing: Space.xs) { content() }
                 .frame(width: labelWidth.map { $0 * interfaceScale })
-                .interfaceFont(.callout.weight(selected ? .semibold : .medium))
+                .interfaceFont(sidebar
+                    ? .system(size: 13, weight: selected ? .semibold : .medium)
+                    : .callout.weight(selected ? .semibold : .medium))
                 .foregroundStyle(labelColor)
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+                    if sidebar { labelContentWidth = width }
+                }
         }
     }
 }

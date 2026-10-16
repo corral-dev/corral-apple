@@ -19,6 +19,7 @@ struct MacPaneView: View {
     @State private var bodySize: CGSize = .zero
     @State private var paneFrame: CGRect = .zero
     @State private var terminalVisited = false
+    @State private var chatVisited = false
     /// Bumped on every (re)appearance; a disappear-triggered stop only runs
     /// when no reappearance has happened since, so a fast close→reopen can
     /// never stop the revived store from underneath its new start().
@@ -138,6 +139,7 @@ struct MacPaneView: View {
         .onAppear { prepareStore() }
         .onChange(of: mode, initial: true) { _, current in
             if current == .terminal && !terminalVisited { terminalVisited = true }
+            if current == .chat && !chatVisited { chatVisited = true }
         }
         #if DEBUG
         .onChange(of: prompts.count, initial: true) { _, _ in
@@ -145,6 +147,7 @@ struct MacPaneView: View {
         }
         .task { await MacPromptJumpInspection.run(key: session.key, workspace: workspace) { prompts } }
         .task { await MacCopyInspection.run(key: session.key, workspace: workspace) }
+        .task { await MacTerminalReturnInspection.inspectColdChatIfRequested(appModel: appModel) }
         .task { await MacSelectionDragInspection.run(key: session.key, workspace: workspace) }
         #endif
         .background {
@@ -190,24 +193,26 @@ struct MacPaneView: View {
                 .environment(\.conversationScrollReadAction, acknowledgeTerminalScrollRead)
                 .id(session.key)
             }
-            if mode == .chat {
+            if mode == .chat || chatVisited {
                 if let store {
-                    SessionDetailView(
-                        session: session,
-                        autoFocusComposer: autoFocusComposer,
-                        metadataStore: metadataStore,
-                        injectedStore: store,
-                        composerFocusRequest: workspace.composerFocusRequest(for: session.key),
-                        onComposerFocusChange: { focused in
-                            if focused { workspace.composerDidGainFocus(session.key) }
-                        },
-                        scrollRequest: workspace.scrollRequests[session.key],
-                        onDidCreateSession: { created in workspace.openCreated(created, asPane: true) }
-                    )
-                    .environment(\.macConversationTextDocument, workspace.paneSurfaces.entry(for: session.key).textDocument())
-                    .id(ObjectIdentifier(store))
-                    .environment(\.composerRecedes, composerRecedes)
-                    .animation(MacMotion.state, value: composerRecedes)
+                    MacChatSurface(isPresented: mode == .chat) {
+                        SessionDetailView(
+                            session: session,
+                            autoFocusComposer: autoFocusComposer,
+                            metadataStore: metadataStore,
+                            injectedStore: store,
+                            composerFocusRequest: workspace.composerFocusRequest(for: session.key),
+                            onComposerFocusChange: { focused in
+                                if focused { workspace.composerDidGainFocus(session.key) }
+                            },
+                            scrollRequest: workspace.scrollRequests[session.key],
+                            onDidCreateSession: { created in workspace.openCreated(created, asPane: true) }
+                        )
+                        .environment(\.macConversationTextDocument, workspace.paneSurfaces.entry(for: session.key).textDocument())
+                        .id(ObjectIdentifier(store))
+                        .environment(\.composerRecedes, composerRecedes)
+                        .animation(MacMotion.state, value: composerRecedes)
+                    }
                 } else {
                     ProgressView().interfaceFrame(maxWidth: .infinity, maxHeight: .infinity)
                 }
@@ -594,5 +599,53 @@ private struct MacPaneConnection: View {
             .onChange(of: lifetime?.isPresented) { _, presented in
                 if presented == true { onPresented() }
             }
+    }
+}
+
+
+/// Retain the chat's native table, row hosts, selection and composer while the
+/// terminal is presented. Reuses MacPaneSurface's native hiding/deferred-layout
+/// boundary; SwiftUI visibility modifiers would remount its native children.
+private struct MacChatSurface<Content: View>: NSViewRepresentable {
+    @Environment(AppModel.self) private var appModel
+    @Environment(MacWorkspace.self) private var workspace
+    @Environment(\.macPaneLifetime) private var lifetime
+    var isPresented: Bool
+    @ViewBuilder var content: () -> Content
+
+    func makeNSView(context: Context) -> MacPaneHostingView {
+        let view = MacPaneHostingView(rootView: AnyView(EmptyView()))
+        view.sizingOptions = []
+        updateNSView(view, context: context)
+        return view
+    }
+
+    func updateNSView(_ view: MacPaneHostingView, context: Context) {
+        if !isPresented, let responder = view.window?.firstResponder as? NSView,
+           responder.isDescendant(of: view) {
+            view.window?.makeFirstResponder(nil)
+        }
+        view.isHidden = !isPresented
+        guard isPresented else { return }
+        let env = context.environment
+        view.rootView = AnyView(content()
+            .environment(appModel)
+            .environment(workspace)
+            .environment(\.macPaneLifetime, lifetime)
+            .environment(\.interfaceScale, env.interfaceScale)
+            .environment(\.colorScheme, env.colorScheme)
+            .environment(\.locale, env.locale)
+            .environment(\.calendar, env.calendar)
+            .environment(\.timeZone, env.timeZone)
+            .environment(\.layoutDirection, env.layoutDirection)
+            .environment(\.font, env.font)
+            .environment(\.controlSize, env.controlSize)
+            .environment(\.dynamicTypeSize, env.dynamicTypeSize))
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: MacPaneHostingView,
+                      context: Context) -> CGSize? {
+        guard let width = proposal.width, let height = proposal.height else { return nil }
+        return CGSize(width: width, height: height)
     }
 }

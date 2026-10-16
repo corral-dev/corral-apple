@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// 会话页工作区入口：顶栏标题按钮里的副行 caption（folder + 短名），
-/// 不在对话区另起一行。点工作区 caption 进详情，点标题/状态仍进提问史。
+/// 不在对话区另起一行。点工作区 caption 进详情，点标题/状态仍进提示词。
 struct SessionWorkspaceCaption: View {
     @Environment(\.interfaceScale) private var interfaceScale
     let workspaceName: String
@@ -51,7 +51,7 @@ struct SessionWorkspaceCaption: View {
 }
 
 /// 工作区详情：名称、完整目录（可复制）、所属开发机。只确认位置。
-/// 顶栏副行 caption 的点入目标；标题本体仍打开提问史。
+/// 顶栏副行 caption 的点入目标；标题本体仍打开提示词。
 /// session 仍是唯一真相源：短名/全路径都从 session 派生，
 /// hostName 只做展示（缺失即未知），不参与定位。
 struct SessionWorkspaceSheet: View {

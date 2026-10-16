@@ -60,10 +60,13 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
         self.stream = stream
         stream.sink = self
         stream.updateTheme(scheme.theme)
-        reportFit()
+        lastReportedFit = nil
+        scheduleFit()
     }
 
     func unbind() {
+        cancelPendingFit()
+        lastReportedFit = nil
         stream?.sink = nil
         stream = nil
     }
@@ -76,14 +79,15 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
         isHidden = !presented
         accessibilityElementsHidden = !presented
         if !presented || !allowsInput { _ = resignFirstResponder() }
-        if revealed { reportFit() }
+        if !presented { cancelPendingFit() }
+        if revealed { scheduleFit() }
     }
 
     override var canBecomeFirstResponder: Bool { presented && allowsInput && super.canBecomeFirstResponder }
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        reportFit()
+        scheduleFit()
     }
 
     override func paste(_ sender: Any?) {
@@ -115,7 +119,27 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
         UIColor(red: CGFloat(rgb.red) / 255, green: CGFloat(rgb.green) / 255, blue: CGFloat(rgb.blue) / 255, alpha: 1)
     }
 
-    private func reportFit() {
+    /// Coalesced size vote (chat/terminal switch fix, 2026-10-15): removing the
+    /// chat composer grows this viewport by the composer height in the same
+    /// transaction that reveals the terminal. Voting every layout pass attaches
+    /// the host at the pre-expansion grid, paints a short grid, then resizes to
+    /// the settled grid: a composer-height blank strip at the bottom that fills
+    /// a moment later. Debouncing to the settled bounds makes the host attach
+    /// once at the final grid; a retained emulator keeps its old screen while
+    /// the fresh snapshot is on the way. Delay matches the shared stream's
+    /// 150 ms resize settle.
+    private var lastReportedFit: TerminalGrid?
+    private func scheduleFit() {
+        guard presented, !feedingHost, bounds.width > 0, bounds.height > 0 else { return }
+        NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(deliverFit), object: nil)
+        perform(#selector(deliverFit), with: nil, afterDelay: 0.15)
+    }
+
+    private func cancelPendingFit() {
+        NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(deliverFit), object: nil)
+    }
+
+    @objc private func deliverFit() {
         guard presented, !feedingHost, bounds.width > 0, bounds.height > 0 else { return }
         let emulator = getTerminal()
         let optimal = getOptimalFrameSize()
@@ -123,10 +147,13 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
         let cellHeight = optimal.height / CGFloat(max(1, emulator.rows))
         guard cellWidth > 0, cellHeight > 0 else { return }
         // Fit derives from the local viewport, never a received desktop grid.
-        stream?.updateFit(TerminalGrid(
+        let fit = TerminalGrid(
             cols: max(isAgent ? 40 : 20, Int(bounds.width / cellWidth)),
             rows: max(isAgent ? 10 : 5, Int(bounds.height / cellHeight))
-        ))
+        )
+        guard fit != lastReportedFit else { return }
+        lastReportedFit = fit
+        stream?.updateFit(fit)
     }
 
     // MARK: - TerminalStreamSink
@@ -176,7 +203,7 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
     }
 
     func sizeChanged(source: SwiftTerm.TerminalView, newCols: Int, newRows: Int) {
-        reportFit()
+        scheduleFit()
     }
 
     func setTerminalTitle(source: SwiftTerm.TerminalView, title: String) {}

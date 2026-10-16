@@ -277,7 +277,7 @@ enum MacSessionSwitchInspection {
 
     /// Inspect only product-owned native views. Never force layout or scroll:
     /// doing either before observing can repair the blank viewport under test.
-    private static func renderGeometry(_ root: NSView?, store: ConversationStore?) -> [String: Any] {
+    static func renderGeometry(_ root: NSView?, store: ConversationStore?) -> [String: Any] {
         guard let root else { return ["missingPane": true] }
         func descendants(_ view: NSView) -> [NSView] {
             [view] + view.subviews.flatMap(descendants)
@@ -327,7 +327,11 @@ enum MacSessionSwitchInspection {
             let frame = text.convert(text.bounds, to: document)
             return "y=\(frame.minY)..\(frame.maxY) used=\(layout.usedRect(for: container).maxY) doc=\(document.bounds.height)"
         }
-        return ["docFrames": docFrames, "blank": texts.isEmpty && nonTextIDs.isEmpty,
+        let tables = descendants(root).compactMap { $0 as? NSTableView }
+            .filter { !$0.isHiddenOrHasHiddenAncestor }
+        return ["tableIDs": tables.map { String(describing: ObjectIdentifier($0)) },
+                "tableRows": tables.map { $0.numberOfRows },
+                "docFrames": docFrames, "blank": texts.isEmpty && nonTextIDs.isEmpty,
                 "swiftUIScroll": swiftUI, "visibleTextRows": texts.count, "overflowRows": overflows, "emptyGlyphRows": emptyGlyphRows,
                 "wrongMessageRanges": rangesWrong, "overlappingRows": overlaps, "overflowDetails": overflowDetails,
                 "scrolls": scrolls, "allTextFrames": descendants(root).compactMap { $0 as? MacDirectMessageTextView }.map {

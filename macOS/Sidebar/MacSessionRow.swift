@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Desktop session row: exactly two lines at every content state.
@@ -20,7 +21,8 @@ struct MacSessionRow: View {
             VStack(alignment: .leading, spacing: MacSidebarMetrics.lineSpacing * interfaceScale) {
                 HStack(spacing: Space.xs * interfaceScale) {
                     Text(SessionPresentation.displayTitle(for: session))
-                        .interfaceFont(.body)
+                        .interfaceFont(.system(size: 14))
+                        .foregroundStyle(Color(nsColor: .labelColor))
                         .fontWeight(needsPerson ? .semibold : nil)
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -28,7 +30,7 @@ struct MacSessionRow: View {
                     statusDot
                     Text(verbatim: MacSidebarMetrics.compactTime(for: session, now: now))
                         .interfaceFont(.subheadline.monospacedDigit())
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color(nsColor: .secondaryLabelColor))
                         .lineLimit(1)
                         .fixedSize()
                 }
@@ -44,8 +46,8 @@ struct MacSessionRow: View {
                     secondaryLine
                         .truncationMode(.tail)
                 }
-                .interfaceFont(.subheadline)
-                .foregroundStyle(.secondary)
+                .interfaceFont(.system(size: 12))
+                .foregroundStyle(Color(nsColor: .secondaryLabelColor))
                 .lineLimit(1)
             }
         }
@@ -74,16 +76,16 @@ struct MacSessionRow: View {
         case (nil, true): return Text(verbatim: " ")
         case (nil, false): return Text(preview)
         case (let project?, true): return project
-        case (let project?, false): return Text("\(project)  \(Text(preview))")
+        case (let project?, false): return Text("\(project)    \(Text(preview))")
         }
     }
 
     private var visibleProject: Text? {
         let name = SessionPresentation.projectName(from: session)
         switch name {
-        case "~": return Text("sessions.project.home").fontWeight(.semibold).foregroundStyle(.primary)
-        case "": return Text("sessions.project.unknown").fontWeight(.semibold).foregroundStyle(.primary)
-        default: return Text(verbatim: name).fontWeight(.semibold).foregroundStyle(.primary)
+        case "~": return Text("sessions.project.home").fontWeight(.semibold).foregroundStyle(Color(nsColor: .labelColor))
+        case "": return Text("sessions.project.unknown").fontWeight(.semibold).foregroundStyle(Color(nsColor: .labelColor))
+        default: return Text(verbatim: name).fontWeight(.semibold).foregroundStyle(Color(nsColor: .labelColor))
         }
     }
 
@@ -163,15 +165,16 @@ struct RuntimeGlyph: View {
 /// Sidebar sizing and the shared status-dot vocabulary.
 enum MacSidebarMetrics {
     /// Line height of the body-sized title line; the glyph centers on it.
-    static let titleLineHeight: CGFloat = 17
-    /// Vertical rhythm (design: Vertical rhythm, owner request 2026-10-08).
-    static let lineSpacing: CGFloat = 2
-    static let rowPadding: CGFloat = 4
+    static let titleLineHeight: CGFloat = 20
+    /// Sidebar hierarchy and spacing (owner request, 2026-10-16).
+    static let lineSpacing: CGFloat = 4
+    static let rowPadding: CGFloat = 8
     /// Equal two-line session height; supporting entries remain compact.
-    static let rowHeight: CGFloat = 52
+    static let rowHeight: CGFloat = 60
     static let compactRowHeight: CGFloat = 32
-    static let sectionHeight: CGFloat = 28
+    static let sectionHeight: CGFloat = 24
     static let filterHeight: CGFloat = 28
+    static let sidebarFilterHeight: CGFloat = 30
 
     /// Follows the system sidebar icon size (General → Sidebar icon size).
     static func glyph(_ rowSize: SidebarRowSize) -> CGFloat {
