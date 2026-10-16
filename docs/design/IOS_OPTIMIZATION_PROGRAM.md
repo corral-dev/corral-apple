@@ -73,9 +73,9 @@
 - [手机客户端职责与验收入口](../../AGENTS.md)
 - [手机客户端界面知识库](../UI_DESIGN_KNOWLEDGE_BASE.md)
 - [手机客户端性能知识库](../PERFORMANCE_KNOWLEDGE_BASE.md)
-- [移动端数据面设计](https://github.com/corral-dev/corral/blob/main/docs/design/MOBILE_REMOTE_DATA_PLANE_DESIGN.md)
-- [远程接力知识库](https://github.com/corral-dev/corral/blob/main/docs/REMOTE_KNOWLEDGE_BASE.md)
-- [中继协议 v2](https://github.com/corral-dev/corral-relay/blob/main/docs/PROTOCOL_V2.md)
+- [移动端数据面设计](../https://github.com/corral-dev/corral/blob/main/docs/design/MOBILE_REMOTE_DATA_PLANE_DESIGN.md)
+- [远程接力知识库](../https://github.com/corral-dev/corral/blob/main/docs/REMOTE_KNOWLEDGE_BASE.md)
+- [中继协议 v2](../../../relay/docs/PROTOCOL_V2.md)
 
 ## 3. 建议成立的专项优化小组
 
@@ -227,9 +227,9 @@
 - [iOS 项目入口与真机验收](../../AGENTS.md)
 - [UI 设计知识库](../UI_DESIGN_KNOWLEDGE_BASE.md)
 - [性能知识库](../PERFORMANCE_KNOWLEDGE_BASE.md)
-- [移动端数据面设计](https://github.com/corral-dev/corral/blob/main/docs/design/MOBILE_REMOTE_DATA_PLANE_DESIGN.md)
-- [远程接力知识库](https://github.com/corral-dev/corral/blob/main/docs/REMOTE_KNOWLEDGE_BASE.md)
-- [中继协议 v2](https://github.com/corral-dev/corral-relay/blob/main/docs/PROTOCOL_V2.md)
+- [移动端数据面设计](../https://github.com/corral-dev/corral/blob/main/docs/design/MOBILE_REMOTE_DATA_PLANE_DESIGN.md)
+- [远程接力知识库](../https://github.com/corral-dev/corral/blob/main/docs/REMOTE_KNOWLEDGE_BASE.md)
+- [中继协议 v2](../../../relay/docs/PROTOCOL_V2.md)
 
 ### 官方与同类实现
 
@@ -386,7 +386,7 @@ An independent fresh-Agent usability evaluation was not run: the current task do
 
 ## Creation and input outcome reliability (2026-10-09)
 
-Owner-approved shared iPhone/Mac correction: retain a durable creation identity before calling the host and reuse it after a transport failure; reconcile the same request instead of launching another empty session. Poll accepted/dispatching text receipts until the host establishes native acceptance or a useful uncertain/failure outcome. Cancel provisional Working on failure/uncertainty and retain the original outgoing instruction for review. Existing native New Session `Button`, `ProgressView` and error text remain the interface; no extra confirmation step is introduced. Host semantics and acceptance matrix are owned by [the mobile data plane design](https://github.com/corral-dev/corral/blob/main/docs/design/MOBILE_REMOTE_DATA_PLANE_DESIGN.md#10-creation-and-first-input-reliability-2026-10-09).
+Owner-approved shared iPhone/Mac correction: retain a durable creation identity before calling the host and reuse it after a transport failure; reconcile the same request instead of launching another empty session. Poll accepted/dispatching text receipts until the host establishes native acceptance or a useful uncertain/failure outcome. Cancel provisional Working on failure/uncertainty and retain the original outgoing instruction for review. Existing native New Session `Button`, `ProgressView` and error text remain the interface; no extra confirmation step is introduced. Host semantics and acceptance matrix are owned by [the mobile data plane design](../https://github.com/corral-dev/corral/blob/main/docs/design/MOBILE_REMOTE_DATA_PLANE_DESIGN.md#10-creation-and-first-input-reliability-2026-10-09).
 
 The Mac workspace assistant shortcut must use the same creation coordinator as New Session. A host/client switch while creation awaits must not open the result in another machine’s workspace; the original durable operation remains recoverable.
 

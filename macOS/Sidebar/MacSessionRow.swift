@@ -7,6 +7,7 @@ import SwiftUI
 /// preview. See docs/design/MACOS_CLIENT_DESIGN.md, sidebar density redesign.
 struct MacSessionRow: View {
     @Environment(\.interfaceScale) private var interfaceScale
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.sidebarRowSize) private var rowSize
     @Environment(\.sidebarNow) private var now
     let session: SessionSummary
@@ -67,8 +68,7 @@ struct MacSessionRow: View {
     }
 
     /// Project then preview; a blank string keeps the line when both are empty.
-    /// The project reads first: primary semibold over the secondary preview
-    /// (design: Collapsed split and project prominence).
+    /// The project uses semibold Pine/neutral ink before the secondary preview.
     private var secondaryLine: Text {
         let preview = SessionPresentation.preview(for: session)
         let project = visibleProject
@@ -83,9 +83,9 @@ struct MacSessionRow: View {
     private var visibleProject: Text? {
         let name = SessionPresentation.projectName(from: session)
         switch name {
-        case "~": return Text("sessions.project.home").fontWeight(.semibold).foregroundStyle(Color(nsColor: .labelColor))
-        case "": return Text("sessions.project.unknown").fontWeight(.semibold).foregroundStyle(Color(nsColor: .labelColor))
-        default: return Text(verbatim: name).fontWeight(.semibold).foregroundStyle(Color(nsColor: .labelColor))
+        case "~": return Text("sessions.project.home").fontWeight(.semibold).foregroundStyle(Palette.sessionProject(in: colorScheme))
+        case "": return Text("sessions.project.unknown").fontWeight(.semibold).foregroundStyle(Palette.sessionProject(in: colorScheme))
+        default: return Text(verbatim: name).fontWeight(.semibold).foregroundStyle(Palette.sessionProject(in: colorScheme))
         }
     }
 

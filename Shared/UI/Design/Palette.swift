@@ -8,11 +8,20 @@ import SwiftUI
 enum Palette {
     /// Pine-inspired green, lifted on dark surfaces for readable interaction.
     static let accent = Color("AccentColor")
+    /// List metadata uses Pine ink in light mode and quiet neutral ink in dark.
+    static func sessionProject(in colorScheme: ColorScheme) -> Color {
+        if colorScheme == .light { return brandPine }
+        #if os(macOS)
+        return Color(nsColor: .labelColor)
+        #else
+        return .primary
+        #endif
+    }
     /// Contrasting content on a filled primary action.
     static let onAccent = Color("OnAccentColor")
     /// Warm yellow sampled from the app-icon hat.
     static let brandYellow = Color(hex: 0xFDC553)
-    /// Deep pine sampled from the app-icon hat; brand tiles such as the machine icon.
+    /// Deep pine for brand tiles and readable light-mode project-name ink.
     static let brandPine = Color("BrandPine")
     /// Error text, icons and tinted error bands; readable in both appearances.
     /// Status dots keep the CLI attention colors instead.

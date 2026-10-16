@@ -36,7 +36,7 @@ Physical limitations: the paired iPhone was initially unavailable; it later beca
 
 ## Delivery evidence (2026-10-14)
 
-Committed source `d20a139` produced signed iPhone 1.0.163 (173) and universal Mac 0.3.99 (103). Full Release compiler/archive/export diagnostics were reviewed with the same individually assessed existing warnings above. ios-deliver independently verified the phone installation and AppShelf upload (release 257); devicectl returned the installed version/build. Launch into the changed screen was denied by the physical phone lock, so screen and input acceptance remain pending. The signed build is available from the configured distribution shelf.
+Committed source `d20a139` produced signed iPhone 1.0.163 (173) and universal Mac 0.3.99 (103). Full Release compiler/archive/export diagnostics were reviewed with the same individually assessed existing warnings above. ios-deliver independently verified the phone installation and AppShelf upload (release 257); devicectl returned the installed version/build. Launch into the changed screen was denied by the physical phone lock, so screen and input acceptance remain pending. The signed build is available from the internal install shelf.
 
 Mac installation matched the committed exported binary hash and version/build. Its new local client reported ready with the data plane attached; the first diagnostic check ran before connection readiness and a subsequent real-path verification passed. Window capture remained unavailable. TUI presentation is unchanged; the 21 host terminal tests verify the shared transport boundary. Mac notarization/publication runs in the existing durable maintainer workflow; its release receipt must establish public delivery separately from local installation.
 

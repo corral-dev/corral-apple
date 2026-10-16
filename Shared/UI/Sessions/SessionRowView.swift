@@ -7,6 +7,7 @@ import SwiftUI
 /// Accessibility sizes reflow for readability.
 struct SessionRowView: View {
     @Environment(\.interfaceScale) private var interfaceScale
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let session: SessionSummary
 
@@ -101,8 +102,7 @@ struct SessionRowView: View {
         }
     }
 
-    /// The project reads first on the meta line: primary semibold over the
-    /// secondary time (Mac design: Collapsed split and project prominence).
+    /// Project ink distinguishes the semibold metadata from the neutral time.
     @ViewBuilder
     private var projectLabel: some View {
         let project = SessionPresentation.projectName(from: session)
@@ -116,7 +116,7 @@ struct SessionRowView: View {
             }
         }
         .interfaceFont(Typography.sessionMeta.weight(.semibold))
-        .foregroundStyle(.primary)
+        .foregroundStyle(Palette.sessionProject(in: colorScheme))
         .lineLimit(1)
         .truncationMode(.tail)
     }
