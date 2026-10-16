@@ -238,6 +238,8 @@ struct MacConversationTable: NSViewRepresentable {
         private var isReaderScrolling = false
         private var isAutoLoading = false
         private var autoLoadHeld = false
+        private var historyCheckScheduled = false
+        private var lastHistoryLoadRows: [MacConversationRow]?
         private var isJumping = false
         private var jumpGeneration = 0
         private var lastReadAck = Date.distantPast
@@ -332,6 +334,7 @@ struct MacConversationTable: NSViewRepresentable {
                 DispatchQueue.main.async { view.$scrollToMessageID.wrappedValue = nil }
                 jump(to: target)
             }
+            scheduleHistoryCheck()
         }
 
         private func applyRows(_ newRows: [MacConversationRow], renderChanged: Bool) {
@@ -413,6 +416,7 @@ struct MacConversationTable: NSViewRepresentable {
 
         func tableWillLayout() {
             guard let table, canMeasure, let column = table.tableColumns.first else { return }
+            defer { scheduleHistoryCheck() }
             let width = rowWidth
             if abs(column.width - width) > 0.25 { column.width = width }
             guard needsRemeasure || abs(width - measuredWidth) > 0.25 else { return }
@@ -637,6 +641,7 @@ struct MacConversationTable: NSViewRepresentable {
                 isReaderScrolling = true
                 if !userHasScrolled { userHasScrolled = true }
                 autoLoadHeld = false
+                lastHistoryLoadRows = nil
                 acknowledgeRead(force: phase.contains(.began))
             }
         }
@@ -650,6 +655,9 @@ struct MacConversationTable: NSViewRepresentable {
                     isReaderScrolling = false
                 }
             }
+            // At the top, a wheel can leave clip bounds unchanged. The input
+            // still requests earlier history; a bounds notification is optional.
+            scheduleHistoryCheck()
         }
 
         private func liveScroll(started: Bool) {
@@ -657,16 +665,19 @@ struct MacConversationTable: NSViewRepresentable {
                 isReaderScrolling = true
                 if !userHasScrolled { userHasScrolled = true }
                 autoLoadHeld = false
+                lastHistoryLoadRows = nil
             } else {
                 updateFollowFromViewport()
                 isReaderScrolling = false
             }
+            scheduleHistoryCheck()
         }
 
         /// Content or viewport size changed outside a row update (layout,
         /// window or pane resize): keep the latest edge while following.
         /// Deferred: scrolling inside the table's own layout pass is unsafe.
         private func geometryDidChange() {
+            scheduleHistoryCheck()
             guard followsLatest, !isReaderScrolling, !pinScheduled else { return }
             pinScheduled = true
             DispatchQueue.main.async { [weak self] in
@@ -706,8 +717,22 @@ struct MacConversationTable: NSViewRepresentable {
             setFollowsLatest(false)
         }
 
+        /// Evaluate outside native tiling and after SwiftUI can publish a new
+        /// slice. This also fills a short, unscrollable initial viewport.
+        private func scheduleHistoryCheck() {
+            guard !historyCheckScheduled else { return }
+            historyCheckScheduled = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.016) { [weak self] in
+                guard let self else { return }
+                self.historyCheckScheduled = false
+                self.loadEarlierIfReading()
+            }
+        }
+
         private func loadEarlierIfReading() {
-            guard let load = onLoadEarlier, !isAutoLoading, !autoLoadHeld, !isJumping,
+            guard canMeasure, !needsRemeasure, measuredWidth > 1,
+                  let load = onLoadEarlier, !isAutoLoading, !autoLoadHeld, !isJumping,
+                  lastHistoryLoadRows != rows,
                   ChatAutoLoadEarlierPolicy.shouldLoad(
                       contentHeight: contentHeight,
                       containerHeight: readingRect.height,
@@ -715,11 +740,13 @@ struct MacConversationTable: NSViewRepresentable {
                       userHasScrolled: userHasScrolled
                   ) else { return }
             isAutoLoading = true
+            lastHistoryLoadRows = rows
             Task { @MainActor [weak self] in
                 let loaded = await load()
                 guard let self else { return }
                 if !loaded { self.autoLoadHeld = true }
                 self.isAutoLoading = false
+                if loaded { self.scheduleHistoryCheck() }
             }
         }
 

@@ -205,6 +205,7 @@ enum MacTerminalReturnInspection {
     static func inspectColdChatIfRequested(appModel: AppModel) async {
         guard ProcessInfo.processInfo.arguments.contains("-CorralInspectColdChat"), !coldStarted else { return }
         coldStarted = true
+        let shortTail = ProcessInfo.processInfo.arguments.contains("-CorralInspectShortChat")
         // The owner scenario starts in an already running terminal, not during
         // application/connection startup or restoration of the other panes.
         try? await Task.sleep(for: .seconds(3))
@@ -215,7 +216,7 @@ enum MacTerminalReturnInspection {
             let messages = (1...count).map { index in
                 RichMessage(seq: index, role: index.isMultiple(of: 2) ? "assistant" : "user",
                             text: index.isMultiple(of: 2)
-                                ? "## Reply \(index)\n\n" + String(repeating: "Native chat paragraph 中文 with **bold** and `code`. ", count: 60)
+                                ? "## Reply \(index)\n\n" + String(repeating: "Native chat paragraph 中文 with **bold** and `code`. ", count: shortTail ? 0 : 60)
                                 : "Question \(index): inspect this conversation.")
             }
             guard let data = try? JSONEncoder().encode(messages),
@@ -226,7 +227,7 @@ enum MacTerminalReturnInspection {
             let projectionStart = clock.now
             store.applySnapshot(snapshot)
             let projectionMs = milliseconds(projectionStart.duration(to: clock.now))
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 780),
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: shortTail ? 1200 : 780),
                                   styleMask: [.titled, .resizable], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
             let document = MacConversationTextDocument()
@@ -241,7 +242,7 @@ enum MacTerminalReturnInspection {
             window.contentView = root
             window.orderBack(nil)
             _ = await waitUntil {
-                !(MacSessionSwitchInspection.renderGeometry(root, store: store)["blank"] as? Bool ?? true)
+                (MacSessionSwitchInspection.renderGeometry(root, store: store)["visibleTextRows"] as? Int ?? 0) > 0
             }
             let firstContentMs = milliseconds(start.duration(to: clock.now))
             try? await Task.sleep(for: .milliseconds(150))
@@ -258,6 +259,17 @@ enum MacTerminalReturnInspection {
             }
             if let scroll = descendants(root).compactMap({ $0 as? MacConversationTable.ConversationScrollView }).first,
                let table = scroll.documentView as? NSTableView {
+                if shortTail {
+                    // Do not move the clip or synthesize a reading gesture:
+                    // an initially unscrollable tail must fill on its own.
+                    _ = await waitUntil {
+                        table.numberOfRows > 13 && table.rect(ofRow: table.numberOfRows - 1).maxY
+                            > scroll.contentView.bounds.height
+                    }
+                    result["automaticFillReachedScrollable"] = table.numberOfRows > 13
+                        && table.rect(ofRow: table.numberOfRows - 1).maxY > scroll.contentView.bounds.height
+                    result["automaticFillRows"] = table.numberOfRows
+                }
                 let initialRows = table.numberOfRows
                 scroll.coordinator?.readerScrollWillChange(phase: .began, momentum: [])
                 scroll.contentView.scroll(to: .zero)
@@ -266,6 +278,25 @@ enum MacTerminalReturnInspection {
                 _ = await waitUntil { table.numberOfRows > initialRows }
                 result["earlierRowsRevealed"] = table.numberOfRows > initialRows
                 result["earlierGeometry"] = MacSessionSwitchInspection.renderGeometry(root, store: store)
+                if shortTail {
+                    var consecutiveLoads = 0
+                    for _ in 0..<3 {
+                        let previousRows = table.numberOfRows
+                        scroll.coordinator?.readerScrollWillChange(phase: .began, momentum: [])
+                        scroll.contentView.scroll(to: .zero)
+                        scroll.reflectScrolledClipView(scroll.contentView)
+                        scroll.coordinator?.readerScrollDidChange(phase: [], momentum: [])
+                        if await waitUntil({ table.numberOfRows > previousRows }) { consecutiveLoads += 1 }
+                        try? await Task.sleep(for: .milliseconds(60))
+                    }
+                    result["consecutiveEarlierLoads"] = consecutiveLoads
+                    result["finalHistoryGeometry"] = MacSessionSwitchInspection.renderGeometry(root, store: store)
+                    if let bitmap = root.bitmapImageRepForCachingDisplay(in: root.bounds) {
+                        root.cacheDisplay(in: root.bounds, to: bitmap)
+                        try? bitmap.representation(using: .png, properties: [:])?.write(to: URL(
+                            fileURLWithPath: "/tmp/corral-history-\(count)-\(Int(width)).png"))
+                    }
+                }
             }
             results.append(result)
             window.close()
