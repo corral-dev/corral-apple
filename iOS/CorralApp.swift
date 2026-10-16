@@ -26,8 +26,16 @@ struct CorralApp: App {
 
     var body: some Scene {
         WindowGroup {
-            NavigationStack(path: $navigationPath) {
-                HostListView()
+            Group {
+                #if DEBUG
+                if ProcessInfo.processInfo.arguments.contains("-CorralInspectDeletion") {
+                    SessionDeletionInspection()
+                } else {
+                    NavigationStack(path: $navigationPath) { HostListView() }
+                }
+                #else
+                NavigationStack(path: $navigationPath) { HostListView() }
+                #endif
             }
             .tint(Palette.accent)
             .environment(appModel)

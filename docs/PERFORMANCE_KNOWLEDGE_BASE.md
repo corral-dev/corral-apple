@@ -302,6 +302,8 @@ Final verification and delivery: the TUI full-text modal's 15 existing behavior 
 
 ## Compiler diagnostics (2026-10-07)
 
+Standalone AppModel probe source lists must include the current `Shared/UI/Design/AppPreferences.swift` owner. Missing AppLanguage/AppAppearance/AppLanguageSynchronizer definitions are harness membership failures, not application connection failures. Keep the real preferences implementation and connection assertions; do not substitute preference stubs. This omission was corrected in `scripts/test_connection_model.py` during the October 16 integration checks.
+
 The Agent Activity verification exposed existing Swift 6 diagnostics in the portable suite. Main-actor stores must be initialized and cleaned up by XCTest's asynchronous `@MainActor` setup/teardown overrides, not synchronous nonisolated overrides. Keep the same fixture isolation and cleanup. Apple documents this execution contract in [test setup and teardown](https://developer.apple.com/documentation/xctest/set-up-and-tear-down-state-in-your-tests).
 
 Bounded C buffers returned by address-formatting APIs must be decoded only through their first null terminator. The array `String(cString:)` overload is deprecated in the installed SDK; explicit UTF-8 decoding preserves the IPv4 strings. Explicitly discard the unused shell-close RPC response. Remove unnecessary `try` markers from nonthrowing session-dictionary helpers. Portable test source membership must account for every file: activity-state tests belong to the UI-only Xcode path; notification-ledger tests belong to the portable Core suite.

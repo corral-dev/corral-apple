@@ -45,6 +45,7 @@ let package = Package(
                 "RuntimeLogoTests.swift",
                 "SessionActionsMenuTests.swift",
                 "SessionHeaderPresentationTests.swift",
+                "SessionDeletionPresentationTests.swift",
                 "SessionTextSizeTests.swift",
             ],
             sources: [
@@ -65,6 +66,7 @@ let package = Package(
                 "LanDiscoveryTests.swift",
                 "NativeQuestionTests.swift",
                 "NotificationLedgerTests.swift",
+                "SessionNotificationTextTests.swift",
                 "NotificationPreviewTests.swift",
                 "NotificationReplyTests.swift",
                 "NotificationTapRoutingTests.swift",

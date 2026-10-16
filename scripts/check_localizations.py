@@ -59,6 +59,15 @@ KEY_SHAPE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$")
 # the xcstrings key is either the base or `base + " %lld"/" %@"`.
 INTERPOLATION = re.compile(r"\s*\\\(")
 
+# Dynamic key construction, e.g. `String(localized: "notification.\(kind)")`:
+# compiles to the single catalog key `notification.%@`, which has no entry, so
+# the device renders the raw `notification.completed` key. Such usages must be
+# replaced with static literals (see SessionNotificationText).
+DYNAMIC_LOCALIZED = re.compile(
+    r"String\s*\(\s*localized:\s*(?:String\.LocalizationValue\s*\(\s*)?"
+    r"\"((?:[^\"\\]|\\.)*?)\\\(",
+)
+
 
 def base_key(raw: str) -> str:
     return INTERPOLATION.split(raw, maxsplit=1)[0]
@@ -147,6 +156,29 @@ def main() -> int:
     for swift_file in swift_files:
         if ".derivedData" in swift_file.parts:
             continue
+        try:
+            raw_text = swift_file.read_text(encoding="utf-8")
+        except OSError:
+            raw_text = ""
+        joined_nocomments = "\n".join(
+            line.split("//", 1)[0] for line in raw_text.splitlines()
+        )
+        for match in DYNAMIC_LOCALIZED.finditer(joined_nocomments):
+            prefix = match.group(1).strip()
+            # Legitimate interpolation keeps a full key base, e.g.
+            # `String(localized: "sessions.x \(n)")` -> base `sessions.x`
+            # with catalog entry `sessions.x %lld`. A prefix ending in `.`
+            # (e.g. `notification.`) can never match — it always renders raw.
+            if not prefix or prefix.endswith(".") or not catalog_has(catalog, prefix):
+                lineno = joined_nocomments.count("\n", 0, match.start(1)) + 1
+                try:
+                    rel = swift_file.relative_to(REPO)
+                except ValueError:
+                    rel = swift_file
+                problems.append(
+                    f"dynamic localization key '{prefix}...' "
+                    f"(used at {rel}:{lineno}) -- use static literals"
+                )
         for key, lineno in extract_keys(swift_file):
             checked += 1
             entry = None
@@ -158,7 +190,10 @@ def main() -> int:
                 )
                 if hit is not None:
                     entry = catalog[hit]
-            rel = swift_file.relative_to(REPO)
+            try:
+                rel = swift_file.relative_to(REPO)
+            except ValueError:
+                rel = swift_file
             if entry is None:
                 problems.append(f"missing key {key}  (used at {rel}:{lineno})")
             elif not entry["en"].strip() or not entry["zh-Hans"].strip():

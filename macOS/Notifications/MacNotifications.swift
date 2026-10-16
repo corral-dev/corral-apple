@@ -137,7 +137,8 @@ final class MacNotifications: NSObject, UNUserNotificationCenterDelegate {
         await refreshAuthorization()
         guard enabled, authorization == .authorized || authorization == .provisional else { return }
         let content = UNMutableNotificationContent()
-        content.title = String(localized: String.LocalizationValue("notification.\(kind.rawValue)"))
+        guard let title = SessionNotificationText.title(forKind: kind.rawValue) else { return }
+        content.title = title
         content.subtitle = session.title.isEmpty ? "Corral" : session.title
         content.body = NotificationPreview.body(session.lastAgent, fallback: content.title)
         content.sound = .default

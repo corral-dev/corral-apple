@@ -30,7 +30,6 @@ struct SessionListView: View {
     @State private var openedSessionRoute: SessionRoute?
     /// Notification-tap session leg, pushed once this host's snapshot holds the key.
     @State private var notificationSessionRoute: SessionRoute?
-    @State private var sessionToDelete: SessionSummary?
     @State private var hapticScope = HapticScope()
     /// True while this list is the visible navigation content. Pending taps are
     /// consumed only here, never by an offscreen or stale same-host instance.
@@ -132,60 +131,13 @@ struct SessionListView: View {
                         Section {
                             if expanded {
                                 ForEach(section.sessions) { session in
-                                    NavigationLink(value: SessionRoute(key: session.key)) {
-                                        SessionRowView(session: session)
-                                    }
-                                    .confirmationDialog(
-                                        "sessions.delete_confirm.title",
-                                        isPresented: Binding(
-                                            get: { sessionToDelete?.key == session.key },
-                                            set: { presented in
-                                                if !presented, sessionToDelete?.key == session.key {
-                                                    sessionToDelete = nil
-                                                }
-                                            }
-                                        ),
-                                        titleVisibility: .visible,
-                                        presenting: sessionToDelete
-                                    ) { target in
-                                        Button("sessions.action.delete", role: .destructive) {
-                                            sessionToDelete = nil
-                                            Task { await deleteSession(target) }
-                                        }
-                                        Button("action.cancel", role: .cancel) { sessionToDelete = nil }
-                                    }
-                                    .listRowSeparator(.visible, edges: .bottom)
-                                    .alignmentGuide(.listRowSeparatorLeading) { dimensions in
-                                        dimensions[.leading] + SessionListLayout.separatorLeading
-                                    }
-                                    .listRowInsets(SessionListLayout.rowInsets)
+                                    SessionListItem(
+                                        session: session,
+                                        onPin: { Task { await togglePin(session) } },
+                                        onStop: { Task { await stopSession(session) } },
+                                        onDelete: { target in Task { await deleteSession(target) } }
+                                    )
                                     .onAppear { listStore.rememberOpened(session) }
-                                    .swipeActions(edge: .leading) {
-                                        let isPinned = session.pinned == true
-                                            || session.group?.pinned == true
-                                        Button {
-                                            Task { await togglePin(session) }
-                                        } label: {
-                                            Label(
-                                                isPinned ? "sessions.action.unpin" : "sessions.action.pin",
-                                                systemImage: isPinned ? "pin.slash" : "pin"
-                                            )
-                                        }
-                                        .tint(Palette.accent)
-                                    }
-                                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                        Button(role: .destructive) {
-                                            sessionToDelete = session
-                                        } label: {
-                                            Label("sessions.action.delete", systemImage: "trash")
-                                        }
-                                        Button {
-                                            Task { await stopSession(session) }
-                                        } label: {
-                                            Label("sessions.action.stop", systemImage: "stop.fill")
-                                        }
-                                        .tint(.gray)
-                                    }
                                 }
                             }
                         } header: {
