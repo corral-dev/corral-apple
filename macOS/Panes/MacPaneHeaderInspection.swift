@@ -33,7 +33,12 @@ enum MacPaneHeaderInspection {
             let other = workspace.paneKeys.first { $0 != workspace.focusedKey }
             if let other {
                 workspace.focus(other)
-                try? await Task.sleep(for: .milliseconds(1200))
+                // Shortly after the state change: longer settling can hide a
+                // header that only follows focus when something else rebuilds
+                // the pane (owner report 2026-10-17).
+                try? await Task.sleep(for: .milliseconds(300))
+                report.append(contentsOf: capture(workspace: workspace, step: "focus-fast"))
+                try? await Task.sleep(for: .milliseconds(900))
                 report.append(contentsOf: capture(workspace: workspace, step: "other-focus"))
             }
         }

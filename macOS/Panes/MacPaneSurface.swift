@@ -7,8 +7,6 @@ import SwiftUI
 @Observable
 final class MacPaneLifetime {
     private(set) var isPresented = false
-    private(set) var isFocused = false
-    private(set) var hasFocusedPeer = false
     @ObservationIgnored private weak var store: ConversationStore?
     @ObservationIgnored private var terminalStart: (@MainActor () -> Void)?
     @ObservationIgnored private var terminalStop: (@MainActor () -> Void)?
@@ -20,11 +18,6 @@ final class MacPaneLifetime {
                       stop: @escaping @MainActor () -> Void) {
         terminalStart = start
         terminalStop = stop
-    }
-
-    func updateFocus(isFocused: Bool, hasFocusedPeer: Bool) {
-        if self.isFocused != isFocused { self.isFocused = isFocused }
-        if self.hasFocusedPeer != hasFocusedPeer { self.hasFocusedPeer = hasFocusedPeer }
     }
 
     func present(isTerminal: Bool = false) -> Int {
@@ -228,9 +221,9 @@ struct MacPaneSurface: NSViewRepresentable {
         let allowsClose: Bool
         let autoFocusComposer: Bool
         let interfaceScale: CGFloat
-        /// Excluded from equality: focus/peer state already flows through
-        /// `lifetime.updateFocus` on every update, so a pane add/remove must
-        /// not rebuild every visible pane's root view.
+        /// Excluded from equality: a pane add/remove must not rebuild every
+        /// visible pane's root view. Pane content reads focus and the live
+        /// pane roster from the workspace, so it needs no rebuilt root.
         let visibleKeys: [String]
         let colorScheme: ColorScheme
         let locale: Locale
@@ -351,9 +344,6 @@ struct MacPaneSurface: NSViewRepresentable {
             coordinator.cache.suspend(entry, key: session.key, lease: coordinator.lease, keepingMounted: true)
         }
         guard isPresented else { return }
-        entry.lifetime.updateFocus(
-            isFocused: workspace.focusedKey == session.key,
-            hasFocusedPeer: workspace.focusedKey.map { visibleKeys.contains($0) } ?? false)
         let configuration = Configuration(
             session: session, client: appModel.clientIdentity,
             metadata: metadataStore.map(ObjectIdentifier.init),

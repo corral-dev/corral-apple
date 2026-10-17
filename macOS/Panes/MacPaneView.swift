@@ -8,7 +8,6 @@ struct MacPaneView: View {
     @Environment(AppModel.self) private var appModel
     @Environment(MacWorkspace.self) private var workspace
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.macVisiblePaneKeys) private var visiblePaneKeys
     @Environment(\.macPaneLifetime) private var lifetime
     let session: SessionSummary
     let metadataStore: SessionListStore?
@@ -38,19 +37,20 @@ struct MacPaneView: View {
         _bodySize = State(initialValue: retainedBodySize)
     }
 
-    private var isFocused: Bool { lifetime?.isFocused ?? (workspace.focusedKey == session.key) }
+    /// Read focus from the workspace directly. A cached copy on the pane's
+    /// lifetime only refreshed when the surrounding split rebuilt, so a click
+    /// or composer focus could leave the focused header in its inactive gray
+    /// (owner report 2026-10-17).
+    private var isFocused: Bool { workspace.focusedKey == session.key }
     private var mode: MacWorkspace.PaneMode { workspace.mode(for: session.key) }
 
     // MARK: - Focus guidance (design: Visual guidance pass)
 
-    /// Another pane is on screen beside this one.
-    private var hasPeers: Bool { visiblePaneKeys.count > 1 }
-
-    /// Another visible pane holds the focus, so this composer steps back.
+    /// Another pane in the split holds the focus, so this composer steps back.
     private var composerRecedes: Bool {
-        guard hasPeers, !isFocused else { return false }
-        if let lifetime { return lifetime.hasFocusedPeer }
-        return workspace.focusedKey.map { visiblePaneKeys.contains($0) } ?? false
+        guard workspace.paneKeys.count > 1,
+              let focused = workspace.focusedKey, focused != session.key else { return false }
+        return workspace.paneKeys.contains(focused)
     }
 
     // MARK: - Prompts card (design: Prompts card)
@@ -341,12 +341,15 @@ struct MacPaneHeader: View {
 
     private var singleLine: some View {
         HStack(spacing: 0) {
-            statusSlot
+            // The title starts at the header's leading edge, flush with the
+            // conversation below it. A fixed leading dot slot pushed it in
+            // by 26 points even with no dots (owner report 2026-10-17).
             titleText
-                .interfacePadding(.leading, Space.sm)
                 .layoutPriority(1)
+            statusDotsView
+            Spacer(minLength: Space.sm)
             actions
-                .interfacePadding(.leading, Space.sm)
+                .fixedSize()
         }
     }
 
@@ -355,10 +358,9 @@ struct MacPaneHeader: View {
     private var stacked: some View {
         VStack(alignment: .leading, spacing: Space.xs * interfaceScale) {
             HStack(spacing: 0) {
-                statusSlot
                 titleText
-                    .interfacePadding(.leading, Space.sm)
                     .layoutPriority(1)
+                statusDotsView
                 Spacer(minLength: 0)
             }
             actions
@@ -373,25 +375,26 @@ struct MacPaneHeader: View {
             .foregroundStyle(isFocused ? Color.primary : Color.secondary)
             .lineLimit(1)
             .truncationMode(.tail)
-            .interfaceFrame(minWidth: 30, idealWidth: 30, maxWidth: .infinity, alignment: .leading)
             .help(Text(verbatim: titleHelp))
             .accessibilityLabel(Text(verbatim: SessionPresentation.displayTitle(for: session)))
     }
 
-    /// The slot never changes width, so the title's leading edge is stable
-    /// whether the session has no dot, one dot or activity + unread.
-    private var statusSlot: some View {
-        HStack(spacing: 4 * interfaceScale) {
-            let dots = statusDots
-            ForEach(dots.indices, id: \.self) { index in
-                Circle()
-                    .fill(dots[index])
-                    .interfaceFrame(width: 7, height: 7)
-                    .transition(.opacity)
+    /// Attention dots follow the title text, so the title itself never moves.
+    @ViewBuilder
+    private var statusDotsView: some View {
+        let dots = statusDots
+        if !dots.isEmpty {
+            HStack(spacing: 4 * interfaceScale) {
+                ForEach(dots.indices, id: \.self) { index in
+                    Circle()
+                        .fill(dots[index])
+                        .interfaceFrame(width: 7, height: 7)
+                        .transition(.opacity)
+                }
             }
+            .interfacePadding(.leading, 6)
+            .accessibilityHidden(true)
         }
-        .interfaceFrame(width: 18, alignment: .trailing)
-        .accessibilityHidden(true)
     }
 
     private var actions: some View {
