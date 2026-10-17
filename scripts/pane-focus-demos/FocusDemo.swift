@@ -167,7 +167,7 @@ final class Pane: NSView {
         header.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         header.color = candidate == .c
             ? (dark ? NSColor(white: active ? 0.23 : 0.14, alpha: 1)
-                    : NSColor(white: active ? 1.0 : 0.94, alpha: 1)) : .clear
+                    : NSColor(white: active ? 1.0 : 0.90, alpha: 1)) : .clear
         rule.color = active && candidate == .a ? accent : .separatorColor
         title.textColor = active ? .labelColor : .secondaryLabelColor
         title.font = .systemFont(ofSize: candidate == .a ? 13 : (candidate == .c ? 15 : 22),
@@ -176,19 +176,19 @@ final class Pane: NSView {
         project.stringValue = Self.projects[index]
         title.alignment = .left
         logo.isHidden = candidate == .c
-        dot.isHidden = candidate == .c
+        dot.isHidden = false
         project.isHidden = candidate == .c
         prompts.isHidden = candidate == .c
-        close.isHidden = candidate == .c
+        close.isHidden = false
         dot.color = index == 1 ? .systemOrange : (index == 2 ? .tertiaryLabelColor : .systemGreen)
-        mode.setLabel(candidate == .c ? "对话" : "", forSegment: 0)
-        mode.setLabel(candidate == .c ? "终端" : "", forSegment: 1)
-        mode.setImage(candidate == .c ? nil : NSImage(systemSymbolName: "text.bubble", accessibilityDescription: "Chat"), forSegment: 0)
-        mode.setImage(candidate == .c ? nil : NSImage(systemSymbolName: "terminal", accessibilityDescription: "Terminal"), forSegment: 1)
-        mode.setWidth(candidate == .c ? 38 : 28, forSegment: 0)
-        mode.setWidth(candidate == .c ? 38 : 28, forSegment: 1)
-        mode.segmentStyle = candidate == .c ? .texturedRounded : .rounded
-        mode.cell?.isBordered = candidate != .c
+        mode.setLabel("", forSegment: 0)
+        mode.setLabel("", forSegment: 1)
+        mode.setImage(NSImage(systemSymbolName: "bubble.left.and.text.bubble.right", accessibilityDescription: "Chat"), forSegment: 0)
+        mode.setImage(NSImage(systemSymbolName: "terminal", accessibilityDescription: "Terminal"), forSegment: 1)
+        mode.setWidth(28, forSegment: 0)
+        mode.setWidth(28, forSegment: 1)
+        mode.segmentStyle = .rounded
+        mode.cell?.isBordered = false
         mode.font = .systemFont(ofSize: 12)
 
         prompts.title = ""
@@ -254,9 +254,11 @@ final class Pane: NSView {
             prompts.frame = NSRect(x: w - 76, y: 10, width: 22, height: 24)
             more.frame = NSRect(x: w - 40, y: 10, width: 22, height: 24)
         } else if candidate == .c {
-            title.frame = NSRect(x: 28, y: 13, width: w - 166, height: 22)
-            mode.frame = NSRect(x: w - 126, y: 12, width: 82, height: 24)
-            more.frame = NSRect(x: w - 36, y: 12, width: 22, height: 24)
+            dot.frame = NSRect(x: 12, y: 21, width: 6, height: 6)
+            close.frame = NSRect(x: w - 32, y: 12, width: 22, height: 24)
+            more.frame = NSRect(x: w - 60, y: 12, width: 22, height: 24)
+            mode.frame = NSRect(x: w - 128, y: 13, width: 60, height: 22)
+            title.frame = NSRect(x: 26, y: 13, width: max(40, w - 162), height: 22)
         }
         title.toolTip = Self.names[index] + "\n" + Self.projects[index] + " / " + Self.runtimes[index]
         project.toolTip = Self.projects[index]

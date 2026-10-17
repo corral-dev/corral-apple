@@ -20,6 +20,8 @@ The proposed reading order is title → assistant/state → conversation content
 
 **More action icon (2026-10-01):** the conversation's top-right More menu uses the plain horizontal `ellipsis` system symbol, without a ring around the dots. Retain the existing native toolbar button surface, minimum 44-point target, accessibility label and menu actions.
 
+**Header parity (owner correction 2026-10-17):** Chat and Terminal use exactly the same title, assistant name, colored marker, disclosure arrow and tappable prompt-history header. Never replace the assistant subtitle with “Terminal” or remove the disclosure in Terminal mode. The existing native principal-toolbar Button opens the same prompt sheet in either mode; selecting a prompt keeps Terminal active and uses its existing native prompt navigation. The inspected reference is `SessionDetailView.sessionHeaderLabel` in Chat mode and its shared toolbar Button/sheet; remove only the mode-specific subtitle branch. Mac pane headers already retain their title and prompt entry across display modes; terminal CLI chrome remains independently owned.
+
 **Display mode (owner correction 2026-10-14):** Chat / Terminal belongs inside this existing More menu, with native selection marks, rather than a standalone segmented row under the navigation bar. The [iPhone agent terminal contract](IPHONE_AGENT_TERMINAL_DESIGN.md) owns capability, local display and remote-action access boundaries.
 
 Delivery evidence: Release 1.0.76 (86) built successfully, was installed on the paired iPhone with matching device version readback, and was uploaded to AppShelf. On-device visual acceptance remains unverified: launch was denied because the phone was locked, and the captured screenshot was black.

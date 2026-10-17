@@ -366,13 +366,6 @@ struct SessionDetailView: View {
                     Text("session.actions.restarting")
                         .interfaceFont(.caption2)
                         .foregroundStyle(.secondary)
-                } else if ProductFeatures.terminalPaneEnabled, pane == .terminal {
-                    Circle()
-                        .fill(Palette.runtime(session.runtime))
-                        .interfaceFrame(width: 6, height: 6)
-                    Text("session.detail.terminal")
-                        .interfaceFont(.caption2)
-                        .foregroundStyle(.secondary)
                 } else if let runtimeLabel = runtimeSubtitle {
                     Circle()
                         .fill(Palette.runtime(session.runtime))

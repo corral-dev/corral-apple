@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// One retained native emulator for this detail. Visibility owns the stream,
-/// size vote and keyboard; a switch never starts or stops the agent itself.
+/// size vote and keyboard. Entering a stopped session resumes it once.
 struct AgentTerminalPane: View {
     @Environment(AppModel.self) private var appModel
     @Environment(\.scenePhase) private var scenePhase
@@ -12,6 +12,7 @@ struct AgentTerminalPane: View {
 
     @State private var stream: RemoteTerminalStream?
     @State private var isResuming = false
+    @State private var startAttempted = false
     @State private var resumed = false
     @State private var resumeError: String?
     @State private var sawScreen = false
@@ -32,7 +33,13 @@ struct AgentTerminalPane: View {
         .background {
             if isPresented { background }
         }
-        .task(id: ConnectionKey(client: appModel.clientIdentity, active: isActive,
+        .task(id: isActive && isReady && !isReadonly && needsStart) {
+            guard isActive, isReady, !isReadonly, needsStart else { return }
+            // resume owns an unstructured task: changing startAttempted must
+            // not cancel the very request it just started.
+            resume()
+        }
+        .task(id: ConnectionKey(client: appModel.clientIdentity, active: isActive && isReady,
                                 hosted: session.hosted || resumed)) {
             updateStream()
         }
@@ -65,9 +72,17 @@ struct AgentTerminalPane: View {
     private var isReady: Bool { appModel.connectionState == .connected && appModel.client != nil }
     private var isReadonly: Bool { SessionActionsMenu.isReadonly(access: appModel.connectedAccess) }
 
+    /// Match Mac: a stopped session on entry, including a stale first attach,
+    /// starts once. Never undo the user's exit after showing a live terminal.
+    private var needsStart: Bool {
+        guard !startAttempted, !isResuming, resumeError == nil else { return false }
+        if let stream { return stream.phase == .ended && !sawScreen }
+        return !session.hosted && !session.live && !resumed
+    }
+
     private func updateStream() {
         visibility.active = isActive
-        guard isActive, let client = appModel.client, session.hosted || resumed else {
+        guard isActive, isReady, !isResuming, let client = appModel.client, session.hosted || resumed else {
             stream?.stop()
             return
         }
@@ -100,7 +115,7 @@ struct AgentTerminalPane: View {
             } description: {
                 Text("terminal.running_elsewhere.description")
             }
-        } else if stream?.phase == .ended || (!session.hosted && !resumed) {
+        } else if (stream?.phase == .ended || (!session.hosted && !resumed)) && (isReadonly || sawScreen || startAttempted) {
             ContentUnavailableView {
                 Label("terminal.not_running.title", systemImage: "terminal")
             } description: {
@@ -130,21 +145,30 @@ struct AgentTerminalPane: View {
     }
 
     private func resume() {
-        guard isReady, !isReadonly, !isResuming, let client = appModel.client else { return }
+        guard isActive, isReady, !isReadonly, !isResuming, let client = appModel.client else { return }
+        startAttempted = true
         isResuming = true
         resumeError = nil
         Task {
-            defer { isResuming = false }
+            defer {
+                isResuming = false
+                updateStream()
+            }
             do {
                 _ = try await client.call(WireProtocol.mSessionResume, params: ["key": session.key])
-                guard appModel.client === client else { return }
+                guard appModel.client === client else {
+                    startAttempted = false
+                    return
+                }
                 resumed = true
                 stream?.stop()
                 stream = nil
                 sawScreen = false
-                updateStream()
             } catch {
-                guard appModel.client === client else { return }
+                guard appModel.client === client else {
+                    startAttempted = false
+                    return
+                }
                 resumeError = SessionActionsMenu.failureMessage(for: error)
             }
         }
