@@ -77,8 +77,6 @@ struct MacPromptsCard: View {
         }
         .shadow(color: .black.opacity(overContent ? 0.10 : 0.06), radius: 8, y: 3)
         .contentShape(RoundedRectangle(cornerRadius: Self.cornerRadius * interfaceScale, style: .continuous))
-        // Native row buttons own chat jumps; the remaining card surface closes.
-        .onTapGesture { setOpen(false) }
     }
 
     private var header: some View {
@@ -102,13 +100,14 @@ struct MacPromptsCard: View {
         .interfacePadding(.horizontal, Space.md + Self.rowInset / 2)
         .interfacePadding(.top, Space.md)
         .interfacePadding(.bottom, Space.xs)
+        .contentShape(Rectangle())
+        .onTapGesture { setOpen(false) }
     }
 
     private func row(_ prompt: RichMessage) -> some View {
         Button {
             currentID = prompt.id
             onSelect(prompt)
-            if onTerminal { setOpen(false) }
         } label: {
             VStack(alignment: .leading, spacing: 2 * interfaceScale) {
                 if let stamp = Self.timeLabel(prompt) {

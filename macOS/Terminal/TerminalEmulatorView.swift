@@ -135,6 +135,9 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
     }
 
     func terminalRevealPrompt(_ query: String) -> Bool { terminal.revealPrompt(query) }
+    func terminalRevealPrompt(_ query: String, occurrence: Int, total: Int) -> Bool {
+        terminal.revealPrompt(query, occurrence: occurrence, total: total)
+    }
 
     // MARK: - Appearance
 

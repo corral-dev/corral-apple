@@ -85,6 +85,16 @@ struct TerminalSelectionProbe {
         let previous = view.scrollPosition
         require(!view.revealPrompt("duplicate query"), "duplicate text cannot choose the wrong row")
         require(view.scrollPosition == previous, "ambiguity leaves viewport unchanged")
+        for i in 0..<50 { feed(view, "middle \(i)\r\n") }
+        feed(view, "duplicate query\r\n")
+        for i in 0..<30 { feed(view, "tail \(i)\r\n") }
+        require(view.revealPrompt("duplicate query", occurrence: 0, total: 3), "first selected duplicate is located")
+        let first = view.scrollPosition
+        require(view.revealPrompt("duplicate query", occurrence: 2, total: 3), "last selected duplicate is located")
+        require(view.scrollPosition > first, "duplicate identity selects a different actual buffer row")
+        let selected = view.scrollPosition
+        require(!view.revealPrompt("duplicate query", occurrence: 2, total: 4), "partial evidence refuses ordinal guessing")
+        require(view.scrollPosition == selected, "incomplete duplicate evidence leaves viewport unchanged")
         feed(view, "\u{1b}[?1049h\u{1b}[2J\u{1b}[HCURRENT_ALT_PROMPT")
         require(view.revealPrompt("CURRENT_ALT_PROMPT"), "active alternate text is available")
         require(!view.revealPrompt(chinese), "normal buffer cannot leak through active alternate screen")

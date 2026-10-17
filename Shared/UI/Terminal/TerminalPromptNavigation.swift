@@ -11,7 +11,7 @@ struct TerminalPromptRequest: Identifiable {
 extension TerminalView {
     /// Search the actual buffer, preserving wide glyphs at soft-wrap boundaries.
     /// SwiftTerm's native scroll API owns viewport movement. No input is sent.
-    func revealPrompt(_ query: String) -> Bool {
+    func revealPrompt(_ query: String, occurrence: Int = 0, total: Int = 1) -> Bool {
         let emulator = getTerminal()
         let trimmed = emulator.buffer.totalLinesTrimmed
         var projection = ""
@@ -48,9 +48,17 @@ extension TerminalView {
             rowEnds.append((utf16Length, row - trimmed))
             row += 1
         }
-        guard !query.isEmpty, let match = projection.range(of: query, options: .literal),
-              projection.range(of: query, options: .literal,
-                               range: projection.index(after: match.lowerBound)..<projection.endIndex) == nil else { return false }
+        guard !query.isEmpty, total > 0, occurrence >= 0, occurrence < total else { return false }
+        var matches: [Range<String.Index>] = []
+        var start = projection.startIndex
+        while start < projection.endIndex,
+              let match = projection.range(of: query, options: .literal, range: start..<projection.endIndex) {
+            matches.append(match)
+            start = projection.index(after: match.lowerBound)
+        }
+        // A partial buffer cannot establish the selected occurrence's identity.
+        guard matches.count == total else { return false }
+        let match = matches[occurrence]
         let position = match.lowerBound.utf16Offset(in: projection)
         guard let target = rowEnds.first(where: { $0.end > position })?.row else { return false }
         if !emulator.isCurrentBufferAlternate { scrollTo(row: max(0, target - emulator.rows / 3)) }

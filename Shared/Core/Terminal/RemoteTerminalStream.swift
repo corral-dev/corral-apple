@@ -8,10 +8,14 @@ protocol TerminalStreamSink: AnyObject {
     /// Append live output in host order.
     func terminalFeed(_ data: Data)
     func terminalRevealPrompt(_ query: String) -> Bool
+    func terminalRevealPrompt(_ query: String, occurrence: Int, total: Int) -> Bool
 }
 
 extension TerminalStreamSink {
     func terminalRevealPrompt(_ query: String) -> Bool { false }
+    func terminalRevealPrompt(_ query: String, occurrence: Int, total: Int) -> Bool {
+        occurrence == 0 && total == 1 && terminalRevealPrompt(query)
+    }
 }
 
 struct TerminalGrid: Equatable, Sendable {
@@ -63,6 +67,7 @@ final class RemoteTerminalStream {
     @ObservationIgnored private var attached = false
     @ObservationIgnored private var attachGeneration: UUID?
     @ObservationIgnored private var generation = UUID()
+    @ObservationIgnored private var promptNavigation = UUID()
     @ObservationIgnored private var readyHandlerID: UUID?
     @ObservationIgnored private var wanted: TerminalGrid?
     @ObservationIgnored private var theme: TerminalTheme?
@@ -143,33 +148,38 @@ final class RemoteTerminalStream {
 
     /// Resolve full host text by identity; card previews are never search input.
     func navigatePrompt(seq: Int, historyGeneration: Int) async -> String? {
+        let request = UUID()
+        promptNavigation = request
         guard let client, client.hostCapabilities.terminalPrompt else { return String(localized: "terminal.prompt.unavailable") }
         // The iPhone sheet temporarily stopped the stream. Wait for its fresh
         // attach, without reviving a process or borrowing a previous snapshot.
         for _ in 0..<30 {
             if phase == .live && synced { break }
-            guard !Task.isCancelled, self.client === client else { return nil }
+            guard !Task.isCancelled, self.client === client, promptNavigation == request else { return nil }
             try? await Task.sleep(for: .milliseconds(100))
         }
-        guard !Task.isCancelled, self.client === client, phase == .live, synced else {
+        guard !Task.isCancelled, self.client === client, promptNavigation == request, phase == .live, synced else {
             return String(localized: "terminal.prompt.unavailable")
         }
         let mine = generation
-        let params: [String: Any] = ["key": sessionKey, "seq": seq, "generation": historyGeneration]
+        let params: [String: Any] = ["key": sessionKey, "seq": seq, "generation": historyGeneration,
+                                   "navigation": request.uuidString]
         do {
             let value = try await client.call("terminal.prompt", params: params)
-            guard !Task.isCancelled, generation == mine else { return nil }
+            guard !Task.isCancelled, generation == mine, promptNavigation == request else { return nil }
             guard let payload = value as? [String: Any], let query = payload["query"] as? String else {
                 return String(localized: "terminal.prompt.unavailable")
             }
-            if sink?.terminalRevealPrompt(query) == true { return nil }
+            let occurrence = payload["occurrence"] as? Int ?? 0
+            let total = payload["total"] as? Int ?? 1
+            if sink?.terminalRevealPrompt(query, occurrence: occurrence, total: total) == true { return nil }
             var native = params
             native["native"] = true
             _ = try await client.call("terminal.prompt", params: native)
-            guard !Task.isCancelled, generation == mine else { return nil }
+            guard !Task.isCancelled, generation == mine, promptNavigation == request else { return nil }
             return nil
         } catch {
-            guard !Task.isCancelled, generation == mine else { return nil }
+            guard !Task.isCancelled, generation == mine, promptNavigation == request else { return nil }
             return error.localizedDescription
         }
     }

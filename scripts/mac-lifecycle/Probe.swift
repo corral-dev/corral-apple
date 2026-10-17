@@ -375,6 +375,24 @@ struct LifecycleProbe {
         gate.succeed(["query": "late old session"])
         _ = await pending.value
         check(sink.reveals.count == reveals, "late resolve navigated a retired terminal")
+        stream.start(); stream.updateFit(TerminalGrid(cols: 80, rows: 24)); await settle()
+        client.emit(["kind": "snapshot", "seq": 1, "cols": 80, "rows": 24,
+                     "data": Data("screen".utf8).base64EncodedString()], channel: "term:prompt")
+        await settle()
+        let older = Gate()
+        client.handler = { method, params in
+            if method == "terminal.prompt", params["seq"] as? Int == 10 { return try await older.wait() }
+            return ["query": "new selection"]
+        }
+        sink.revealResult = true
+        let oldRequest = Task { await stream.navigatePrompt(seq: 10, historyGeneration: 9) }
+        await settle()
+        _ = await stream.navigatePrompt(seq: 11, historyGeneration: 9)
+        let latestReveals = sink.reveals
+        older.succeed(["query": "obsolete selection"])
+        _ = await oldRequest.value
+        check(sink.reveals == latestReveals, "older selection navigated after a newer selection")
+        stream.stop()
         print("PASS prompt lifecycle: host identity, local read-only path, native fallback, retired response")
     }
 

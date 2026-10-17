@@ -65,6 +65,9 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
     }
 
     func terminalRevealPrompt(_ query: String) -> Bool { revealPrompt(query) }
+    func terminalRevealPrompt(_ query: String, occurrence: Int, total: Int) -> Bool {
+        revealPrompt(query, occurrence: occurrence, total: total)
+    }
 
     func unbind() {
         cancelPendingFit()
