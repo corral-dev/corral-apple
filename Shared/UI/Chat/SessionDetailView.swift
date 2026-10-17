@@ -29,8 +29,6 @@ struct SessionDetailView: View {
         composerFocusRequest: Int = 0,
         onComposerFocusChange: ((Bool) -> Void)? = nil,
         scrollRequest: ChatScrollRequest? = nil,
-        historyPreview: Bool = false,
-        onReturnToTerminal: (() -> Void)? = nil,
         onDidCreateSession: ((SessionSummary) -> Void)? = nil
     ) {
         self.injectedStore = injectedStore
@@ -38,8 +36,6 @@ struct SessionDetailView: View {
         self.composerFocusRequest = composerFocusRequest
         self.onComposerFocusChange = onComposerFocusChange
         self.scrollRequest = scrollRequest
-        self.historyPreview = historyPreview
-        self.onReturnToTerminal = onReturnToTerminal
         fallbackSession = session
         sessionKey = session.key
         self.metadataStore = metadataStore
@@ -57,9 +53,6 @@ struct SessionDetailView: View {
     var onComposerFocusChange: ((Bool) -> Void)? = nil
     /// Mac prompts panel: scroll the conversation to one message.
     var scrollRequest: ChatScrollRequest? = nil
-    var historyPreview = false
-    var onReturnToTerminal: (() -> Void)? = nil
-    @State private var terminalHistoryPreview = false
     /// 复制/接力成功后的新会话：列表页负责落盘并推进，详情页只上报。
     var onDidCreateSession: ((SessionSummary) -> Void)? = nil
     @State private var pane: SessionDetailMode = .chat
@@ -94,11 +87,10 @@ struct SessionDetailView: View {
         ChatScreen {
             detailContent
         } composer: {
-            if !historyPreview && !terminalHistoryPreview && (pane == .chat || terminalHistoryPreview || !canShowAgentTerminal) { composerStack }
+            if pane == .chat || !canShowAgentTerminal { composerStack }
         }
         .background(Color(.systemGroupedBackground))
         .environment(\.sessionTextScale, appModel.sessionTextSize.scale)
-        .environment(\.promptJumpAnimated, !historyPreview && !terminalHistoryPreview)
         #if os(iOS)
         .navigationTitle(SessionPresentation.displayTitle(for: session))
         .inlineNavigationTitle()
@@ -348,34 +340,17 @@ struct SessionDetailView: View {
 
     private var detailContent: some View {
         VStack(spacing: 0) {
-            if historyPreview || terminalHistoryPreview {
-                HStack {
-                    Text("terminal.history.title").foregroundStyle(.secondary)
-                    Spacer()
-                    Button("terminal.history.return") {
-                        terminalHistoryPreview = false
-                        onReturnToTerminal?()
-                    }
-                    .buttonStyle(.borderless)
-                }
-                .interfacePadding(.horizontal, Space.base)
-                .interfacePadding(.vertical, Space.sm)
-            }
             ZStack {
                 conversationContent
-                    .opacity(pane == .chat || terminalHistoryPreview || !canShowAgentTerminal ? 1 : 0)
-                    .allowsHitTesting(pane == .chat || terminalHistoryPreview || !canShowAgentTerminal)
-                    .accessibilityHidden(pane != .chat && !terminalHistoryPreview && canShowAgentTerminal)
+                    .opacity(pane == .chat || !canShowAgentTerminal ? 1 : 0)
+                    .allowsHitTesting(pane == .chat || !canShowAgentTerminal)
+                    .accessibilityHidden(pane != .chat && canShowAgentTerminal)
                 #if os(iOS)
                 if visitedTerminal && canShowAgentTerminal {
                     AgentTerminalPane(
                         session: session,
-                        isPresented: pane == .terminal && !terminalHistoryPreview && !showProjectTerminal && !showUserPrompts,
-                        promptRequest: terminalPromptRequest,
-                        onHistoryPreview: { seq in
-                            terminalHistoryPreview = true
-                            scrollToMessageID = "message-\(seq)"
-                        }
+                        isPresented: pane == .terminal && !showProjectTerminal && !showUserPrompts,
+                        promptRequest: terminalPromptRequest
                     )
                 }
                 #endif

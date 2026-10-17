@@ -147,16 +147,23 @@ final class RemoteTerminalStream {
     }
 
     /// Resolve full host text by identity; card previews are never search input.
-    var previewHistory: ((Int) -> Void)?
-
     func navigatePrompt(seq: Int, historyGeneration: Int) async -> String? {
         let request = UUID()
         promptNavigation = request
-        guard let client, client.hostCapabilities.terminalPrompt else { previewHistory?(seq); return nil }
-        guard !Task.isCancelled, phase == .live, synced else {
-            previewHistory?(seq)
-            return nil
+        // Owner requirement (2026-10-17): a prompt jump stays in the live
+        // terminal. Every miss below is silent — never switch to the chat
+        // renderer, never show a History preview or Return to live terminal
+        // control, and never send agent input.
+        guard let client, client.hostCapabilities.terminalPrompt else { return nil }
+        // The sheet can close before the pane has its live snapshot. Wait
+        // briefly for it instead of dropping the selection on the floor.
+        var waited = 0
+        while !(phase == .live && synced), waited < 40 {
+            guard !Task.isCancelled, promptNavigation == request else { return nil }
+            try? await Task.sleep(for: .milliseconds(50))
+            waited += 1
         }
+        guard !Task.isCancelled, phase == .live, synced, promptNavigation == request else { return nil }
         let mine = generation
         let params: [String: Any] = ["key": sessionKey, "seq": seq, "generation": historyGeneration,
                                    "navigation": request.uuidString]
@@ -164,12 +171,18 @@ final class RemoteTerminalStream {
             let value = try await client.call("terminal.prompt", params: params)
             guard !Task.isCancelled, generation == mine, promptNavigation == request else { return nil }
             guard let payload = value as? [String: Any], let query = payload["query"] as? String else {
-                return String(localized: "terminal.prompt.unavailable")
+                return nil
             }
             let occurrence = payload["occurrence"] as? Int ?? 0
             let total = payload["total"] as? Int ?? 1
-            if sink?.terminalRevealPrompt(query, occurrence: occurrence, total: total) == true { return nil }
-            previewHistory?(seq)
+            // The host has already moved the shared screen; this emulator
+            // receives that frame slightly later. Retry the local top-edge
+            // reveal briefly, then stop silently if the buffer never matches.
+            for attempt in 0..<20 {
+                guard !Task.isCancelled, generation == mine, promptNavigation == request else { return nil }
+                if sink?.terminalRevealPrompt(query, occurrence: occurrence, total: total) == true { return nil }
+                if attempt < 19 { try? await Task.sleep(for: .milliseconds(50)) }
+            }
             return nil
         } catch {
             guard !Task.isCancelled, generation == mine, promptNavigation == request else { return nil }

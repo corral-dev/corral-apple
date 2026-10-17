@@ -19,7 +19,6 @@ struct MacPaneView: View {
     @State private var paneFrame: CGRect = .zero
     @State private var terminalVisited = false
     @State private var terminalPromptRequest: TerminalPromptRequest?
-    @State private var terminalHistoryPreview = false
     @State private var chatVisited = false
     /// Bumped on every (re)appearance; a disappear-triggered stop only runs
     /// when no reappearance has happened since, so a fast close→reopen can
@@ -191,20 +190,16 @@ struct MacPaneView: View {
             if mode == .terminal || terminalVisited {
                 MacTerminalPane(
                     session: session,
-                    isFocused: isFocused && mode == .terminal && !terminalHistoryPreview,
-                    isPresented: mode == .terminal && !terminalHistoryPreview && (lifetime?.isPresented ?? true),
-                    promptRequest: terminalPromptRequest,
-                    onHistoryPreview: { seq in
-                        terminalHistoryPreview = true
-                        workspace.scrollToPrompt("message-\(seq)", in: session.key)
-                    }
+                    isFocused: isFocused && mode == .terminal,
+                    isPresented: mode == .terminal && (lifetime?.isPresented ?? true),
+                    promptRequest: terminalPromptRequest
                 )
                 .environment(\.conversationScrollReadAction, acknowledgeTerminalScrollRead)
                 .id(session.key)
             }
-            if mode == .chat || chatVisited || terminalHistoryPreview {
+            if mode == .chat || chatVisited {
                 if let store {
-                    MacChatSurface(isPresented: mode == .chat || terminalHistoryPreview) {
+                    MacChatSurface(isPresented: mode == .chat) {
                         SessionDetailView(
                             session: session,
                             autoFocusComposer: autoFocusComposer,
@@ -215,8 +210,6 @@ struct MacPaneView: View {
                                 if focused { workspace.composerDidGainFocus(session.key) }
                             },
                             scrollRequest: workspace.scrollRequests[session.key],
-                            historyPreview: mode == .terminal && terminalHistoryPreview,
-                            onReturnToTerminal: { terminalHistoryPreview = false },
                             onDidCreateSession: { created in workspace.openCreated(created, asPane: true) }
                         )
                         .environment(\.macConversationTextDocument, workspace.paneSurfaces.entry(for: session.key).textDocument())

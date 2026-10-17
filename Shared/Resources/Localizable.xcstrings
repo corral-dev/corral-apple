@@ -5271,38 +5271,6 @@
         }
       }
     },
-    "terminal.history.return": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Return to live terminal"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "返回实时终端"
-          }
-        }
-      }
-    },
-    "terminal.history.title": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "History preview"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "历史预览"
-          }
-        }
-      }
-    },
     "terminal.load_failed.title": {
       "extractionState": "manual",
       "localizations": {
@@ -5588,22 +5556,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "在当前项目文件夹打开终端（⌥F12）"
-          }
-        }
-      }
-    },
-    "terminal.prompt.unavailable": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "This prompt is not available in the current terminal."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "当前终端无法定位这条提问。"
           }
         }
       }

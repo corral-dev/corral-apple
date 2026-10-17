@@ -12,7 +12,6 @@ struct MacTerminalPane: View {
     let isFocused: Bool
     let isPresented: Bool
     var promptRequest: TerminalPromptRequest? = nil
-    var onHistoryPreview: (Int) -> Void = { _ in }
 
     @State private var stream: RemoteTerminalStream?
     @State private var isStarting = false
@@ -71,7 +70,6 @@ struct MacTerminalPane: View {
             // Owner requirement: prompt jumps never surface anything visible.
             // A miss is a silent no-op by design; the error is intentionally dropped.
             guard !Task.isCancelled, let stream else { return }
-            stream.previewHistory = onHistoryPreview
             _ = await stream.navigatePrompt(seq: request.seq, historyGeneration: request.generation)
         }
         .onDisappear {
