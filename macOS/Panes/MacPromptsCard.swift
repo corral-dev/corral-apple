@@ -30,8 +30,8 @@ struct MacPromptsCard: View {
     @State private var currentID: RichMessage.ID?
 
     var body: some View {
-        // Collapsed, the card lives in the pane header (prompts button), so
-        // nothing floats over the conversation (design: Visual guidance pass).
+        // Collapsed, the card is controlled from the pane's session menu, so
+        // nothing floats over the conversation (design: Pane header composition).
         Group {
             if isOpen {
                 card

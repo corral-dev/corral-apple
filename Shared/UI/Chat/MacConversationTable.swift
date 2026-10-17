@@ -761,6 +761,11 @@ struct MacConversationTable: NSViewRepresentable {
             isJumping = true
             jumpGeneration += 1
             let generation = jumpGeneration
+            if environment.promptJumpAnimated == false {
+                setReadingTop(jumpTarget(id, fallback: index), animated: false)
+                isJumping = false
+                return
+            }
             let topID = readingRowIndexes().first.map { rows[$0].id }
             let glides = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
                 && (jumpGlides?(id, topID) ?? true)
@@ -791,10 +796,10 @@ struct MacConversationTable: NSViewRepresentable {
             }
         }
 
-        /// Centers the target row in the reading viewport.
+        /// Lands the target row on the reading viewport's top edge.
         private func jumpTarget(_ id: String, fallback: Int) -> CGFloat {
             guard let table else { return 0 }
-            return table.rect(ofRow: indexByID[id] ?? fallback).midY - readingRect.height / 2
+            return table.rect(ofRow: indexByID[id] ?? fallback).minY
         }
 
         // MARK: Helpers
@@ -814,6 +819,7 @@ struct MacConversationTable: NSViewRepresentable {
             let ids = readingRowIndexes().map { rows[$0].id }
             MacChatScrollGeometryProbe.latest[key, default: [:]].merge([
                 "visibleMinY": reading.minY - insets.top,
+                "readingMinY": reading.minY, "insetsTop": insets.top,
                 "visibleHeight": scroll?.contentView.bounds.height ?? 0, "wheelEvents": MacConversationTableCounters.wheelEvents,
                 "contentHeight": contentHeight, "tableHeight": table.frame.height, "bottomInset": insets.bottom,
                 "followsLatest": followsLatest, "latestID": rows.last?.id ?? "", "visibleIDs": ids,

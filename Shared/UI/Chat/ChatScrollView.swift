@@ -212,6 +212,7 @@ private struct NativeChatScrollView<Header: View, Content: View>: View {
     let content: Content
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.promptJumpAnimated) private var promptJumpAnimated
     @Environment(\.conversationScrollReadAction) private var acknowledgeRead
     #if os(macOS)
     @Environment(\.macConversationTextDocument) private var selectionDocument
@@ -419,23 +420,28 @@ private struct NativeChatScrollView<Header: View, Content: View>: View {
         isJumping = true
         jumpGeneration += 1
         let generation = jumpGeneration
+        if !promptJumpAnimated {
+            withoutAnimation { position.scrollTo(id: messageID, anchor: .top) }
+            isJumping = false
+            return
+        }
         let glides = !reduceMotion && (jumpGlides?(messageID, topVisibleID) ?? true)
         Task { @MainActor in
             if glides {
-                withAnimation(ChatJumpMotion.glide) { position.scrollTo(id: messageID, anchor: .center) }
+                withAnimation(ChatJumpMotion.glide) { position.scrollTo(id: messageID, anchor: .top) }
                 // Scroll animations report completion at once, so wait out the glide.
                 try? await Task.sleep(for: ChatJumpMotion.glideDuration)
             } else {
                 withAnimation(ChatJumpMotion.fadeOut) { isJumpFaded = true }
                 try? await Task.sleep(for: ChatJumpMotion.fadeOutDuration)
                 guard generation == jumpGeneration else { return }
-                withoutAnimation { position.scrollTo(id: messageID, anchor: .center) }
+                withoutAnimation { position.scrollTo(id: messageID, anchor: .top) }
                 // Let the rows around the target realize and measure.
                 try? await Task.sleep(for: .milliseconds(60))
             }
             guard generation == jumpGeneration else { return }
             // Rows measured on the way can shift the target; settle on it without motion.
-            withoutAnimation { position.scrollTo(id: messageID, anchor: .center) }
+            withoutAnimation { position.scrollTo(id: messageID, anchor: .top) }
             if isJumpFaded { withAnimation(ChatJumpMotion.fadeIn) { isJumpFaded = false } }
             isJumping = false
             loadEarlierIfReading()
@@ -530,63 +536,70 @@ private struct CompatibleChatScrollView<Header: View, Content: View>: View {
     let header: Header
     let content: Content
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.promptJumpAnimated) private var promptJumpAnimated
     @Environment(\.conversationScrollReadAction) private var acknowledgeRead
     @State private var positionID: String?
     @State private var containerHeight: CGFloat = 0
     @State private var contentHeight: CGFloat = 0
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: Space.xs * interfaceScale) {
-                header
-                content
-                Color.clear.interfaceFrame(height: 1).id(Self.bottomID)
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: Space.xs * interfaceScale) {
+                    header
+                    content
+                    Color.clear.interfaceFrame(height: 1).id(Self.bottomID)
+                }
+                .scrollTargetLayout()
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                    contentHeight = $0
+                    if positionID == nil { showLatest(proxy) }
+                }
             }
-            .scrollTargetLayout()
+            .modifier(ChatPullToLoadEarlier(load: onPullToLoadEarlier, progress: pullProgress))
+            .contentMargins(Space.base, for: .scrollContent)
+            .scrollIndicators(.hidden)
+            #if os(iOS)
+            .scrollDismissesKeyboard(.immediately)
+            #endif
+            // iOS 17 has no scroll-phase callback. Observe the vertical drag alongside
+            // native scrolling, without replacing its gesture or scroll-position owner.
+            .simultaneousGesture(DragGesture(minimumDistance: 4).onChanged { value in
+                guard abs(value.translation.height) > abs(value.translation.width) else { return }
+                acknowledgeRead()
+            })
+            .defaultScrollAnchor(.top)
+            .scrollPosition(id: $positionID, anchor: .bottom)
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
-                contentHeight = $0
-                if positionID == nil { showLatest() }
+                containerHeight = $0
+                if positionID == nil { showLatest(proxy) }
             }
-        }
-        .modifier(ChatPullToLoadEarlier(load: onPullToLoadEarlier, progress: pullProgress))
-        .contentMargins(Space.base, for: .scrollContent)
-        .scrollIndicators(.hidden)
-        #if os(iOS)
-        .scrollDismissesKeyboard(.immediately)
-        #endif
-        // iOS 17 has no scroll-phase callback. Observe the vertical drag alongside
-        // native scrolling, without replacing its gesture or scroll-position owner.
-        .simultaneousGesture(DragGesture(minimumDistance: 4).onChanged { value in
-            guard abs(value.translation.height) > abs(value.translation.width) else { return }
-            acknowledgeRead()
-        })
-        .defaultScrollAnchor(.top)
-        .scrollPosition(id: $positionID, anchor: .bottom)
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
-            containerHeight = $0
-            if positionID == nil { showLatest() }
-        }
-        .onChange(of: scrollToLatestRequest) { _, _ in
-            showLatest()
-        }
-        .onChange(of: scrollToMessageID) { _, messageID in
-            guard let messageID else { return }
-            withAnimation(reduceMotion ? nil : ChatJumpMotion.glide) { positionID = messageID }
-            scrollToMessageID = nil
-        }
-        .overlay(alignment: .bottomTrailing) {
-            if positionID != nil, positionID != Self.bottomID {
-                ChatJumpToLatestButton(action: showLatest)
+            .onChange(of: scrollToLatestRequest) { _, _ in
+                showLatest(proxy)
+            }
+            .onChange(of: scrollToMessageID) { _, messageID in
+                guard let messageID else { return }
+                scrollToMessageID = nil
+                // The Your prompts landing is the viewport's top edge. The
+                // former `positionID` assignment always used the bottom anchor.
+                withAnimation(reduceMotion || !promptJumpAnimated ? nil : ChatJumpMotion.glide) {
+                    proxy.scrollTo(messageID, anchor: .top)
+                }
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if positionID != nil, positionID != Self.bottomID {
+                    ChatJumpToLatestButton { showLatest(proxy) }
+                }
             }
         }
     }
 
-    private func showLatest() {
+    private func showLatest(_ proxy: ScrollViewProxy) {
         guard ChatLatestFollowPolicy.shouldScrollToEdge(
             contentHeight: contentHeight,
             containerHeight: containerHeight
         ) else { return }
-        positionID = latestID ?? Self.bottomID
+        proxy.scrollTo(latestID ?? Self.bottomID, anchor: .bottom)
     }
 }
 

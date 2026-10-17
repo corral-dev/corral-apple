@@ -587,6 +587,7 @@ enum MacInspection {
         if arguments.contains("-CorralInspectPromptsOpen") {
             for key in workspace.paneKeys { workspace.promptsOpen[key] = true }
         }
+        Task { await MacPaneHeaderInspection.run(workspace: workspace) }
     }
 }
 #endif

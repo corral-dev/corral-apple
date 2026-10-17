@@ -147,19 +147,15 @@ final class RemoteTerminalStream {
     }
 
     /// Resolve full host text by identity; card previews are never search input.
+    var previewHistory: ((Int) -> Void)?
+
     func navigatePrompt(seq: Int, historyGeneration: Int) async -> String? {
         let request = UUID()
         promptNavigation = request
-        guard let client, client.hostCapabilities.terminalPrompt else { return String(localized: "terminal.prompt.unavailable") }
-        // The iPhone sheet temporarily stopped the stream. Wait for its fresh
-        // attach, without reviving a process or borrowing a previous snapshot.
-        for _ in 0..<30 {
-            if phase == .live && synced { break }
-            guard !Task.isCancelled, self.client === client, promptNavigation == request else { return nil }
-            try? await Task.sleep(for: .milliseconds(100))
-        }
-        guard !Task.isCancelled, self.client === client, promptNavigation == request, phase == .live, synced else {
-            return String(localized: "terminal.prompt.unavailable")
+        guard let client, client.hostCapabilities.terminalPrompt else { previewHistory?(seq); return nil }
+        guard !Task.isCancelled, phase == .live, synced else {
+            previewHistory?(seq)
+            return nil
         }
         let mine = generation
         let params: [String: Any] = ["key": sessionKey, "seq": seq, "generation": historyGeneration,
@@ -173,10 +169,7 @@ final class RemoteTerminalStream {
             let occurrence = payload["occurrence"] as? Int ?? 0
             let total = payload["total"] as? Int ?? 1
             if sink?.terminalRevealPrompt(query, occurrence: occurrence, total: total) == true { return nil }
-            var native = params
-            native["native"] = true
-            _ = try await client.call("terminal.prompt", params: native)
-            guard !Task.isCancelled, generation == mine, promptNavigation == request else { return nil }
+            previewHistory?(seq)
             return nil
         } catch {
             guard !Task.isCancelled, generation == mine, promptNavigation == request else { return nil }

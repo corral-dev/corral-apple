@@ -20,6 +20,7 @@ struct MacPaneView: View {
     @State private var paneFrame: CGRect = .zero
     @State private var terminalVisited = false
     @State private var terminalPromptRequest: TerminalPromptRequest?
+    @State private var terminalHistoryPreview = false
     @State private var chatVisited = false
     /// Bumped on every (re)appearance; a disappear-triggered stop only runs
     /// when no reappearance has happened since, so a fast close→reopen can
@@ -108,7 +109,6 @@ struct MacPaneView: View {
             MacPaneHeader(
                 session: session,
                 isFocused: isFocused,
-                showsFocusRule: isFocused && hasPeers,
                 allowsClose: allowsClose,
                 promptsCount: bodySize.width > 0 ? prompts.count : 0,
                 promptsOpen: promptsOpenBinding
@@ -191,16 +191,20 @@ struct MacPaneView: View {
             if mode == .terminal || terminalVisited {
                 MacTerminalPane(
                     session: session,
-                    isFocused: isFocused && mode == .terminal,
-                    isPresented: mode == .terminal && (lifetime?.isPresented ?? true),
-                    promptRequest: terminalPromptRequest
+                    isFocused: isFocused && mode == .terminal && !terminalHistoryPreview,
+                    isPresented: mode == .terminal && !terminalHistoryPreview && (lifetime?.isPresented ?? true),
+                    promptRequest: terminalPromptRequest,
+                    onHistoryPreview: { seq in
+                        terminalHistoryPreview = true
+                        workspace.scrollToPrompt("message-\(seq)", in: session.key)
+                    }
                 )
                 .environment(\.conversationScrollReadAction, acknowledgeTerminalScrollRead)
                 .id(session.key)
             }
-            if mode == .chat || chatVisited {
+            if mode == .chat || chatVisited || terminalHistoryPreview {
                 if let store {
-                    MacChatSurface(isPresented: mode == .chat) {
+                    MacChatSurface(isPresented: mode == .chat || terminalHistoryPreview) {
                         SessionDetailView(
                             session: session,
                             autoFocusComposer: autoFocusComposer,
@@ -211,6 +215,8 @@ struct MacPaneView: View {
                                 if focused { workspace.composerDidGainFocus(session.key) }
                             },
                             scrollRequest: workspace.scrollRequests[session.key],
+                            historyPreview: mode == .terminal && terminalHistoryPreview,
+                            onReturnToTerminal: { terminalHistoryPreview = false },
                             onDidCreateSession: { created in workspace.openCreated(created, asPane: true) }
                         )
                         .environment(\.macConversationTextDocument, workspace.paneSurfaces.entry(for: session.key).textDocument())
@@ -295,17 +301,17 @@ struct MacPaneView: View {
     }
 }
 
-/// Pane title bar: identity, prompts, chat/terminal switch, session menu and
-/// close. Beside other panes the focused one carries an accent rule under its
-/// header, never a focus ring or tint (baseline A4).
+/// Pane title bar: one dominant title, attention dots, the native view
+/// switch, the session menu and Close. Focus is the header's surface, never a
+/// focus ring or a tint on the reading area (design: Pane header composition).
 struct MacPaneHeader: View {
     @Environment(\.interfaceScale) private var interfaceScale
     @Environment(AppModel.self) private var appModel
     @Environment(MacWorkspace.self) private var workspace
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
     let session: SessionSummary
     let isFocused: Bool
-    var showsFocusRule = false
     var allowsClose = true
     var promptsCount = 0
     @Binding var promptsOpen: Bool
@@ -314,37 +320,13 @@ struct MacPaneHeader: View {
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: Space.sm * interfaceScale) {
-                identity
-                if promptsCount > 0 { promptsButton }
-                viewPicker
-                sessionMenu
-                closeButton
-            }
-            VStack(alignment: .leading, spacing: Space.xs * interfaceScale) {
-                identity
-                HStack(spacing: Space.xs * interfaceScale) {
-                    if promptsCount > 0 { promptsButton.labelStyle(.iconOnly) }
-                    Spacer(minLength: 0)
-                    viewPicker
-                    sessionMenu
-                    closeButton
-                }
-            }
+            singleLine
+            stacked
         }
         .interfaceControlSize(.small)
         .interfacePadding(.horizontal, Space.md)
-        .interfacePadding(.vertical, 6)
-        .overlay(alignment: .bottom) {
-            if showsFocusRule {
-                Rectangle()
-                    .fill(Palette.accent)
-                    .interfaceFrame(height: 2)
-                    .transition(.opacity)
-                    .accessibilityHidden(true)
-            }
-        }
-        .animation(MacMotion.state, value: showsFocusRule)
+        .interfaceFrame(minHeight: 48)
+        .background(headerSurface)
         .animation(MacMotion.state, value: isFocused)
         .animation(MacMotion.state, value: SessionPresentation.activityMarker(for: session))
         .animation(MacMotion.state, value: SessionPresentation.hasUnread(for: session))
@@ -357,109 +339,143 @@ struct MacPaneHeader: View {
         .task { await loadRuntimes() }
     }
 
-    private var identity: some View {
-        HStack(spacing: Space.sm * interfaceScale) {
-            let dots = statusDots
-            if !dots.isEmpty {
-                HStack(spacing: 4 * interfaceScale) {
-                    ForEach(dots.indices, id: \.self) { index in
-                        Circle()
-                            .fill(dots[index])
-                            .interfaceFrame(width: 7, height: 7)
-                            .transition(.opacity)
-                            .accessibilityHidden(true)
-                    }
-                }
-                .fixedSize()
-            }
-            // One line, sidebar language (design: Pane header redesign): bare
-            // logo, title, then the project in secondary text, which gives way
-            // before the title does.
-            RuntimeGlyph(runtimeID: session.runtime, size: 16)
-            HStack(alignment: .firstTextBaseline, spacing: 6 * interfaceScale) {
-                Text(verbatim: SessionPresentation.displayTitle(for: session))
-                    .interfaceFont(.body.weight(.semibold))
-                    .foregroundStyle(isFocused ? .primary : .secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .layoutPriority(1)
-                Text(verbatim: SessionPresentation.projectName(from: session))
-                    .interfaceFont(.subheadline)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-            // Titles give way to the controls so four panes fit beside the sidebar.
-            .interfaceFrame(minWidth: 30, idealWidth: 30, maxWidth: .infinity, alignment: .leading)
-            .layoutPriority(-1)
-            .help(Text(verbatim: SessionPresentation.displayTitle(for: session)
-                + "\n" + SessionPresentation.fullWorkspacePath(from: session)))
+    private var singleLine: some View {
+        HStack(spacing: 0) {
+            statusSlot
+            titleText
+                .interfacePadding(.leading, Space.sm)
+                .layoutPriority(1)
+            actions
+                .interfacePadding(.leading, Space.sm)
         }
     }
 
-    private var viewPicker: some View {
-        Picker("mac.pane.view", selection: Binding(
-                get: { workspace.mode(for: session.key) },
-                set: {
-                    workspace.setMode($0, for: session.key)
-                    workspace.focus(session.key)
-                    workspace.requestKeyFocus(session.key)
-                }
-            )) {
-                Label("mac.pane.chat", systemImage: "bubble.left.and.text.bubble.right").tag(MacWorkspace.PaneMode.chat)
-                Label("mac.pane.terminal", systemImage: "terminal").tag(MacWorkspace.PaneMode.terminal)
+    /// Large interface zoom in a narrow split: keep every action reachable.
+    /// Normal use stays on `singleLine`; the owner requires one line.
+    private var stacked: some View {
+        VStack(alignment: .leading, spacing: Space.xs * interfaceScale) {
+            HStack(spacing: 0) {
+                statusSlot
+                titleText
+                    .interfacePadding(.leading, Space.sm)
+                    .layoutPriority(1)
+                Spacer(minLength: 0)
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .labelStyle(.iconOnly)
-            // Neutral selected segment: green in the header is kept for status
-            // and the focus rule, not for a view switch.
-            .tint(Color(nsColor: .tertiaryLabelColor))
-            .fixedSize()
-            .help(Text("mac.pane.view.help"))
+            actions
+                .interfaceFrame(maxWidth: .infinity, alignment: .trailing)
+        }
+        .interfacePadding(.vertical, 6)
     }
 
-    @ViewBuilder
-    private var closeButton: some View {
+    private var titleText: some View {
+        Text(verbatim: SessionPresentation.displayTitle(for: session))
+            .interfaceFont(.system(size: 15, weight: isFocused ? .semibold : .medium))
+            .foregroundStyle(isFocused ? Color.primary : Color.secondary)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .interfaceFrame(minWidth: 30, idealWidth: 30, maxWidth: .infinity, alignment: .leading)
+            .help(Text(verbatim: titleHelp))
+            .accessibilityLabel(Text(verbatim: SessionPresentation.displayTitle(for: session)))
+    }
+
+    /// The slot never changes width, so the title's leading edge is stable
+    /// whether the session has no dot, one dot or activity + unread.
+    private var statusSlot: some View {
+        HStack(spacing: 4 * interfaceScale) {
+            let dots = statusDots
+            ForEach(dots.indices, id: \.self) { index in
+                Circle()
+                    .fill(dots[index])
+                    .interfaceFrame(width: 7, height: 7)
+                    .transition(.opacity)
+            }
+        }
+        .interfaceFrame(width: 18, alignment: .trailing)
+        .accessibilityHidden(true)
+    }
+
+    private var actions: some View {
+        HStack(spacing: 0) {
+            MacPaneViewSwitch(mode: modeBinding)
+                .fixedSize()
+            sessionMenu
+                .interfacePadding(.leading, Space.md)
             if allowsClose {
-                Button {
-                    workspace.closePane(session.key)
-                } label: {
-                    Image(systemName: "xmark")
-                        .interfaceFont(.caption.weight(.semibold))
-                }
-                .buttonStyle(.borderless)
-                .foregroundStyle(Color.secondary)
-                .help(Text("mac.pane.close"))
-                .accessibilityLabel(Text("mac.pane.close"))
+                closeButton
+                    .interfacePadding(.leading, Space.sm)
             }
+        }
+        .fixedSize()
     }
 
-    /// Collapsed home of the Your prompts card, so nothing floats over the
-    /// conversation while it is closed; also closes the open card.
-    private var promptsButton: some View {
-        Button {
-            withAnimation(MacMotion.disclosure(reduceMotion: reduceMotion)) { promptsOpen.toggle() }
-        } label: {
-            Label {
-                Text(verbatim: promptsCount.formatted())
-                    .interfaceFont(.subheadline.monospacedDigit())
-            } icon: {
-                Image(systemName: "text.bubble")
-                    .symbolVariant(promptsOpen ? .fill : .none)
+    /// Focus takes the brighter surface in both appearances: white over the
+    /// grouped gray in light, the raised gray over the page in dark.
+    private var headerSurface: Color {
+        let page = Color(.systemGroupedBackground)
+        let raised = Color(.secondarySystemGroupedBackground)
+        if colorScheme == .dark {
+            return isFocused ? raised : page
+        }
+        return isFocused ? page : raised
+    }
+
+    private var modeBinding: Binding<MacWorkspace.PaneMode> {
+        Binding(
+            get: { workspace.mode(for: session.key) },
+            set: { mode in
+                workspace.setMode(mode, for: session.key)
+                workspace.focus(session.key)
+                workspace.requestKeyFocus(session.key)
             }
-            // Plain grey: `.secondary` inside a borderless button resolves against the accent tint.
-            .foregroundStyle(promptsOpen ? Palette.accent : Color.secondary)
+        )
+    }
+
+    private var titleHelp: String {
+        let title = SessionPresentation.displayTitle(for: session)
+        let agent = Palette.runtimeDisplayName(session.runtime)
+        let project = SessionPresentation.projectName(from: session)
+        let path = SessionPresentation.fullWorkspacePath(from: session)
+        var lines = [title]
+        let identity = [agent, project].filter { !$0.isEmpty }.joined(separator: " · ")
+        if !identity.isEmpty { lines.append(identity) }
+        if !path.isEmpty { lines.append(path) }
+        return lines.joined(separator: "\n")
+    }
+
+    private var closeButton: some View {
+        Button {
+            workspace.closePane(session.key)
+        } label: {
+            Image(systemName: "xmark")
+                .interfaceFont(.system(size: 11, weight: .semibold))
+                .interfaceFrame(width: 24, height: 24)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.borderless)
-        .fixedSize()
-        .help(Text(promptsOpen ? "mac.prompts.hide" : "mac.prompts.show"))
-        .accessibilityLabel(Text("mac.prompts.title \(promptsCount)"))
-        .accessibilityAddTraits(promptsOpen ? .isSelected : [])
+        .foregroundStyle(Color.secondary)
+        .help(Text("mac.pane.close"))
+        .accessibilityLabel(Text("mac.pane.close"))
+    }
+
+    /// The prompt card's collapsed home is the session menu; opening or
+    /// closing it keeps the card's disclosure animation.
+    private var promptsBinding: Binding<Bool> {
+        Binding(
+            get: { promptsOpen },
+            set: { open in
+                withAnimation(MacMotion.disclosure(reduceMotion: reduceMotion)) { promptsOpen = open }
+            }
+        )
     }
 
     private var sessionMenu: some View {
         Menu {
+            if promptsCount > 0 || promptsOpen {
+                Toggle(isOn: promptsBinding) {
+                    Text("mac.prompts.title \(promptsCount)")
+                }
+                Divider()
+            }
             Button {
                 Task { await workspace.togglePin(session.key) }
             } label: {
@@ -503,6 +519,8 @@ struct MacPaneHeader: View {
         } label: {
             Image(systemName: "ellipsis")
                 .foregroundStyle(Color.secondary)
+                .interfaceFrame(width: 24, height: 24)
+                .contentShape(Rectangle())
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)

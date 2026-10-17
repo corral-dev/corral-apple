@@ -61,7 +61,9 @@ extension TerminalView {
         let match = matches[occurrence]
         let position = match.lowerBound.utf16Offset(in: projection)
         guard let target = rowEnds.first(where: { $0.end > position })?.row else { return false }
-        if !emulator.isCurrentBufferAlternate { scrollTo(row: max(0, target - emulator.rows / 3)) }
+        // The owner requires the matched message at the top edge, not a
+        // third-down reveal. SwiftTerm clamps only at the buffer's end.
+        if !emulator.isCurrentBufferAlternate { scrollTo(row: max(0, target)) }
         return true
     }
 }

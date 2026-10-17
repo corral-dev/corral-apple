@@ -361,8 +361,11 @@ struct LifecycleProbe {
         check(error == nil && sink.reveals == ["host resolved text"], "local navigation did not use host identity")
         check(!client.calls.contains { $0.1["native"] as? Bool == true }, "local jump sent agent input")
         sink.revealResult = false
+        var previewed: [Int] = []
+        stream.previewHistory = { previewed.append($0) }
         _ = await stream.navigatePrompt(seq: 8, historyGeneration: 9)
-        check(client.calls.last?.1["native"] as? Bool == true, "missing local buffer did not request native navigation")
+        check(previewed == [8], "missing buffer did not open history preview")
+        check(!client.calls.contains { $0.1["native"] as? Bool == true }, "history miss sent native navigation")
         let gate = Gate()
         client.handler = { method, _ in
             if method == "terminal.prompt" { return try await gate.wait() }
@@ -393,7 +396,7 @@ struct LifecycleProbe {
         _ = await oldRequest.value
         check(sink.reveals == latestReveals, "older selection navigated after a newer selection")
         stream.stop()
-        print("PASS prompt lifecycle: host identity, local read-only path, native fallback, retired response")
+        print("PASS prompt lifecycle: host identity, local read-only path, history preview, retired response")
     }
 
     @MainActor static func selectionCopyRegressions() {
