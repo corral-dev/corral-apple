@@ -102,11 +102,13 @@ nonisolated struct FulltextMatch: Decodable, Sendable, Identifiable {
     let title: String
     let totalHits: Int
     let lines: [FulltextLine]
+    /// The `sessions.list` summary (assistant, project, time); nil from older hosts.
+    let session: SessionSummary?
 
     var id: String { key }
 
     enum CodingKeys: String, CodingKey {
-        case key, title, lines
+        case key, title, lines, session
         case totalHits = "total_hits"
     }
 
@@ -117,6 +119,7 @@ nonisolated struct FulltextMatch: Decodable, Sendable, Identifiable {
         totalHits = container.decodeFlexibleInt(forKey: .totalHits, default: 0)
         lines = (try? container.decodeIfPresent([FailableDecodable<FulltextLine>].self, forKey: .lines))?
             .compactMap(\.value) ?? []
+        session = try? container.decodeIfPresent(SessionSummary.self, forKey: .session)
     }
 }
 

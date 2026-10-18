@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--derived-data", type=Path, default=ROOT / ".derivedData-mac")
 parser.add_argument("--pi-output", type=Path, help="Private JSON array of base64 chunks captured from a disposable Pi TUI")
+parser.add_argument("--prompt-snapshot", type=Path, help="Private synthetic real-tmux snapshot JSON")
 args = parser.parse_args()
 products = args.derived_data.resolve() / "Build/Products/Debug"
 module = products / "SwiftTerm.swiftmodule"
@@ -30,4 +31,5 @@ with tempfile.TemporaryDirectory(prefix="corral-mac-terminal-selection-") as dir
         str(ROOT / "scripts/mac-terminal-selection/Probe.swift"),
         str(library), "-o", executable,
     ], check=True)
-    subprocess.run([executable, *([str(args.pi_output)] if args.pi_output else [])], check=True)
+    subprocess.run([executable, *(["--prompt-snapshot", str(args.prompt_snapshot)] if args.prompt_snapshot
+                                else [str(args.pi_output)] if args.pi_output else [])], check=True)

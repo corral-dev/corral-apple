@@ -63,7 +63,11 @@ struct TerminalSelectionProbe {
         view.getTerminal().resetToInitialState()
         require(!view.selection.active, "snapshot reset discards the old buffer selection")
         verifyPromptNavigation()
-        if let path = CommandLine.arguments.dropFirst().first { verifyPiOutput(path) }
+        verifyResyncViewport()
+        let arguments = Array(CommandLine.arguments.dropFirst())
+        if let index = arguments.firstIndex(of: "--prompt-snapshot"), arguments.indices.contains(index + 1) {
+            verifyPromptSnapshot(arguments[index + 1])
+        } else if let path = arguments.first { verifyPiOutput(path) }
         print("PASS: 30 live redraws, continued range extension, Unicode, mouse mode and native scroll invalidation")
     }
 
@@ -97,10 +101,65 @@ struct TerminalSelectionProbe {
         require(view.scrollPosition == selected, "incomplete duplicate evidence leaves viewport unchanged")
         feed(view, "\u{1b}[?1049h\u{1b}[2J\u{1b}[HCURRENT_ALT_PROMPT")
         require(view.revealPrompt("CURRENT_ALT_PROMPT"), "active alternate text is available")
+        feed(view, "\u{1b}[5;1HLOWER_ALT_PROMPT")
+        require(!view.revealPrompt("LOWER_ALT_PROMPT"), "unscrollable alternate text is not a successful top-edge landing")
         require(!view.revealPrompt(chinese), "normal buffer cannot leak through active alternate screen")
         feed(view, "\u{1b}[2J\u{1b}[Hnew screen")
         require(!view.revealPrompt("CURRENT_ALT_PROMPT"), "overwritten alternate text is unavailable")
         print("PASS prompt navigation: complete CJK wrap, resize, duplicate refusal, alternate overwrite")
+    }
+
+    @MainActor
+    private static func verifyResyncViewport() {
+        let view = StreamTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 500))
+        view.resize(cols: 80, rows: 24)
+        let recent = (500..<2000).map { "retained row \($0)" }.joined(separator: "\r\n")
+        view.feedFromHost(Data(recent.utf8))
+        view.scrollTo(row: 100)
+        let top = view.getTerminal().getLine(row: 0)?.translateToString(trimRight: true)
+        view.preservingViewportDuringSnapshot {
+            view.getTerminal().resetToInitialState()
+            view.feedFromHost(Data((0..<2000).map { "retained row \($0)" }.joined(separator: "\r\n").utf8))
+        }
+        require(view.getTerminal().getLine(row: 0)?.translateToString(trimRight: true) == top,
+                "another viewer's history resync preserves the reading viewport")
+        view.scroll(toPosition: 0)
+        view.preservingViewportDuringSnapshot {
+            view.getTerminal().resetToInitialState()
+            view.feedFromHost(Data((0..<2000).map { "retained row \($0)" }.joined(separator: "\r\n").utf8))
+        }
+        require(view.getTerminal().getTopVisibleRow() == 0, "top-edge reader survives resync")
+        view.scroll(toPosition: 1)
+        view.preservingViewportDuringSnapshot {
+            view.getTerminal().resetToInitialState()
+            view.feedFromHost(Data(recent.utf8))
+        }
+        require(view.scrollPosition == 1, "live viewer remains live after resync")
+        print("PASS resync: extended history preserves another viewer's row and live-edge state")
+    }
+
+    @MainActor
+    private static func verifyPromptSnapshot(_ path: String) {
+        struct Fixture: Decodable { let cols: Int; let rows: Int; let data: String; let query: String; let expectedReveal: Bool? }
+        do {
+            let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
+            let view = StreamTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 500))
+            view.resize(cols: fixture.cols, rows: fixture.rows)
+            guard let data = Data(base64Encoded: fixture.data) else { preconditionFailure("invalid snapshot") }
+            view.feedFromHost(data)
+            let bottom = view.scrollPosition
+            let found = view.revealPrompt(fixture.query)
+            if fixture.expectedReveal == false {
+                require(!found, "baseline physical rows must reproduce the lost-wrap miss")
+                print("PASS baseline reproduction: old physical-line snapshot cannot locate the wrapped target")
+                return
+            }
+            require(found, "real tmux snapshot retains the CJK target beyond 500 rows")
+            require(view.scrollPosition < bottom, "real snapshot reveal moves the actual native viewport")
+            let firstRow = view.getTerminal().getLine(row: 0)?.translateToString(trimRight: true) ?? ""
+            require(firstRow.contains("native prompt margin prefix"), "selected prompt lands at the top edge")
+            print("PASS real snapshot: host capture, wrap boundaries, retention and native viewport arrival")
+        } catch { preconditionFailure("snapshot fixture: \(error)") }
     }
 
     @MainActor

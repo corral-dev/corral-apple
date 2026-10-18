@@ -25,6 +25,7 @@ import SwiftUI
     var connectedAccess = "full"
 }
 struct SessionSummary { var key = "fixture"; var hosted = false; var live = false }
+struct TerminalPromptTaskKey: Hashable { let request: UUID?; let stream: ObjectIdentifier?; let presented: Bool }
 struct TerminalPromptRequest { var id = UUID(); var seq = 0; var generation = 0 }
 enum SessionActionsMenu {
     static func isReadonly(access: String) -> Bool { access == "readonly" }

@@ -19,7 +19,10 @@ struct MacSidebar: View {
     @State private var runtimeFilter: Set<SessionRuntimeFilter> = []
     @State private var projectFilter: Set<SessionProjectFilter> = []
     @State private var orderBox = OrderBox()
-    @State private var sessionToDelete: SessionSummary?
+    @State private var selectedKeys: Set<String> = []
+    @State private var deleteTargets: [SessionSummary] = []
+    @State private var batch = MacSessionBatch()
+    @State private var batchError: String?
     #if DEBUG
     @State private var didInspectDeleteConfirmation = false
     @State private var inspectionTick = 0
@@ -56,6 +59,10 @@ struct MacSidebar: View {
                 if ProcessInfo.processInfo.arguments.contains("-CorralInspectDateDisclosures") {
                     await inspectDateDisclosures()
                 }
+                  if ProcessInfo.processInfo.arguments.contains("-CorralInspectSessionMultiSelection") {
+                      await inspectSessionMultiSelection()
+                      return
+                  }
                 if ProcessInfo.processInfo.arguments.contains("-CorralInspectSidebarGeometry") {
                     for _ in 0..<10 {
                         try? await Task.sleep(for: .seconds(1))
@@ -82,7 +89,7 @@ struct MacSidebar: View {
                             "focusRequested": inspectionFocused,
                             "tableFirstResponder": window?.firstResponder is NSTableView,
                             "keyWindow": window?.isKeyWindow == true,
-                            "selected": selectionBinding.wrappedValue ?? "none",
+                            "selected": Array(selectedKeys).sorted(),
                         ]
                         if let data = try? JSONSerialization.data(withJSONObject: evidence) {
                             try? data.write(to: URL(fileURLWithPath: "/tmp/corral-sidebar-selection.json"), options: .atomic)
@@ -182,10 +189,7 @@ struct MacSidebar: View {
     }
 
     private var list: some View {
-        let sections = DesktopSidebarProjection.sections(
-            sessions: filteredSessions, layout: sidebarLayout, filter: filter, order: &orderBox.order,
-            now: feed.listStore.presentationDate, calendar: feed.listStore.presentationCalendar
-        )
+        let sections = sidebarSections
         return List(selection: selectionBinding) {
             ForEach(sections) { section in
                 Section {
@@ -227,6 +231,12 @@ struct MacSidebar: View {
             }
         }
         .listStyle(.sidebar)
+        .contextMenu(forSelectionType: String.self) { keys in
+            sessionMenu(orderedSessions(for: keys))
+        }
+        .onDeleteCommand(perform: canCreate && !batch.isRunning && !selectedKeys.isEmpty ? {
+            deleteTargets = selectedSessions
+        } : nil)
         .environment(\.defaultMinListRowHeight, MacSidebarMetrics.compactRowHeight * interfaceScale)
         .environment(\.defaultMinListHeaderHeight, MacSidebarMetrics.sectionHeight * interfaceScale)
         // Keep scrolling rows legible beneath the native search and machine bars.
@@ -266,42 +276,13 @@ struct MacSidebar: View {
 
     private func sessionRow(_ session: SessionSummary, split: DesktopGroup?) -> some View {
         MacSessionRow(session: session, splitHelp: split.map(splitHelp),
-                      isSelected: workspace.focusedKey == session.key)
+                      isSelected: selectedKeys.contains(session.key))
             .listRowInsets(.vertical, 0)
             .listRowSeparator(.visible, edges: .bottom)
             .listRowSeparatorTint(Color(nsColor: .separatorColor).opacity(0.5), edges: .bottom)
             .background(NativeSidebarSelection())
-            // Flat rows keep the native sidebar leading inset. The old
-            // disclosure-gutter reclaim pulled every row flush to the edge.
-            .tag(SidebarTag.session(session.key))
+            .tag(session.key)
             .onAppear { feed.listStore.rememberOpened(session) }
-            .contextMenu { sessionMenu(session, split: split) }
-            .confirmationDialog(
-                "sessions.delete_confirm.title",
-                isPresented: Binding(
-                    get: { sessionToDelete?.key == session.key },
-                    set: { presented in
-                        if !presented, sessionToDelete?.key == session.key {
-                            sessionToDelete = nil
-                        }
-                    }
-                ),
-                titleVisibility: .visible,
-                presenting: sessionToDelete
-            ) { target in
-                Button("sessions.action.delete", role: .destructive) {
-                    sessionToDelete = nil
-                    Task {
-                        do {
-                            try await feed.delete(target)
-                            workspace.closePane(target.key)
-                        } catch {
-                            // The shared feed keeps the row and presents the host error.
-                        }
-                    }
-                }
-                Button("action.cancel", role: .cancel) { sessionToDelete = nil }
-            }
             #if DEBUG
             .task {
                 guard ProcessInfo.processInfo.arguments.contains("-CorralInspectDeleteConfirmation"),
@@ -310,7 +291,7 @@ struct MacSidebar: View {
                 didInspectDeleteConfirmation = true
                 try? await Task.sleep(for: .seconds(1))
                 guard !Task.isCancelled else { return }
-                sessionToDelete = session
+                deleteTargets = [session]
             }
             #endif
     }
@@ -326,63 +307,150 @@ struct MacSidebar: View {
     // MARK: - Menus
 
     @ViewBuilder
-    private func sessionMenu(_ session: SessionSummary, split: DesktopGroup?) -> some View {
-        Button {
-            workspace.addPane(session.key, project: session.cwd)
-        } label: {
-            Label("mac.session.open_in_split", systemImage: "rectangle.split.2x1")
-        }
-        .disabled(workspace.paneKeys.isEmpty || !workspace.canAddSessionToSplit(session))
-        Button {
-            Task { await workspace.togglePin(session.key) }
-        } label: {
-            Label("mac.session.pin_toggle", systemImage: "pin")
-        }
-        if let split {
-            Button {
-                Task { await workspace.toggleGroupPin(split) }
-            } label: {
-                Label(split.pinned ? "mac.group.unpin" : "mac.group.pin",
-                      systemImage: split.pinned ? "pin.slash" : "pin")
+    private func sessionMenu(_ targets: [SessionSummary]) -> some View {
+        if !targets.isEmpty {
+            Group {
+                if targets.count == 1, let session = targets.first {
+                    Button {
+                        workspace.addPane(session.key, project: session.cwd)
+                    } label: {
+                        Label("mac.session.open_in_split", systemImage: "rectangle.split.2x1")
+                    }
+                    .disabled(workspace.paneKeys.isEmpty || !workspace.canAddSessionToSplit(session))
+                    Divider()
+                }
+
+                let pinned = targets.filter { workspace.layout.pinnedSessions[$0.key] != nil }
+                let unpinned = targets.filter { workspace.layout.pinnedSessions[$0.key] == nil }
+                if !unpinned.isEmpty {
+                    Button { perform(.pin, on: unpinned) } label: {
+                        if targets.count == 1 {
+                            Label("mac.session.pin", systemImage: "pin")
+                        } else {
+                            Label("mac.sessions.pin \(unpinned.count)", systemImage: "pin")
+                        }
+                    }
+                    .disabled(!canCreate || batch.isRunning)
+                }
+                if !pinned.isEmpty {
+                    Button { perform(.unpin, on: pinned) } label: {
+                        if targets.count == 1 {
+                            Label("mac.session.unpin", systemImage: "pin.slash")
+                        } else {
+                            Label("mac.sessions.unpin \(pinned.count)", systemImage: "pin.slash")
+                        }
+                    }
+                    .disabled(!canCreate || batch.isRunning)
+                }
+                if targets.count == 1, let session = targets.first,
+                   let split = workspace.layout.group(containing: session.key) {
+                    Button {
+                        Task { await workspace.toggleGroupPin(split) }
+                    } label: {
+                        Label(split.pinned ? "mac.group.unpin" : "mac.group.pin",
+                              systemImage: split.pinned ? "pin.slash" : "pin")
+                    }
+                    .disabled(!canCreate || batch.isRunning)
+                }
+                Divider()
+                Button {
+                    var seen: Set<String> = []
+                    let paths = targets.map(SessionPresentation.fullWorkspacePath)
+                        .filter { !$0.isEmpty && seen.insert($0).inserted }
+                    PlatformPasteboard.copy(paths.joined(separator: "\n"))
+                } label: {
+                    Label(targets.count == 1 ? "session.workspace.copy_path" : "mac.sessions.copy_paths",
+                          systemImage: "doc.on.clipboard")
+                }
+                let live = targets.filter(\.live)
+                if !live.isEmpty {
+                    Divider()
+                    Button { perform(.stop, on: live) } label: {
+                        if targets.count == 1 {
+                            Label("sessions.action.stop", systemImage: "stop.fill")
+                        } else {
+                            Label("mac.sessions.stop \(live.count)", systemImage: "stop.fill")
+                        }
+                    }
+                    .disabled(!canCreate || batch.isRunning)
+                }
+                Divider()
+                Button(role: .destructive) { deleteTargets = targets } label: {
+                    if targets.count == 1 {
+                        Label("sessions.action.delete", systemImage: "trash")
+                    } else {
+                        Label("mac.sessions.delete \(targets.count)", systemImage: "trash")
+                    }
+                }
+                .disabled(!canCreate || batch.isRunning)
             }
+            .labelStyle(.titleAndIcon)
         }
-        Button {
-            PlatformPasteboard.copy(SessionPresentation.fullWorkspacePath(from: session))
-        } label: {
-            Label("session.workspace.copy_path", systemImage: "doc.on.doc")
-        }
-        Divider()
-        if session.live {
-            Button {
-                Task { await workspace.stop(session.key) }
-            } label: {
-                Label("sessions.action.stop", systemImage: "stop.fill")
+    }
+
+    private var deleteTitle: Text {
+        if deleteTargets.count == 1 { Text("sessions.delete_confirm.title") }
+        else { Text("mac.sessions.delete_confirm \(deleteTargets.count)") }
+    }
+
+    private func deleteMessage(_ targets: [SessionSummary]) -> String {
+        let titles = targets.prefix(5).map { SessionPresentation.displayTitle(for: $0) }
+        let extra = targets.count > 5 ? [String(localized: "mac.sessions.more \(targets.count - 5)")] : []
+        return (titles + extra + [String(localized: "mac.sessions.delete_warning")]).joined(separator: "\n")
+    }
+
+    private func perform(_ action: MacSessionBatch.Action, on targets: [SessionSummary]) {
+        guard canCreate, !batch.isRunning, !targets.isEmpty else { return }
+        let hostID = workspace.hostID
+        let client = appModel.client
+        Task {
+            let result = await batch.run(keys: targets.map(\.key), isCurrent: {
+                workspace.hostID == hostID && appModel.client === client && canCreate
+            }) { key in
+                try await workspace.applySessionAction(action, key: key)
             }
-        }
-        Button(role: .destructive) {
-            sessionToDelete = session
-        } label: {
-            Label("sessions.action.delete", systemImage: "trash")
+            guard workspace.hostID == hostID else { return }
+            if !result.failures.isEmpty {
+                let names = Dictionary(targets.map { ($0.key, SessionPresentation.displayTitle(for: $0)) },
+                                       uniquingKeysWith: { first, _ in first })
+                batchError = String(localized: "mac.sessions.result \(result.succeeded.count) \(targets.count)")
+                    + "\n\n" + result.failures.map { "\(names[$0.key] ?? $0.key): \($0.message)" }.joined(separator: "\n")
+            }
         }
     }
 
     // MARK: - Selection and expansion
 
-    private enum SidebarTag {
-        static func session(_ key: String) -> String { "session:\(key)" }
+    private var sidebarSections: [DesktopSidebarProjection.Section] {
+        DesktopSidebarProjection.sections(
+            sessions: filteredSessions, layout: sidebarLayout, filter: filter, order: &orderBox.order,
+            now: feed.listStore.presentationDate, calendar: feed.listStore.presentationCalendar
+        )
     }
 
-    private var selectionBinding: Binding<String?> {
+    private var visibleKeys: Set<String> {
+        Set(sidebarSections.filter { expansion(for: $0).wrappedValue }.flatMap(\.items).map { $0.session.key })
+    }
+
+    private var selectedSessions: [SessionSummary] { orderedSessions(for: selectedKeys) }
+
+    private func orderedSessions(for keys: Set<String>) -> [SessionSummary] {
+        sidebarSections.flatMap(\.items).map(\.session).filter { keys.contains($0.key) }
+    }
+
+    private var selectionBinding: Binding<Set<String>> {
         Binding(
-            get: { workspace.focusedKey.map(SidebarTag.session) },
-            set: { tag in
+            get: { selectedKeys },
+            set: { keys in
                 #if DEBUG
                 guard !ProcessInfo.processInfo.arguments.contains("-CorralInspectSidebar") else { return }
                 #endif
-                guard let tag else { return }
-                if tag.hasPrefix("session:") {
-                    workspace.open(String(tag.dropFirst("session:".count)), sessions: sessions)
-                }
+                selectedKeys = keys.intersection(visibleKeys)
+                // Native selection owns Command/Shift/range gestures. Extending
+                // or reducing a batch never navigates away from the open pane.
+                guard selectedKeys.count == 1, let key = selectedKeys.first,
+                      NSEvent.modifierFlags.intersection([.command, .shift]).isEmpty else { return }
+                workspace.open(key, sessions: sessions)
             }
         )
     }
@@ -423,6 +491,85 @@ struct MacSidebar: View {
     }
 
     #if DEBUG
+    /// Public native selection/menu APIs only. Events are queried for their
+    /// menu, never posted; this neither moves the pointer nor simulates clicks.
+    private func inspectSessionMultiSelection() async {
+        for _ in 0..<80 where visibleKeys.count < 3 { try? await Task.sleep(for: .milliseconds(250)) }
+        func descendants(_ view: NSView) -> [NSView] {
+            view.subviews.flatMap { [$0] + descendants($0) }
+        }
+        func hasOutline(_ window: NSWindow) -> Bool {
+            window.contentView.map { descendants($0).contains { $0 is NSOutlineView } } == true
+        }
+        for _ in 0..<80 {
+            if NSApp.windows.contains(where: hasOutline) { break }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        guard let window = NSApp.windows.first(where: hasOutline), let root = window.contentView,
+        let outline = descendants(root).compactMap({ $0 as? NSOutlineView }).first else { return }
+        var rows: [(key: String, row: Int)] = []
+        var index = 0
+        for section in sidebarSections {
+            index += 1
+            if expansion(for: section).wrappedValue {
+                for item in section.items { rows.append((item.session.key, index)); index += 1 }
+            }
+        }
+        for _ in 0..<80 where outline.numberOfRows != index { try? await Task.sleep(for: .milliseconds(250)) }
+        guard rows.count >= 3, outline.numberOfRows == index else {
+            NSLog("Multi-selection inspection row mismatch: native=%d projected=%d", outline.numberOfRows, index)
+            return
+        }
+        let original = selectedKeys
+        let panes = workspace.paneKeys, focus = workspace.focusedKey
+        var checks: [String: Bool] = [:]
+        outline.selectRowIndexes(IndexSet(rows.prefix(2).map(\.row)), byExtendingSelection: false)
+        try? await Task.sleep(for: .milliseconds(350))
+        checks["nativeMultipleSelection"] = selectedKeys == Set(rows.prefix(2).map(\.key))
+        outline.selectRowIndexes(IndexSet(integer: rows[2].row), byExtendingSelection: true)
+        try? await Task.sleep(for: .milliseconds(350))
+        checks["nativeAdditiveSelection"] = selectedKeys == Set(rows.prefix(3).map(\.key))
+        outline.selectAll(nil)
+        try? await Task.sleep(for: .milliseconds(350))
+        checks["nativeSelectAllVisible"] = selectedKeys == visibleKeys
+        checks["conversationAndPanesPreserved"] = workspace.paneKeys == panes && workspace.focusedKey == focus
+        let oldFilter = filter
+        filter = "corral-no-matching-session-multiselection-probe"
+        try? await Task.sleep(for: .milliseconds(400))
+        checks["filterPrunesHiddenTargets"] = selectedKeys.isEmpty
+        filter = oldFilter
+        try? await Task.sleep(for: .milliseconds(400))
+        selectedKeys = Set(rows.prefix(3).map(\.key))
+        try? await Task.sleep(for: .milliseconds(400))
+        let point = outline.convert(NSPoint(x: 80, y: outline.rect(ofRow: rows[1].row).midY), to: nil)
+        let event = NSEvent.mouseEvent(with: .rightMouseDown, location: point, modifierFlags: [],
+                                      timestamp: ProcessInfo.processInfo.systemUptime,
+                                      windowNumber: window.windowNumber, context: nil,
+                                      eventNumber: 0, clickCount: 1, pressure: 0)
+        let menu = event.flatMap { outline.menu(for: $0) }
+        let menuItems = menu?.items.filter { !$0.isSeparatorItem }.map {
+            ["title": $0.title, "hasImage": $0.image != nil, "enabled": $0.isEnabled] as [String: Any]
+        } ?? []
+        checks["selectionMenuAvailable"] = !menuItems.isEmpty
+        let evidence: [String: Any] = ["checks": checks, "menuItems": menuItems,
+                                      "selectedCount": selectedKeys.count,
+                                      "nativeSelectedCount": outline.selectedRowIndexes.count,
+                                      "physicalInput": "not exercised; public selection APIs and non-posted menu query"]
+        let output = ProcessInfo.processInfo.environment["CORRAL_INSPECTION_MULTISELECT_OUTPUT"]
+            ?? "/tmp/corral-multiselect.json"
+        if let data = try? JSONSerialization.data(withJSONObject: evidence, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: URL(fileURLWithPath: output), options: .atomic)
+        }
+        // A bounded hold lets the window helper capture the real menu surface.
+        // No action is invoked and no host metadata or history is mutated.
+        if let menu {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 15) { menu.cancelTracking() }
+            menu.popUp(positioning: nil, at: NSPoint(x: 150, y: outline.rect(ofRow: rows[1].row).midY), in: outline)
+        }
+        try? await Task.sleep(for: .seconds(15))
+        selectedKeys = original.intersection(visibleKeys)
+    }
+
     /// Exercise production header actions with a project scope; never drive input.
     private func inspectDateDisclosures() async {
         for _ in 0..<40 where sessions.isEmpty { try? await Task.sleep(for: .milliseconds(250)) }

@@ -182,4 +182,24 @@ final class DesktopSidebarProjectionTests: XCTestCase {
         XCTAssertTrue(dissolved.flatMap(\.items).allSatisfy { $0.split == nil })
     }
 
+    /// Full-text matches carry the sessions.list summary; older hosts omit it.
+    func testFulltextMatchDecodesOptionalSessionSummary() throws {
+        let json = """
+        {"total": 2, "matches": [
+          {"key": "codex:a", "title": "Store review", "total_hits": 3,
+           "session": {"key": "codex:a", "runtime": "codex", "title": "Store review",
+                       "cwd": "/work/Corral", "cwd_display": "/work/Corral", "mtime": 1791097200.5},
+           "lines": [{"role": "assistant", "text": "isolated VM", "spans": [[9, 11]], "ts": 1.0}]},
+          {"key": "claude:b", "title": "Old host", "total_hits": 1, "lines": []}
+        ]}
+        """
+        let response = try JSONDecoder().decode(FulltextSearchResponse.self, from: Data(json.utf8))
+        XCTAssertEqual(response.matches.count, 2)
+        let session = try XCTUnwrap(response.matches[0].session)
+        XCTAssertEqual(session.runtime, "codex")
+        XCTAssertEqual(session.mtime, 1_791_097_200.5)
+        XCTAssertEqual(SessionPresentation.projectName(from: session), "Corral")
+        XCTAssertEqual(response.matches[0].lines.first?.spans, [[9, 11]])
+        XCTAssertNil(response.matches[1].session)
+    }
 }

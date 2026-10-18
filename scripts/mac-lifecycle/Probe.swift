@@ -47,7 +47,7 @@ enum WireProtocol {
     static let mLayoutPin = "layout.pin", mLayoutPinGroup = "layout.pinGroup", mLayoutCollapse = "layout.collapse"
     static let mRuntimesList = "runtimes.list", mSessionCopy = "session.copy", mSessionHandoff = "session.handoff"
     static let mSessionRestart = "session.restart", mSessionStop = "session.stop", mSessionResume = "session.resume"
-    static let mSessionNew = "session.new", mSessionGet = "session.get"
+    static let mSessionNew = "session.new", mSessionGet = "session.get", mSessionDelete = "session.delete"
     static let mTerminalAttach = "terminal.attach", mTerminalDetach = "terminal.detach"
     static let mTerminalResize = "terminal.resize", mTerminalInput = "terminal.input"
     static let mTerminalResync = "terminal.resync", mInputText = "input.text"
@@ -67,6 +67,7 @@ struct RuntimeEntry: Decodable { var id: String; var isActive: Bool { true } }
     func rememberOpened(_ session: SessionSummary) { opened.insert(session.key) }
     func session(for key: String) -> SessionSummary? { sessions[key] }
     func resolvedKey(_ key: String) -> String { key }
+    func removeSession(key: String) { sessions[key] = nil }
 }
 @MainActor final class HostSessionFeed { var listStore = SessionListStore() }
 @MainActor final class MacPaneSurfaceCache {
@@ -364,8 +365,28 @@ struct LifecycleProbe {
         let attempts = sink.reveals.count
         let miss = await stream.navigatePrompt(seq: 8, historyGeneration: 9)
         check(miss == nil, "missing buffer surfaced a prompt error")
-        check(sink.reveals.count > attempts, "missing buffer was not retried after the host moved the screen")
+        check(sink.reveals.count == attempts + 1, "unavailable host text was repeatedly searched without a new snapshot")
         check(!client.calls.contains { $0.1["native"] as? Bool == true }, "history miss sent native navigation")
+        // The offset proves the host still retains the target. Only an
+        // ordered snapshot supplies it; a resolve response cannot move a view.
+        let resets = sink.resets
+        client.handler = { method, params in
+            if method == "terminal.prompt" { return ["query": "older retained text", "offset": 1800] }
+            if method == WireProtocol.mTerminalResync {
+                check(params["history"] as? Int == 10_000, "prompt resync did not request retained history")
+                sink.revealResult = true
+                client.emit(["kind": "snapshot", "seq": 2, "cols": 80, "rows": 24,
+                             "data": Data("older history".utf8).base64EncodedString()], channel: "term:prompt")
+            }
+            return [:]
+        }
+        let retainedResult = await stream.navigatePrompt(seq: 8, historyGeneration: 9)
+        check(retainedResult == nil, "retained history raised an error")
+        check(sink.resets > resets && sink.reveals.last == "older retained text", "extended snapshot was not revealed")
+        client.handler = { _, _ in throw NSError(domain: "fixture", code: 1) }
+        let failedResult = await stream.navigatePrompt(seq: 8, historyGeneration: 9)
+        check(failedResult == nil && stream.phase == .live,
+              "optional lookup failure affected the live terminal")
         let gate = Gate()
         client.handler = { method, _ in
             if method == "terminal.prompt" { return try await gate.wait() }
@@ -395,6 +416,20 @@ struct LifecycleProbe {
         older.succeed(["query": "obsolete selection"])
         _ = await oldRequest.value
         check(sink.reveals == latestReveals, "older selection navigated after a newer selection")
+        let typingGate = Gate()
+        client.handler = { method, _ in
+            if method == "terminal.prompt" { return try await typingGate.wait() }
+            return [:]
+        }
+        let beforeTyping = sink.reveals
+        let interrupted = Task { await stream.navigatePrompt(seq: 12, historyGeneration: 9) }
+        await settle()
+        stream.input.send(Array("next ordinary message\r".utf8)[...])
+        await settle()
+        typingGate.succeed(["query": "old selection", "offset": 1800])
+        _ = await interrupted.value
+        check(sink.reveals == beforeTyping, "late prompt lookup took over after ordinary input")
+        check(client.calls.contains { $0.0 == WireProtocol.mTerminalInput }, "prompt lookup blocked ordinary input")
         stream.stop()
         print("PASS prompt lifecycle: host identity, local read-only path, silent miss, retired response")
     }
@@ -542,6 +577,7 @@ struct LifecycleProbe {
     }
 
     @MainActor static func main() async throws {
+        await sessionBatchRegressions()
         modeObservationRegressions()
         await sidebarSplitRestorationRegressions()
         await splitProjectRegressions()

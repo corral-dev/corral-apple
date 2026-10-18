@@ -167,11 +167,13 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
         feedingHost = true
         defer { feedingHost = false }
         let emulator = getTerminal()
-        if emulator.cols != grid.cols || emulator.rows != grid.rows {
-            resize(cols: grid.cols, rows: grid.rows)
+        preservingViewportDuringSnapshot {
+            if emulator.cols != grid.cols || emulator.rows != grid.rows {
+                resize(cols: grid.cols, rows: grid.rows)
+            }
+            emulator.resetToInitialState()
+            feedFromHost(data)
         }
-        emulator.resetToInitialState()
-        feedFromHost(data)
     }
 
     func terminalFeed(_ data: Data) {

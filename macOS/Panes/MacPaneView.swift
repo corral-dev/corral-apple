@@ -96,6 +96,10 @@ struct MacPaneView: View {
         }
     }
 
+    /// Counted once the pane is measured, so the toggle never offers a card
+    /// that cannot be placed yet.
+    private var promptsCount: Int { bodySize.width > 0 ? prompts.count : 0 }
+
     private var promptsOpenBinding: Binding<Bool> {
         Binding(
             get: { cardOpen },
@@ -105,14 +109,18 @@ struct MacPaneView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            MacPaneHeader(
-                session: session,
-                isFocused: isFocused,
-                allowsClose: allowsClose,
-                promptsCount: bodySize.width > 0 ? prompts.count : 0,
-                promptsOpen: promptsOpenBinding
-            )
-            Divider()
+            // A lone session pane is titled by the window toolbar instead
+            // (design: Window top bar); splits keep a header per pane.
+            if workspace.toolbarPaneKey != session.key {
+                MacPaneHeader(
+                    session: session,
+                    isFocused: isFocused,
+                    allowsClose: allowsClose,
+                    promptsCount: promptsCount,
+                    promptsOpen: promptsOpenBinding
+                )
+                Divider()
+            }
             content
                 // Beside the conversation the card takes the trailing margin and
                 // either presentation shifts aside; elsewhere it floats over content.
@@ -140,6 +148,9 @@ struct MacPaneView: View {
             if lifetime == nil { workspace.paneFrames[session.key] = frame }
         }
         .onAppear { prepareStore() }
+        .onChange(of: MacWorkspace.PromptsSummary(count: promptsCount, isOpen: cardOpen), initial: true) { _, summary in
+            workspace.publishPrompts(summary, for: session.key)
+        }
         .onChange(of: mode, initial: true) { _, current in
             if current == .terminal && !terminalVisited { terminalVisited = true }
             if current == .chat && !chatVisited { chatVisited = true }
@@ -294,9 +305,10 @@ struct MacPaneView: View {
     }
 }
 
-/// Pane title bar: one dominant title, attention dots, the native view
-/// switch, the session menu and Close. Focus is the header's surface, never a
-/// focus ring or a tint on the reading area (design: Pane header composition).
+/// Split pane title strip: the title is the session's menu, then its
+/// attention dots; Close shows while the pointer is over the strip. Focus is
+/// the strip's surface, never a ring or a tint on the reading area (design:
+/// Window top bar; Pane header composition).
 struct MacPaneHeader: View {
     @Environment(\.interfaceScale) private var interfaceScale
     @Environment(AppModel.self) private var appModel
@@ -310,20 +322,31 @@ struct MacPaneHeader: View {
     @Binding var promptsOpen: Bool
 
     @State private var runtimes: [RuntimeEntry] = []
+    @State private var hovering = false
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            singleLine
-            stacked
+        HStack(spacing: 0) {
+            // The title starts at the header's leading edge, flush with the
+            // conversation below it (owner report 2026-10-17).
+            titleMenu
+                .layoutPriority(1)
+            statusDotsView
+            Spacer(minLength: Space.sm)
+            if allowsClose {
+                closeButton
+                    .opacity(hovering ? 1 : 0)
+                    .allowsHitTesting(hovering)
+            }
         }
-        .interfaceControlSize(.small)
         .interfacePadding(.horizontal, Space.md)
-        .interfaceFrame(minHeight: 48)
+        .interfaceFrame(minHeight: 40)
         .background(headerSurface)
         .animation(MacMotion.state, value: isFocused)
+        .animation(MacMotion.state, value: hovering)
         .animation(MacMotion.state, value: SessionPresentation.activityMarker(for: session))
         .animation(MacMotion.state, value: SessionPresentation.hasUnread(for: session))
         .contentShape(Rectangle())
+        .onHover { hovering = $0 }
         .onTapGesture {
             workspace.focus(session.key)
             workspace.requestKeyFocus(session.key)
@@ -332,44 +355,36 @@ struct MacPaneHeader: View {
         .task { await loadRuntimes() }
     }
 
-    private var singleLine: some View {
-        HStack(spacing: 0) {
-            // The title starts at the header's leading edge, flush with the
-            // conversation below it. A fixed leading dot slot pushed it in
-            // by 26 points even with no dots (owner report 2026-10-17).
-            titleText
-                .layoutPriority(1)
-            statusDotsView
-            Spacer(minLength: Space.sm)
-            actions
-                .fixedSize()
-        }
-    }
-
-    /// Large interface zoom in a narrow split: keep every action reachable.
-    /// Normal use stays on `singleLine`; the owner requires one line.
-    private var stacked: some View {
-        VStack(alignment: .leading, spacing: Space.xs * interfaceScale) {
-            HStack(spacing: 0) {
-                titleText
-                    .layoutPriority(1)
-                statusDotsView
-                Spacer(minLength: 0)
+    /// The title and a small chevron form one native menu button: every
+    /// session action, including Chat / Terminal, opens from the title.
+    private var titleMenu: some View {
+        Menu {
+            MacSessionMenuItems(session: session, runtimes: runtimes,
+                                promptsCount: promptsCount, promptsOpen: promptsBinding,
+                                mode: modeBinding,
+                                onClose: { workspace.requestClose(session.key) })
+        } label: {
+            HStack(spacing: 5 * interfaceScale) {
+                Text(verbatim: SessionPresentation.displayTitle(for: session))
+                    .interfaceFont(.system(size: 15, weight: isFocused ? .semibold : .medium))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Image(systemName: "chevron.down")
+                    .interfaceFont(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Color.secondary)
+                    .accessibilityHidden(true)
             }
-            actions
-                .interfaceFrame(maxWidth: .infinity, alignment: .trailing)
-        }
-        .interfacePadding(.vertical, 6)
-    }
-
-    private var titleText: some View {
-        Text(verbatim: SessionPresentation.displayTitle(for: session))
-            .interfaceFont(.system(size: 15, weight: isFocused ? .semibold : .medium))
             .foregroundStyle(isFocused ? Color.primary : Color.secondary)
-            .lineLimit(1)
-            .truncationMode(.tail)
-            .help(Text(verbatim: titleHelp))
-            .accessibilityLabel(Text(verbatim: SessionPresentation.displayTitle(for: session)))
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize(horizontal: false, vertical: true)
+        .help(Text(verbatim: titleHelp))
+        .accessibilityLabel(Text(verbatim: SessionPresentation.displayTitle(for: session)))
+        .accessibilityHint(Text("session.actions.menu"))
+        .accessibilityIdentifier("corral.session.actions")
     }
 
     /// Attention dots follow the title text, so the title itself never moves.
@@ -388,20 +403,6 @@ struct MacPaneHeader: View {
             .interfacePadding(.leading, 6)
             .accessibilityHidden(true)
         }
-    }
-
-    private var actions: some View {
-        HStack(spacing: 0) {
-            MacPaneViewSwitch(mode: modeBinding)
-                .fixedSize()
-            sessionMenu
-                .interfacePadding(.leading, Space.md)
-            if allowsClose {
-                closeButton
-                    .interfacePadding(.leading, Space.sm)
-            }
-        }
-        .fixedSize()
     }
 
     /// Focus takes the brighter surface in both appearances: white over the
@@ -462,70 +463,6 @@ struct MacPaneHeader: View {
                 withAnimation(MacMotion.disclosure(reduceMotion: reduceMotion)) { promptsOpen = open }
             }
         )
-    }
-
-    private var sessionMenu: some View {
-        Menu {
-            if promptsCount > 0 || promptsOpen {
-                Toggle(isOn: promptsBinding) {
-                    Text("mac.prompts.title \(promptsCount)")
-                }
-                Divider()
-            }
-            Button {
-                Task { await workspace.togglePin(session.key) }
-            } label: {
-                Label("mac.session.pin_toggle", systemImage: "pin")
-            }
-            Divider()
-            Button {
-                Task { await workspace.fork(session) }
-            } label: {
-                Label("session.actions.copy", systemImage: "doc.on.doc")
-            }
-            Menu {
-                ForEach(SessionActionsMenu.handoffTargets(from: runtimes)) { runtime in
-                    Button(runtime.name ?? runtime.id) {
-                        Task { await workspace.handoff(session, to: runtime.id) }
-                    }
-                }
-            } label: {
-                Label("mac.session.continue_with", systemImage: "arrow.triangle.branch")
-            }
-            .disabled(runtimes.isEmpty)
-            Button {
-                Task { await workspace.restart(session.key) }
-            } label: {
-                Label("session.actions.restart", systemImage: "arrow.clockwise")
-            }
-            .disabled(appModel.client?.hostCapabilities.sessionRestart != true)
-            if session.live {
-                Button {
-                    Task { await workspace.stop(session.key) }
-                } label: {
-                    Label("sessions.action.stop", systemImage: "stop.fill")
-                }
-            }
-            Divider()
-            Button {
-                PlatformPasteboard.copy(SessionPresentation.fullWorkspacePath(from: session))
-            } label: {
-                Label("session.workspace.copy_path", systemImage: "folder")
-            }
-        } label: {
-            Image(systemName: "ellipsis")
-                .foregroundStyle(Color.secondary)
-                .interfaceFrame(width: 24, height: 24)
-                .contentShape(Rectangle())
-        }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        // A borderless menu draws its label in the tint, not the foreground style.
-        .tint(Color(nsColor: .secondaryLabelColor))
-        .fixedSize()
-        .disabled(SessionActionsMenu.isReadonly(access: appModel.connectedAccess))
-        .help(Text("session.actions.menu"))
-        .accessibilityIdentifier("corral.session.actions")
     }
 
     /// Activity dot first, then the independent red unread overlay.

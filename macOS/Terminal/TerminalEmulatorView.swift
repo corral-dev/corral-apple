@@ -438,11 +438,13 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
         applyFittingFont(refreshing: false)
         placeTerminal()
         if !inLiveResize { reportFit() }
-        if terminal.getTerminal().cols != grid.cols || terminal.getTerminal().rows != grid.rows {
-            terminal.resize(cols: grid.cols, rows: grid.rows)
+        terminal.preservingViewportDuringSnapshot {
+            if terminal.getTerminal().cols != grid.cols || terminal.getTerminal().rows != grid.rows {
+                terminal.resize(cols: grid.cols, rows: grid.rows)
+            }
+            terminal.getTerminal().resetToInitialState()
+            terminal.feedFromHost(data)
         }
-        terminal.getTerminal().resetToInitialState()
-        terminal.feedFromHost(data)
     }
 
     func terminalFeed(_ data: Data) {

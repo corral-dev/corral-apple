@@ -16,6 +16,7 @@ struct AgentTerminalPane: View {
     @State private var resumed = false
     @State private var resumeError: String?
     @State private var sawScreen = false
+    @State private var handledPromptRequest: UUID?
     @State private var visibility = TerminalVisibility()
 
     var body: some View {
@@ -54,13 +55,15 @@ struct AgentTerminalPane: View {
             visibility.active = isPresented && phase == .active
             if phase != .active { stream?.stop() }
         }
-        .task(id: promptRequest?.id) {
-            guard isPresented, let request = promptRequest else { return }
+        .task(id: TerminalPromptTaskKey(request: promptRequest?.id, stream: stream.map(ObjectIdentifier.init),
+                                         presented: isPresented)) {
+            guard isPresented, let request = promptRequest, handledPromptRequest != request.id else { return }
             await Task.yield()
             // Owner requirement: prompt jumps never surface anything visible.
             // A miss is a silent no-op by design; the error is intentionally dropped.
             guard !Task.isCancelled, let stream else { return }
             _ = await stream.navigatePrompt(seq: request.seq, historyGeneration: request.generation)
+            if !Task.isCancelled { handledPromptRequest = request.id }
         }
         .onDisappear {
             visibility.active = false

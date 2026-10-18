@@ -64,7 +64,7 @@ struct MacFulltextSearch: View {
                     .interfacePadding(Space.md)
             }
         }
-        .interfaceFrame(width: 640, height: 460)
+        .interfaceFrame(width: SearchMetrics.panelWidth, height: SearchMetrics.panelHeight)
         .onAppear {
             fieldFocused = true
             #if DEBUG
@@ -172,38 +172,114 @@ struct MacFulltextSearch: View {
         return result.matches.isEmpty ? .empty : .matches
     }
 
+    /// Glyph column, then the session line, project/hits line and snippets.
+    /// Design: docs/design/MACOS_CLIENT_DESIGN.md, full-text search presentation.
     private func matchRow(_ match: FulltextMatch) -> some View {
-        VStack(alignment: .leading, spacing: Space.xs * interfaceScale) {
-            HStack {
-                Text(verbatim: match.title.isEmpty ? match.key : match.title)
-                    .interfaceFont(.body.weight(.semibold))
-                    .lineLimit(1)
-                Spacer()
-                if match.totalHits > 0 {
-                    Text("mac.search.hits \(match.totalHits)")
-                        .interfaceFont(.caption)
-                        .foregroundStyle(.secondary)
+        HStack(alignment: .top, spacing: Space.sm * interfaceScale) {
+            RuntimeGlyph(runtimeID: match.session?.runtime, size: SearchMetrics.glyph)
+                .interfaceFrame(height: SearchMetrics.titleLineHeight, alignment: .center)
+                .help(Text(verbatim: Palette.runtimeDisplayName(match.session?.runtime)))
+            VStack(alignment: .leading, spacing: SearchMetrics.snippetSpacing * interfaceScale) {
+                VStack(alignment: .leading, spacing: SearchMetrics.metaSpacing * interfaceScale) {
+                    titleLine(match)
+                    metaLine(match)
+                }
+                ForEach(Array(match.lines.enumerated()), id: \.offset) { _, line in
+                    snippet(line, runtime: match.session?.runtime)
                 }
             }
-            ForEach(match.lines, id: \.self) { line in
-                highlighted(line)
-                    .interfaceFont(.callout)
-                    .lineLimit(2)
-            }
         }
-        .interfacePadding(.vertical, Space.xs)
+        .interfacePadding(.vertical, Space.sm)
+        .accessibilityElement(children: .combine)
     }
 
+    private func titleLine(_ match: FulltextMatch) -> some View {
+        HStack(spacing: Space.sm * interfaceScale) {
+            Text(verbatim: match.title.isEmpty ? match.key : match.title)
+                .interfaceFont(.system(size: 15, weight: .semibold))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: Space.sm * interfaceScale)
+            if let session = match.session, session.mtime > 0 {
+                Text(verbatim: MacSidebarMetrics.compactTime(for: session, now: Date()))
+                    .interfaceFont(.system(size: 13).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .fixedSize()
+            }
+        }
+        .interfaceFrame(height: SearchMetrics.titleLineHeight)
+    }
+
+    /// Project in the sidebar's project ink, then the hit count.
+    @ViewBuilder
+    private func metaLine(_ match: FulltextMatch) -> some View {
+        let project = match.session.map(SessionPresentation.projectName(from:)) ?? ""
+        HStack(spacing: Space.xs * interfaceScale) {
+            if !project.isEmpty {
+                Text(verbatim: project == "~" ? String(localized: "sessions.project.home") : project)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(Palette.sessionProject(selected: selection == match.key))
+                    .lineLimit(1)
+                if match.totalHits > 0 {
+                    Text(verbatim: "·")
+                }
+            }
+            if match.totalHits > 0 {
+                Text("mac.search.hits \(match.totalHits)")
+                    .fixedSize()
+            }
+        }
+        .interfaceFont(.system(size: 13))
+        .foregroundStyle(.secondary)
+    }
+
+    /// One hit line: role mark, then up to three lines with the keywords marked.
+    private func snippet(_ line: FulltextLine, runtime: String?) -> some View {
+        HStack(alignment: .top, spacing: Space.sm * interfaceScale) {
+            Group {
+                if line.role == "user" {
+                    Image(systemName: "person.fill")
+                        .interfaceFont(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel(Text("chat.role.user"))
+                } else {
+                    RuntimeGlyph(runtimeID: runtime, size: SearchMetrics.roleGlyph)
+                        .accessibilityLabel(Text("chat.role.assistant"))
+                }
+            }
+            .interfaceFrame(width: SearchMetrics.roleGlyph, height: SearchMetrics.snippetLineHeight)
+            highlighted(line)
+                .interfaceFont(.system(size: 14))
+                .foregroundStyle(line.role == "user" ? Color.primary : Color.secondary)
+                .lineSpacing(SearchMetrics.lineSpacing * interfaceScale)
+                .lineLimit(3)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// Server spans count Unicode scalars (Python string offsets). A first hit
+    /// beyond the visible start reopens the line shortly before it.
     private func highlighted(_ line: FulltextLine) -> Text {
-        var attributed = AttributedString((line.role == "user" ? "› " : "") + line.text)
-        let offset = line.role == "user" ? 2 : 0
-        let characters = Array(attributed.characters.indices)
-        for span in line.spans where span.count == 2 {
-            let start = span[0] + offset, end = span[1] + offset
-            guard start >= 0, end <= characters.count, start < end else { continue }
-            let range = characters[start]..<(end < characters.count ? characters[end] : attributed.endIndex)
-            attributed[range].foregroundColor = Palette.accent
-            attributed[range].font = .callout.weight(.semibold)
+        let spans = line.spans.filter { $0.count == 2 && $0[0] >= 0 && $0[0] < $0[1] }
+        var scalars = Array(line.text.unicodeScalars)
+        var shift = 0
+        if let first = spans.first?[0], first > SearchMetrics.maxLeadScalars {
+            let start = first - SearchMetrics.windowLead
+            scalars = Array("…".unicodeScalars) + scalars[start...]
+            shift = 1 - start
+        }
+        var text = String.UnicodeScalarView()
+        text.append(contentsOf: scalars)
+        var attributed = AttributedString(String(text))
+        let view = attributed.unicodeScalars
+        for span in spans {
+            let start = span[0] + shift, end = span[1] + shift
+            guard start >= 0, end <= scalars.count else { continue }
+            let lower = view.index(view.startIndex, offsetBy: start)
+            let upper = view.index(view.startIndex, offsetBy: end)
+            attributed[lower..<upper].foregroundColor = Palette.accent
+            attributed[lower..<upper].inlinePresentationIntent = .stronglyEmphasized
         }
         return Text(attributed)
     }
@@ -314,3 +390,21 @@ private struct SearchConnectionKey: Hashable {
     let ready: Bool
     let retry: Int
 }
+
+/// Result geometry (owner request 2026-10-18); sizes follow interface zoom.
+private enum SearchMetrics {
+    static let panelWidth: CGFloat = 760
+    static let panelHeight: CGFloat = 560
+    static let glyph: CGFloat = 16
+    static let roleGlyph: CGFloat = 13
+    static let titleLineHeight: CGFloat = 20
+    static let snippetLineHeight: CGFloat = 18
+    static let metaSpacing: CGFloat = 2
+    static let snippetSpacing: CGFloat = 6
+    static let lineSpacing: CGFloat = 3
+    /// A first hit later than this many scalars (about two CJK lines) is moved into view…
+    static let maxLeadScalars = 90
+    /// …keeping this much context before it.
+    static let windowLead = 20
+}
+

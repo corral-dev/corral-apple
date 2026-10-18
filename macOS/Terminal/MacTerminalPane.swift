@@ -18,6 +18,7 @@ struct MacTerminalPane: View {
     @State private var startAttempted = false
     @State private var startError: String?
     @State private var sawLive = false
+    @State private var handledPromptRequest: UUID?
 
     var body: some View {
         // The emulator keeps one structural position for its whole life and
@@ -64,13 +65,15 @@ struct MacTerminalPane: View {
             await inspectTypingIfRequested()
             #endif
         }
-        .task(id: promptRequest?.id) {
-            guard isPresented, let request = promptRequest else { return }
+        .task(id: TerminalPromptTaskKey(request: promptRequest?.id, stream: stream.map(ObjectIdentifier.init),
+                                         presented: isPresented)) {
+            guard isPresented, let request = promptRequest, handledPromptRequest != request.id else { return }
             await Task.yield()
             // Owner requirement: prompt jumps never surface anything visible.
             // A miss is a silent no-op by design; the error is intentionally dropped.
             guard !Task.isCancelled, let stream else { return }
             _ = await stream.navigatePrompt(seq: request.seq, historyGeneration: request.generation)
+            if !Task.isCancelled { handledPromptRequest = request.id }
         }
         .onDisappear {
             stream?.stop()

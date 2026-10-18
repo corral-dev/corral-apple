@@ -5,6 +5,7 @@ import SwiftUI
 /// split workspace (up to four panes, a TUI session group) on the right. With no paired machine it is the pairing page.
 struct MacRootView: View {
     @Environment(\.interfaceScale) private var interfaceScale
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(MacInterfaceZoom.self) private var zoom
     #if DEBUG
     @State private var inspectedNewSession = false
@@ -127,6 +128,11 @@ struct MacRootView: View {
                 .modifier(MacZoomContent())
                 .interfaceFrame(maxWidth: .infinity, maxHeight: .infinity)
             .navigationSplitViewColumnWidth(min: CGFloat(paneCount) * MacSplitArea.paneMinimum, ideal: 760)
+            .navigationTitle(windowTitle)
+            .navigationSubtitle(toolbarSession.map(Self.subtitle(for:)) ?? "")
+            // Splits title each pane in its own header; never repeat one here.
+            .toolbar(removing: toolbarSession == nil ? .title : nil)
+            .toolbarTitleMenu { titleMenu }
             .toolbar { detailToolbar }
         }
         .navigationSplitViewStyle(.balanced)
@@ -164,6 +170,9 @@ struct MacRootView: View {
         }
         .onChange(of: workspace.focusedKey) { _, key in
             commands.hasFocusedPane = key != nil
+        }
+        .onChange(of: focusedSessionIsPinned, initial: true) { _, pinned in
+            commands.focusedSessionPinned = pinned
         }
         .onChange(of: commands.newSessionRequest) { _, _ in startNewSession() }
         .onChange(of: commands.searchRequest) { _, _ in showSearch = true }
@@ -239,26 +248,41 @@ struct MacRootView: View {
         }
     }
 
+    private var focusedSessionIsPinned: Bool {
+        guard let key = workspace.focusedKey else { return false }
+        return workspace.layout.pinnedSessions[key] != nil
+    }
+
     private var paneCount: Int { max(workspace.paneKeys.count, 1) }
+
+    // MARK: - Window top bar (design: Window top bar)
+
+    /// The lone session pane the toolbar titles and controls.
+    private var toolbarSession: SessionSummary? {
+        workspace.toolbarPaneKey.flatMap { feed?.listStore.session(for: $0) }
+    }
+
+    /// Never the app name: the lone pane's session, or in a split the
+    /// focused one (Window menu and Mission Control; the bar hides it).
+    private var windowTitle: String {
+        let session = toolbarSession ?? workspace.focusedKey.flatMap { feed?.listStore.session(for: $0) }
+        return session.map(SessionPresentation.displayTitle(for:)) ?? "Corral"
+    }
+
+    private static func subtitle(for session: SessionSummary) -> String {
+        [Palette.runtimeDisplayName(session.runtime), SessionPresentation.projectName(from: session)]
+            .filter { !$0.isEmpty }
+            .joined(separator: " · ")
+    }
 
     @ToolbarContentBuilder
     private var detailToolbar: some ToolbarContent {
-        ToolbarItem(placement: .primaryAction) {
-            Button(action: openTerminal) {
-                Label("terminal.panel.title", systemImage: "terminal")
-            }
-            .help(Text("terminal.panel.toggle.help"))
-            .disabled(!canUseTerminal)
+        // Without a title (split or empty) the bar would start its items at
+        // the leading edge.
+        if toolbarSession == nil {
+            ToolbarSpacer(.flexible, placement: .primaryAction)
         }
-        ToolbarItem(placement: .primaryAction) {
-            Button {
-                showSearch = true
-            } label: {
-                Label("mac.search.title", systemImage: "text.magnifyingglass")
-            }
-            .help(Text("mac.search.title"))
-        }
-        ToolbarItem(placement: .primaryAction) {
+        ToolbarItemGroup(placement: .primaryAction) {
             Menu {
                 ForEach(runtimeChoices, id: \.id) { runtime in
                     Button(runtime.name ?? runtime.id) {
@@ -267,6 +291,9 @@ struct MacRootView: View {
                 }
                 if canUseTerminal {
                     Divider()
+                    Button(action: openTerminal) {
+                        Label("terminal.panel.title", systemImage: "terminal")
+                    }
                     Button("terminal.pane.new") {
                         Task { await workspace.newTerminal(project: focusedProject) }
                     }
@@ -276,7 +303,52 @@ struct MacRootView: View {
             }
             .help(Text("mac.pane.add.help"))
             .disabled(!canCreateSession)
+            Button {
+                showSearch = true
+            } label: {
+                Label("mac.search.title", systemImage: "text.magnifyingglass")
+            }
+            .help(Text("mac.search.title"))
         }
+    }
+
+    /// Clicking the lone pane's window title opens its session menu, the
+    /// same menu a split pane's title opens.
+    @ViewBuilder
+    private var titleMenu: some View {
+        if let session = toolbarSession {
+            MacSessionMenuItems(
+                session: session,
+                runtimes: workspace.runtimes,
+                promptsCount: workspace.promptsSummaries[session.key]?.count ?? 0,
+                promptsOpen: promptsBinding(for: session.key),
+                mode: modeBinding(for: session.key),
+                onClose: { workspace.requestClose(session.key) }
+            )
+        }
+    }
+
+    private func modeBinding(for key: String) -> Binding<MacWorkspace.PaneMode> {
+        Binding(
+            get: { workspace.mode(for: key) },
+            set: { mode in
+                workspace.setMode(mode, for: key)
+                workspace.focus(key)
+                workspace.requestKeyFocus(key)
+            }
+        )
+    }
+
+    /// Same toggle as the pane header's menu, with the card's disclosure motion.
+    private func promptsBinding(for key: String) -> Binding<Bool> {
+        Binding(
+            get: { workspace.promptsSummaries[key]?.isOpen ?? false },
+            set: { open in
+                withAnimation(MacMotion.disclosure(reduceMotion: reduceMotion)) {
+                    workspace.promptsOpen[key] = open
+                }
+            }
+        )
     }
 
     // MARK: - Derived state

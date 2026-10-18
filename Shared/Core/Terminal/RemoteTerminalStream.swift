@@ -60,6 +60,7 @@ final class RemoteTerminalStream {
 
     @ObservationIgnored private var events: Task<Void, Never>?
     @ObservationIgnored private var lastSeq = 0
+    @ObservationIgnored private var snapshotRevision = 0
     @ObservationIgnored private var synced = false
     @ObservationIgnored private var resyncing = false
     /// Snapshot plus later output that arrived before the view existed.
@@ -149,6 +150,7 @@ final class RemoteTerminalStream {
     /// Resolve full host text by identity; card previews are never search input.
     func navigatePrompt(seq: Int, historyGeneration: Int) async -> String? {
         let request = UUID()
+        let inputRevision = input.revision
         promptNavigation = request
         // Owner requirement (2026-10-17): a prompt jump stays in the live
         // terminal. Every miss below is silent — never switch to the chat
@@ -159,34 +161,40 @@ final class RemoteTerminalStream {
         // briefly for it instead of dropping the selection on the floor.
         var waited = 0
         while !(phase == .live && synced), waited < 40 {
-            guard !Task.isCancelled, promptNavigation == request else { return nil }
+            guard !Task.isCancelled, promptNavigation == request, input.revision == inputRevision else { return nil }
             try? await Task.sleep(for: .milliseconds(50))
             waited += 1
         }
-        guard !Task.isCancelled, phase == .live, synced, promptNavigation == request else { return nil }
+        guard !Task.isCancelled, phase == .live, synced, promptNavigation == request, input.revision == inputRevision else { return nil }
         let mine = generation
         let params: [String: Any] = ["key": sessionKey, "seq": seq, "generation": historyGeneration,
                                    "navigation": request.uuidString]
         do {
             let value = try await client.call("terminal.prompt", params: params)
-            guard !Task.isCancelled, generation == mine, promptNavigation == request else { return nil }
+            guard !Task.isCancelled, generation == mine, promptNavigation == request, input.revision == inputRevision else { return nil }
             guard let payload = value as? [String: Any], let query = payload["query"] as? String else {
                 return nil
             }
             let occurrence = payload["occurrence"] as? Int ?? 0
             let total = payload["total"] as? Int ?? 1
-            // The host has already moved the shared screen; this emulator
-            // receives that frame slightly later. Retry the local top-edge
-            // reveal briefly, then stop silently if the buffer never matches.
-            for attempt in 0..<20 {
-                guard !Task.isCancelled, generation == mine, promptNavigation == request else { return nil }
-                if sink?.terminalRevealPrompt(query, occurrence: occurrence, total: total) == true { return nil }
-                if attempt < 19 { try? await Task.sleep(for: .milliseconds(50)) }
+            if sink?.terminalRevealPrompt(query, occurrence: occurrence, total: total) == true { return nil }
+            // A resolve never moves the host. Fetch its retained terminal text
+            // through the existing ordered snapshot barrier, without agent keys.
+            guard payload["offset"] as? Int != nil else { return nil }
+            var seen = snapshotRevision
+            _ = try await client.call(WireProtocol.mTerminalResync, params: ["key": sessionKey, "history": 10_000])
+            for _ in 0..<60 {
+                guard !Task.isCancelled, generation == mine, promptNavigation == request, input.revision == inputRevision else { return nil }
+                if snapshotRevision != seen {
+                    seen = snapshotRevision
+                    if sink?.terminalRevealPrompt(query, occurrence: occurrence, total: total) == true { return nil }
+                }
+                try? await Task.sleep(for: .milliseconds(50))
             }
             return nil
         } catch {
-            guard !Task.isCancelled, generation == mine, promptNavigation == request else { return nil }
-            return error.localizedDescription
+            // This auxiliary action never changes stream/input error state.
+            return nil
         }
     }
 
@@ -369,6 +377,7 @@ final class RemoteTerminalStream {
             guard let cols = payload["cols"] as? Int, let rows = payload["rows"] as? Int,
                   let data = decode(payload["data"]) else { return }
             lastSeq = seq
+            snapshotRevision += 1
             synced = true
             phase = .live
             let grid = TerminalGrid(cols: cols, rows: rows)
@@ -467,6 +476,7 @@ final class TerminalInputSender {
     private weak var client: RemoteClient?
     private var queue: [Input] = []
     private var draining = false
+    private(set) var revision = 0
 
     init(sessionKey: String, client: RemoteClient) {
         self.sessionKey = sessionKey
@@ -490,6 +500,7 @@ final class TerminalInputSender {
     }
 
     private func enqueue(_ input: Input) {
+        revision &+= 1
         queue.append(input)
         guard !draining else { return }
         draining = true

@@ -142,6 +142,7 @@ final class MacCommandCenter {
     /// Whether the main window currently has a connected, writable machine.
     var canCreateSession = false
     var hasFocusedPane = false
+    var focusedSessionPinned = false
 }
 
 /// Command-key shortcuts (owner decision 2026-10-04): every Control
@@ -169,7 +170,11 @@ struct MacCommands: Commands {
             Button("mac.pane.toggle_view") { center.toggleViewRequest += 1 }
                 .keyboardShortcut("e", modifiers: .command)
                 .disabled(!center.hasFocusedPane)
-            Button("mac.session.pin_toggle") { center.pinRequest += 1 }
+            Button { center.pinRequest += 1 } label: {
+                Label(center.focusedSessionPinned ? "mac.session.unpin" : "mac.session.pin",
+                      systemImage: center.focusedSessionPinned ? "pin.slash" : "pin")
+            }
+                .labelStyle(.titleAndIcon)
                 .keyboardShortcut("p", modifiers: [.command, .option])
                 .disabled(!center.hasFocusedPane)
             Divider()

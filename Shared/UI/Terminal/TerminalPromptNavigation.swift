@@ -8,6 +8,13 @@ struct TerminalPromptRequest: Identifiable {
     let generation: Int
 }
 
+/// Re-run a pending selection when its stream is created or presented.
+struct TerminalPromptTaskKey: Hashable {
+    let request: UUID?
+    let stream: ObjectIdentifier?
+    let presented: Bool
+}
+
 extension TerminalView {
     /// Search the actual buffer, preserving wide glyphs at soft-wrap boundaries.
     /// SwiftTerm's native scroll API owns viewport movement. No input is sent.
@@ -63,7 +70,10 @@ extension TerminalView {
         guard let target = rowEnds.first(where: { $0.end > position })?.row else { return false }
         // The owner requires the matched message at the top edge, not a
         // third-down reveal. SwiftTerm clamps only at the buffer's end.
-        if !emulator.isCurrentBufferAlternate { scrollTo(row: max(0, target)) }
+        // The alternate buffer has no scrollback. Finding text below its
+        // first row does not mean that the requested top-edge landing occurred.
+        if emulator.isCurrentBufferAlternate { return target == 0 }
+        scrollTo(row: max(0, target))
         return true
     }
 }

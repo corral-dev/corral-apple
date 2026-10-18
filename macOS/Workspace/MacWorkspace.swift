@@ -51,6 +51,9 @@ final class MacWorkspace {
     /// A person's open/closed choice for a session's prompts card; without
     /// one the card is open only where it fits beside the conversation.
     var promptsOpen: [String: Bool] = [:]
+    /// Each pane's prompt count and effective card state, published by the
+    /// pane so the window toolbar's session menu can offer the same toggle.
+    private(set) var promptsSummaries: [String: PromptsSummary] = [:]
     /// Prompts card → scroll that pane's conversation to a prompt.
     private(set) var scrollRequests: [String: ChatScrollRequest] = [:]
     /// Project shells of this machine (terminal panes look their titles up here).
@@ -94,6 +97,7 @@ final class MacWorkspace {
         focusedKey = nil
         runtimes = []
         promptsOpen = [:]
+        promptsSummaries = [:]
         pendingEntrances = []
         cancelSplitMotion()
         keyFocusTarget = nil
@@ -106,6 +110,26 @@ final class MacWorkspace {
         // Drop the previous host's mode signals; the persisted modes table is
         // pruned lazily on write, signals are cheap to rebuild.
         modeSignals = modeSignals.filter { $0.key.hasPrefix("\(id ?? ""):") }
+    }
+
+    // MARK: - Window top bar (design: Window top bar)
+
+    struct PromptsSummary: Equatable {
+        var count = 0
+        var isOpen = false
+    }
+
+    /// The only session pane, whose title, view switch and session menu the
+    /// window toolbar carries instead of a pane header. Splits and a lone
+    /// terminal pane keep their own headers.
+    var toolbarPaneKey: String? {
+        guard paneKeys.count == 1, let key = paneKeys.first, !ProjectShell.isShellKey(key) else { return nil }
+        return key
+    }
+
+    func publishPrompts(_ summary: PromptsSummary, for key: String) {
+        guard promptsSummaries[key] != summary else { return }
+        promptsSummaries[key] = summary
     }
 
     // MARK: - Chat / terminal per session (chat by default, remembered)
@@ -640,6 +664,32 @@ final class MacWorkspace {
 
     func togglePin(_ key: String) async {
         await call(WireProtocol.mLayoutPin, ["key": key])
+    }
+
+    /// Independent pins are separate from a split's shared pin. Recheck each
+    /// desired state so refreshes or repeated keys cannot invert a batch.
+    func applySessionAction(_ action: MacSessionBatch.Action, key: String) async throws {
+        let method: String
+        var params: [String: Any] = ["key": key]
+        switch action {
+        case .pin, .unpin:
+            guard (layout.pinnedSessions[key] != nil) != (action == .pin) else { return }
+            method = WireProtocol.mLayoutPin
+        case .stop:
+            method = WireProtocol.mSessionStop
+            params["confirm"] = true
+        case .delete:
+            method = WireProtocol.mSessionDelete
+            params["confirm"] = true
+        }
+        var failure: String?
+        guard await call(method, params, onFailure: { failure = $0 }) != nil else {
+            throw MacSessionBatch.Failure(message: failure ?? String(localized: "error.not_connected"))
+        }
+        if action == .delete {
+            feed?.listStore.removeSession(key: key)
+            closePane(key)
+        }
     }
 
     func toggleGroupPin(_ group: DesktopGroup) async {
