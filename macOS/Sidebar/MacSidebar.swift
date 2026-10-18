@@ -551,8 +551,8 @@ struct MacSidebar: View {
     }
 
     #if DEBUG
-    /// Public native selection and the production menu's target/action only.
-    /// No input event is synthesized or posted; host data is untouched.
+    /// Public native selection, a non-posted context-menu query and native
+    /// menu actions only. No input event is posted; host data is untouched.
     private func inspectSessionMultiSelection() async {
         for _ in 0..<80 where visibleKeys.count < 3 { try? await Task.sleep(for: .milliseconds(250)) }
         func descendants(_ view: NSView) -> [NSView] {
@@ -644,7 +644,7 @@ struct MacSidebar: View {
                                            "class": String(describing: type(of: $0)),
                                            "frame": NSStringFromRect($0.convert($0.bounds, to: nil))]
                                       },
-                                      "physicalInput": "not exercised; public selection APIs and production menu target/action"]
+                                      "physicalInput": "not exercised; public selection APIs, non-posted menu query and native menu actions"]
         let recorder = MacSessionMenuInspection(output: URL(fileURLWithPath: output)) { evidence }
         defer { recorder.stop() }
         if let data = try? JSONSerialization.data(withJSONObject: evidence, options: [.prettyPrinted, .sortedKeys]) {

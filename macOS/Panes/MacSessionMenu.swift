@@ -1,14 +1,12 @@
 import SwiftUI
 
-/// The session menu, opened from the session's title: a split pane's title
-/// button and the window title menu of a lone pane (design: Window top bar).
+/// The session menu behind a pane header's kebab button (design: Window top
+/// bar, owner correction). Your prompts opens from the pane title instead.
 struct MacSessionMenuItems: View {
     @Environment(AppModel.self) private var appModel
     @Environment(MacWorkspace.self) private var workspace
     let session: SessionSummary
     let runtimes: [RuntimeEntry]
-    let promptsCount: Int
-    @Binding var promptsOpen: Bool
     @Binding var mode: MacWorkspace.PaneMode
     let onClose: () -> Void
 
@@ -16,8 +14,8 @@ struct MacSessionMenuItems: View {
         items.labelStyle(.titleAndIcon)
     }
 
-    /// A read-only pairing still switches views, reads prompts and copies the
-    /// path; session actions are unavailable.
+    /// A read-only pairing still switches views and copies the path; session
+    /// actions are unavailable.
     private var readonly: Bool { SessionActionsMenu.isReadonly(access: appModel.connectedAccess) }
 
     @ViewBuilder
@@ -32,11 +30,6 @@ struct MacSessionMenuItems: View {
         }
         .pickerStyle(.inline)
         .labelsHidden()
-        if promptsCount > 0 || promptsOpen {
-            Toggle(isOn: $promptsOpen) {
-                Label("mac.prompts.title \(promptsCount)", systemImage: "list.bullet")
-            }
-        }
         Divider()
         Button {
             Task { await workspace.togglePin(session.key) }

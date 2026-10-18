@@ -109,18 +109,14 @@ struct MacPaneView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // A lone session pane is titled by the window toolbar instead
-            // (design: Window top bar); splits keep a header per pane.
-            if workspace.toolbarPaneKey != session.key {
-                MacPaneHeader(
-                    session: session,
-                    isFocused: isFocused,
-                    allowsClose: allowsClose,
-                    promptsCount: promptsCount,
-                    promptsOpen: promptsOpenBinding
-                )
-                Divider()
-            }
+            MacPaneHeader(
+                session: session,
+                isFocused: isFocused,
+                allowsClose: allowsClose,
+                promptsCount: promptsCount,
+                promptsOpen: promptsOpenBinding
+            )
+            Divider()
             content
                 // Beside the conversation the card takes the trailing margin and
                 // either presentation shifts aside; elsewhere it floats over content.
@@ -148,9 +144,6 @@ struct MacPaneView: View {
             if lifetime == nil { workspace.paneFrames[session.key] = frame }
         }
         .onAppear { prepareStore() }
-        .onChange(of: MacWorkspace.PromptsSummary(count: promptsCount, isOpen: cardOpen), initial: true) { _, summary in
-            workspace.publishPrompts(summary, for: session.key)
-        }
         .onChange(of: mode, initial: true) { _, current in
             if current == .terminal && !terminalVisited { terminalVisited = true }
             if current == .chat && !chatVisited { chatVisited = true }
@@ -305,10 +298,10 @@ struct MacPaneView: View {
     }
 }
 
-/// Split pane title strip: the title is the session's menu, then its
-/// attention dots; Close shows while the pointer is over the strip. Focus is
-/// the strip's surface, never a ring or a tint on the reading area (design:
-/// Window top bar; Pane header composition).
+/// Pane header, single pane or split: the title toggles the session's Your
+/// prompts card, then its attention dots; the session menu opens from the
+/// kebab beside Close. Focus is the header's surface, never a ring or a tint
+/// on the reading area (design: Window top bar, owner correction 2026-10-18).
 struct MacPaneHeader: View {
     @Environment(\.interfaceScale) private var interfaceScale
     @Environment(AppModel.self) private var appModel
@@ -322,69 +315,88 @@ struct MacPaneHeader: View {
     @Binding var promptsOpen: Bool
 
     @State private var runtimes: [RuntimeEntry] = []
-    @State private var hovering = false
 
     var body: some View {
         HStack(spacing: 0) {
             // The title starts at the header's leading edge, flush with the
             // conversation below it (owner report 2026-10-17).
-            titleMenu
+            titleButton
                 .layoutPriority(1)
             statusDotsView
             Spacer(minLength: Space.sm)
+            sessionMenu
             if allowsClose {
                 closeButton
-                    .opacity(hovering ? 1 : 0)
-                    .allowsHitTesting(hovering)
+                    .interfacePadding(.leading, Space.xs)
             }
         }
         .interfacePadding(.horizontal, Space.md)
         .interfaceFrame(minHeight: 40)
         .background(headerSurface)
         .animation(MacMotion.state, value: isFocused)
-        .animation(MacMotion.state, value: hovering)
         .animation(MacMotion.state, value: SessionPresentation.activityMarker(for: session))
         .animation(MacMotion.state, value: SessionPresentation.hasUnread(for: session))
         .contentShape(Rectangle())
-        .onHover { hovering = $0 }
-        .onTapGesture {
-            workspace.focus(session.key)
-            workspace.requestKeyFocus(session.key)
-        }
+        .onTapGesture { focusPane() }
         .accessibilityAddTraits(isFocused ? .isSelected : [])
         .task { await loadRuntimes() }
     }
 
-    /// The title and a small chevron form one native menu button: every
-    /// session action, including Chat / Terminal, opens from the title.
-    private var titleMenu: some View {
-        Menu {
-            MacSessionMenuItems(session: session, runtimes: runtimes,
-                                promptsCount: promptsCount, promptsOpen: promptsBinding,
-                                mode: modeBinding,
-                                onClose: { workspace.requestClose(session.key) })
+    /// The title opens and closes Your prompts; the chevron shows the card's
+    /// state and appears only when the session has prompts.
+    private var titleButton: some View {
+        Button {
+            focusPane()
+            if promptsCount > 0 { promptsBinding.wrappedValue.toggle() }
         } label: {
             HStack(spacing: 5 * interfaceScale) {
                 Text(verbatim: SessionPresentation.displayTitle(for: session))
                     .interfaceFont(.system(size: 15, weight: isFocused ? .semibold : .medium))
                     .lineLimit(1)
                     .truncationMode(.tail)
-                Image(systemName: "chevron.down")
-                    .interfaceFont(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(Color.secondary)
-                    .accessibilityHidden(true)
+                if promptsCount > 0 {
+                    Image(systemName: promptsOpen ? "chevron.up" : "chevron.down")
+                        .interfaceFont(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Color.secondary)
+                        .contentTransition(.symbolEffect(.replace))
+                        .accessibilityHidden(true)
+                }
             }
             .foregroundStyle(isFocused ? Color.primary : Color.secondary)
             .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .help(Text(verbatim: titleHelp))
+        .accessibilityLabel(Text(verbatim: SessionPresentation.displayTitle(for: session)))
+        .accessibilityValue(promptsCount > 0 ? Text("mac.prompts.title \(promptsCount)") : Text(verbatim: ""))
+        .accessibilityAddTraits(promptsOpen && promptsCount > 0 ? .isSelected : [])
+    }
+
+    /// Kebab: the system ellipsis turned upright (no vertical variant ships).
+    private var sessionMenu: some View {
+        Menu {
+            MacSessionMenuItems(session: session, runtimes: runtimes, mode: modeBinding,
+                                onClose: { workspace.requestClose(session.key) })
+        } label: {
+            Image(systemName: "ellipsis")
+                .interfaceFont(.system(size: 13, weight: .semibold))
+                .rotationEffect(.degrees(90))
+                .foregroundStyle(Color.secondary)
+                .interfaceFrame(width: 24, height: 24)
+                .contentShape(Rectangle())
+        }
         .menuStyle(.button)
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
-        .fixedSize(horizontal: false, vertical: true)
-        .help(Text(verbatim: titleHelp))
-        .accessibilityLabel(Text(verbatim: SessionPresentation.displayTitle(for: session)))
-        .accessibilityHint(Text("session.actions.menu"))
+        .fixedSize()
+        .help(Text("session.actions.menu"))
+        .accessibilityLabel(Text("session.actions.menu"))
         .accessibilityIdentifier("corral.session.actions")
+    }
+
+    private func focusPane() {
+        workspace.focus(session.key)
+        workspace.requestKeyFocus(session.key)
     }
 
     /// Attention dots follow the title text, so the title itself never moves.

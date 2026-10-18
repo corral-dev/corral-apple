@@ -25,10 +25,28 @@ final class MacSessionMenuInspection: NSObject {
             ["title": $0.title, "hasImage": $0.image != nil, "enabled": $0.isEnabled] as [String: Any]
         }
         snapshot["menuFont"] = menu.font.pointSize
+        snapshot["separatorCount"] = menu.items.filter(\.isSeparatorItem).count
         if let data = try? JSONSerialization.data(withJSONObject: snapshot, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: output, options: .atomic)
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { menu.cancelTracking() }
+        let selectedCount = snapshot["selectedCount"] as? Int
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15) {
+            menu.cancelTracking()
+            guard ProcessInfo.processInfo.arguments.contains("-CorralInspectBulkDeleteConfirmation"),
+                  let count = selectedCount,
+                  let index = menu.items.firstIndex(where: {
+                      $0.title == String(localized: "mac.sessions.delete \(count)") && $0.isEnabled
+                  }) else { return }
+            // The production Delete item only presents its native confirmation.
+            // Never invoke the destructive confirmation button or mutate history.
+            DispatchQueue.main.async {
+                menu.performActionForItem(at: index)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                    try? Data("confirmation presented".utf8).write(
+                        to: self.output.appendingPathExtension("confirmation"), options: .atomic)
+                }
+            }
+        }
     }
 }
 #endif
