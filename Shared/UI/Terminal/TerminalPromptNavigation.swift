@@ -13,6 +13,7 @@ struct TerminalPromptTaskKey: Hashable {
     let request: UUID?
     let stream: ObjectIdentifier?
     let presented: Bool
+    let ready: Bool
 }
 
 extension TerminalView {

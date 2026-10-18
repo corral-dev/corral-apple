@@ -8,6 +8,7 @@ import SwiftUI
     var completed = 0
     var fails = false
     var running = false
+    var awaitingSnapshot = false
     func call(_ method: String, params: [String: String]) async throws -> Bool {
         calls += 1
         try await Task.sleep(for: .milliseconds(50))
@@ -25,7 +26,7 @@ import SwiftUI
     var connectedAccess = "full"
 }
 struct SessionSummary { var key = "fixture"; var hosted = false; var live = false }
-struct TerminalPromptTaskKey: Hashable { let request: UUID?; let stream: ObjectIdentifier?; let presented: Bool }
+struct TerminalPromptTaskKey: Hashable { let request: UUID?; let stream: ObjectIdentifier?; let presented: Bool; let ready: Bool }
 struct TerminalPromptRequest { var id = UUID(); var seq = 0; var generation = 0 }
 enum SessionActionsMenu {
     static func isReadonly(access: String) -> Bool { access == "readonly" }
@@ -44,6 +45,7 @@ struct TerminalColorScheme {
     enum Phase: Equatable { case connecting, live, ended, failed(String) }
     static var instances: [RemoteTerminalStream] = []
     var phase = Phase.connecting
+    var reveals: [(Int, Int)] = []
     let client: RemoteClient
     var clientIdentity: ObjectIdentifier? { ObjectIdentifier(client) }
     var isInFront: () -> Bool = { true }
@@ -51,10 +53,13 @@ struct TerminalColorScheme {
         self.client = client
         Self.instances.append(self)
     }
-    func start() { phase = client.running ? .live : .ended }
+    func start() { phase = client.awaitingSnapshot ? .connecting : client.running ? .live : .ended }
     func stop() {}
     func retry() { start() }
-    func navigatePrompt(seq: Int, historyGeneration: Int) async -> String? { nil }
+    func navigatePrompt(seq: Int, historyGeneration: Int) async -> String? {
+        reveals.append((seq, historyGeneration))
+        return nil
+    }
 }
 struct ShellTerminalView: View {
     let stream: RemoteTerminalStream
@@ -66,13 +71,14 @@ struct ShellTerminalView: View {
 @Observable final class Presentation {
     var presented = true
     var phase = ScenePhase.active
+    var prompt: TerminalPromptRequest?
 }
 struct Fixture: View {
     let model: AppModel
     let session: SessionSummary
     let presentation: Presentation
     var body: some View {
-        AgentTerminalPane(session: session, isPresented: presentation.presented)
+        AgentTerminalPane(session: session, isPresented: presentation.presented, promptRequest: presentation.prompt)
             .environment(model)
             .environment(\.scenePhase, presentation.phase)
     }
@@ -146,6 +152,34 @@ struct Fixture: View {
         }
         scenario("start failure", configure: { model, _ in model.client?.fails = true }) { model, _ in
             check(model.client?.calls == 1 && model.client?.completed == 0, "failure does not retry in a loop")
+        }
+        scenario("prompt before stream creation", session: SessionSummary(hosted: true), configure: { model, p in
+            model.client?.running = true
+            model.connectionState = .reconnecting
+            p.prompt = TerminalPromptRequest(seq: 41, generation: 7)
+        }) { model, p in
+            check(RemoteTerminalStream.instances.isEmpty, "pending prompt does not create an offline stream")
+            model.connectionState = .connected; settle()
+            let stream = RemoteTerminalStream.instances.last
+            check(stream?.reveals.count == 1 && stream?.reveals.first?.0 == 41 && stream?.reveals.first?.1 == 7,
+                  "stream creation retries pending sequence and generation")
+            p.presented = false; settle()
+            p.presented = true; settle()
+            check(stream?.reveals.count == 1, "completed prompt does not replay on hide/show")
+            p.prompt = TerminalPromptRequest(seq: 42, generation: 8); settle()
+            check(stream?.reveals.count == 2 && stream?.reveals.last?.0 == 42 && stream?.reveals.last?.1 == 8,
+                  "new selection reaches the retained pane")
+        }
+        scenario("prompt before first live snapshot", session: SessionSummary(hosted: true), configure: { model, p in
+            model.client?.running = true
+            model.client?.awaitingSnapshot = true
+            p.prompt = TerminalPromptRequest(seq: 51, generation: 17)
+        }) { _, _ in
+            let stream = RemoteTerminalStream.instances.last
+            check(stream?.reveals.isEmpty == true, "connecting pane does not consume the pending selection")
+            stream?.phase = .live; settle()
+            check(stream?.reveals.count == 1 && stream?.reveals.first?.0 == 51,
+                  "first live snapshot retries the pending selection")
         }
     }
 }

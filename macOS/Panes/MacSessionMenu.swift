@@ -32,13 +32,12 @@ struct MacSessionMenuItems: View {
         }
         .pickerStyle(.inline)
         .labelsHidden()
-        Divider()
         if promptsCount > 0 || promptsOpen {
             Toggle(isOn: $promptsOpen) {
                 Label("mac.prompts.title \(promptsCount)", systemImage: "list.bullet")
             }
-            Divider()
         }
+        Divider()
         Button {
             Task { await workspace.togglePin(session.key) }
         } label: {
@@ -46,7 +45,6 @@ struct MacSessionMenuItems: View {
                   systemImage: workspace.layout.pinnedSessions[session.key] == nil ? "pin" : "pin.slash")
         }
         .disabled(readonly)
-        Divider()
         Button {
             Task { await workspace.fork(session) }
         } label: {
@@ -90,7 +88,6 @@ struct MacSessionMenuItems: View {
         } label: {
             Label("session.workspace.copy_path", systemImage: "folder")
         }
-        Divider()
         Button(action: onClose) {
             Label("mac.pane.close", systemImage: "xmark")
         }

@@ -5758,9 +5758,21 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pin %lld Sessions"
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Pin %lld Session"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Pin %lld Sessions"
+                }
+              }
+            }
           }
         },
         "zh-Hans": {
@@ -5775,9 +5787,21 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Unpin %lld Sessions"
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Unpin %lld Session"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Unpin %lld Sessions"
+                }
+              }
+            }
           }
         },
         "zh-Hans": {
@@ -5792,9 +5816,21 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Stop %lld Sessions"
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Stop %lld Session"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Stop %lld Sessions"
+                }
+              }
+            }
           }
         },
         "zh-Hans": {
@@ -5809,9 +5845,21 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Delete %lld Sessions…"
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Delete %lld Session…"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Delete %lld Sessions…"
+                }
+              }
+            }
           }
         },
         "zh-Hans": {
@@ -5913,7 +5961,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Completed %1$lld of %2$lld sessions."
+            "value": "Completed %1$lld of %2$lld."
           }
         },
         "zh-Hans": {

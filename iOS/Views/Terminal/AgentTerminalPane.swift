@@ -56,12 +56,12 @@ struct AgentTerminalPane: View {
             if phase != .active { stream?.stop() }
         }
         .task(id: TerminalPromptTaskKey(request: promptRequest?.id, stream: stream.map(ObjectIdentifier.init),
-                                         presented: isPresented)) {
+                                         presented: isPresented, ready: stream?.phase == .live)) {
             guard isPresented, let request = promptRequest, handledPromptRequest != request.id else { return }
             await Task.yield()
             // Owner requirement: prompt jumps never surface anything visible.
             // A miss is a silent no-op by design; the error is intentionally dropped.
-            guard !Task.isCancelled, let stream else { return }
+            guard !Task.isCancelled, let stream, stream.phase == .live else { return }
             _ = await stream.navigatePrompt(seq: request.seq, historyGeneration: request.generation)
             if !Task.isCancelled { handledPromptRequest = request.id }
         }

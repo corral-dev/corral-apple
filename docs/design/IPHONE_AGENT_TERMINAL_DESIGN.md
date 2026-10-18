@@ -2,6 +2,8 @@
 
 Status: agent-terminal mode adopted 2026-10-14 and implemented; physical menu and terminal-input acceptance remains pending. Your prompts navigation is reopened by the owner's 2026-10-18 no-jump report; feature-wide implementation/delivery records do not prove that path works.
 
+The October 18 retained-buffer repair waits for the stream/presentation lifecycle, keeps full sequence/generation identity, silently retires stale lookups after ordinary input, and expands only real retained terminal history. Native snapshots preserve soft wraps and other readers during broadcast resync. iPhone startup/lifecycle checks, including a pre-stream prompt and no replay after hide/show, pass; the former request-only SwiftUI task fails that regression. A physical sheet-selection-to-target check is still pending. The shared repair evidence (host CLI embedded-terminal knowledge base) records the unresolved overwritten-alternate-screen limit.
+
 ## Product behavior
 
 The owner approved restoring chat/terminal switching inside an iPhone agent session. This supersedes the 2026-09-10 hidden agent-terminal decision. The project shell remains a separate feature.

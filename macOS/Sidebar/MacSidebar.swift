@@ -114,6 +114,40 @@ struct MacSidebar: View {
                 projectFilter.removeAll()
                 sectionExpansion.removeAll()
                 filteredSectionExpansion.removeAll()
+                selectedKeys.removeAll()
+                deleteTargets.removeAll()
+            }
+            .onChange(of: workspace.focusedKey, initial: true) { _, key in
+                guard selectedKeys.count <= 1 else { return }
+                selectedKeys = key.map { visibleKeys.contains($0) ? [$0] : [] } ?? []
+            }
+            .onChange(of: visibleKeys) { previous, visible in
+                selectedKeys.formIntersection(visible)
+                if selectedKeys.isEmpty, let key = workspace.focusedKey,
+                   !previous.contains(key), visible.contains(key) { selectedKeys = [key] }
+            }
+            .confirmationDialog(
+                deleteTitle,
+                isPresented: Binding(get: { !deleteTargets.isEmpty }, set: { if !$0 { deleteTargets = [] } }),
+                titleVisibility: .visible,
+                presenting: deleteTargets
+            ) { targets in
+                Button(role: .destructive) {
+                    deleteTargets = []
+                    perform(.delete, on: targets)
+                } label: {
+                    Label("sessions.action.delete", systemImage: "trash")
+                }
+                Button("action.cancel", role: .cancel) { deleteTargets = [] }
+            } message: { targets in
+                Text(verbatim: deleteMessage(targets))
+            }
+            .alert("mac.sessions.action_failed", isPresented: Binding(
+                get: { batchError != nil }, set: { if !$0 { batchError = nil } }
+            )) {
+                Button("action.ok", role: .cancel) { batchError = nil }
+            } message: {
+                Text(verbatim: batchError ?? "")
             }
             .safeAreaBar(edge: .top, spacing: 0) {
                 MacSidebarFilters(
@@ -127,9 +161,38 @@ struct MacSidebar: View {
                     .interfacePadding(.vertical, 6)
             }
             .safeAreaBar(edge: .bottom, spacing: 0) {
-                HStack(spacing: Space.sm * interfaceScale) {
-                    MachineSwitcher(onPair: onPair)
-                    Spacer(minLength: 0)
+                VStack(spacing: Space.sm * interfaceScale) {
+                    if selectedKeys.count > 1 || batch.isRunning {
+                        HStack(spacing: Space.sm * interfaceScale) {
+                            if batch.isRunning {
+                                ProgressView().controlSize(.small)
+                                Text("mac.sessions.progress \(batch.completed) \(batch.total)")
+                            } else {
+                                Text("mac.sessions.selected \(selectedKeys.count)")
+                            }
+                            Spacer(minLength: 0)
+                            Menu {
+                                sessionMenu(selectedSessions)
+                            } label: {
+                                Label("mac.sessions.actions", systemImage: "ellipsis.circle")
+                            }
+                            .fixedSize()
+                            .accessibilityIdentifier("corral.session.selection-actions")
+                            .disabled(batch.isRunning)
+                            Button { selectedKeys.removeAll() } label: {
+                                Label("mac.sessions.clear_selection", systemImage: "xmark")
+                            }
+                            .labelStyle(.iconOnly)
+                            .buttonStyle(.borderless)
+                            .help(Text("mac.sessions.clear_selection"))
+                        }
+                        .interfaceFont(.system(size: 12))
+                        Divider()
+                    }
+                    HStack(spacing: Space.sm * interfaceScale) {
+                        MachineSwitcher(onPair: onPair)
+                        Spacer(minLength: 0)
+                    }
                 }
                 .modifier(MacZoomContent())
                 .interfacePadding(.horizontal, Space.md)
@@ -317,9 +380,17 @@ struct MacSidebar: View {
                         Label("mac.session.open_in_split", systemImage: "rectangle.split.2x1")
                     }
                     .disabled(workspace.paneKeys.isEmpty || !workspace.canAddSessionToSplit(session))
-                    Divider()
                 }
-
+                Button {
+                    var seen: Set<String> = []
+                    let paths = targets.map(SessionPresentation.fullWorkspacePath)
+                        .filter { !$0.isEmpty && seen.insert($0).inserted }
+                    PlatformPasteboard.copy(paths.joined(separator: "\n"))
+                } label: {
+                    Label(targets.count == 1 ? "session.workspace.copy_path" : "mac.sessions.copy_paths",
+                          systemImage: "doc.on.clipboard")
+                }
+                Divider()
                 let pinned = targets.filter { workspace.layout.pinnedSessions[$0.key] != nil }
                 let unpinned = targets.filter { workspace.layout.pinnedSessions[$0.key] == nil }
                 if !unpinned.isEmpty {
@@ -353,18 +424,8 @@ struct MacSidebar: View {
                     .disabled(!canCreate || batch.isRunning)
                 }
                 Divider()
-                Button {
-                    var seen: Set<String> = []
-                    let paths = targets.map(SessionPresentation.fullWorkspacePath)
-                        .filter { !$0.isEmpty && seen.insert($0).inserted }
-                    PlatformPasteboard.copy(paths.joined(separator: "\n"))
-                } label: {
-                    Label(targets.count == 1 ? "session.workspace.copy_path" : "mac.sessions.copy_paths",
-                          systemImage: "doc.on.clipboard")
-                }
                 let live = targets.filter(\.live)
                 if !live.isEmpty {
-                    Divider()
                     Button { perform(.stop, on: live) } label: {
                         if targets.count == 1 {
                             Label("sessions.action.stop", systemImage: "stop.fill")
@@ -374,7 +435,6 @@ struct MacSidebar: View {
                     }
                     .disabled(!canCreate || batch.isRunning)
                 }
-                Divider()
                 Button(role: .destructive) { deleteTargets = targets } label: {
                     if targets.count == 1 {
                         Label("sessions.action.delete", systemImage: "trash")
@@ -491,8 +551,8 @@ struct MacSidebar: View {
     }
 
     #if DEBUG
-    /// Public native selection/menu APIs only. Events are queried for their
-    /// menu, never posted; this neither moves the pointer nor simulates clicks.
+    /// Public native selection and the production menu's target/action only.
+    /// No input event is synthesized or posted; host data is untouched.
     private func inspectSessionMultiSelection() async {
         for _ in 0..<80 where visibleKeys.count < 3 { try? await Task.sleep(for: .milliseconds(250)) }
         func descendants(_ view: NSView) -> [NSView] {
@@ -535,36 +595,68 @@ struct MacSidebar: View {
         checks["conversationAndPanesPreserved"] = workspace.paneKeys == panes && workspace.focusedKey == focus
         let oldFilter = filter
         filter = "corral-no-matching-session-multiselection-probe"
-        try? await Task.sleep(for: .milliseconds(400))
+        for _ in 0..<40 {
+            if sidebarSections.isEmpty && selectedKeys.isEmpty { break }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        checks["filterActuallyChanged"] = sidebarSections.isEmpty
         checks["filterPrunesHiddenTargets"] = selectedKeys.isEmpty
         filter = oldFilter
         try? await Task.sleep(for: .milliseconds(400))
-        selectedKeys = Set(rows.prefix(3).map(\.key))
-        try? await Task.sleep(for: .milliseconds(400))
-        let point = outline.convert(NSPoint(x: 80, y: outline.rect(ofRow: rows[1].row).midY), to: nil)
+        var menuRows = Array(rows.prefix(2))
+        if let unpinned = rows.first(where: { workspace.layout.pinnedSessions[$0.key] == nil }) {
+            menuRows.append(unpinned)
+        } else {
+            menuRows.append(rows[2])
+        }
+        selectedKeys = Set(menuRows.map(\.key))
+        for _ in 0..<40 {
+            let current = descendants(root).compactMap { $0 as? NSOutlineView }.first
+            if current?.selectedRowIndexes.count == 3 { break }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        try? await Task.sleep(for: .seconds(1))
+        let currentOutline = descendants(root).compactMap { $0 as? NSOutlineView }.first ?? outline
+        let output = ProcessInfo.processInfo.environment["CORRAL_INSPECTION_MULTISELECT_OUTPUT"]
+            ?? "/tmp/corral-multiselect.json"
+        let buttons = descendants(root).compactMap { $0 as? NSButton }
+        let button = buttons.first { $0.accessibilityIdentifier() == "corral.session.selection-actions" }
+            ?? buttons.first { $0.title == String(localized: "mac.sessions.actions") }
+            ?? buttons.first { $0.accessibilityLabel() == String(localized: "mac.sessions.actions") }
+            ?? buttons.first {
+                $0 is NSPopUpButton && $0.convert($0.bounds, to: nil).maxY < 100
+            }
+        let point = currentOutline.convert(NSPoint(x: 80, y: currentOutline.rect(ofRow: menuRows[1].row).midY), to: nil)
         let event = NSEvent.mouseEvent(with: .rightMouseDown, location: point, modifierFlags: [],
                                       timestamp: ProcessInfo.processInfo.systemUptime,
                                       windowNumber: window.windowNumber, context: nil,
                                       eventNumber: 0, clickCount: 1, pressure: 0)
-        let menu = event.flatMap { outline.menu(for: $0) }
-        let menuItems = menu?.items.filter { !$0.isSeparatorItem }.map {
-            ["title": $0.title, "hasImage": $0.image != nil, "enabled": $0.isEnabled] as [String: Any]
-        } ?? []
-        checks["selectionMenuAvailable"] = !menuItems.isEmpty
-        let evidence: [String: Any] = ["checks": checks, "menuItems": menuItems,
-                                      "selectedCount": selectedKeys.count,
-                                      "nativeSelectedCount": outline.selectedRowIndexes.count,
-                                      "physicalInput": "not exercised; public selection APIs and non-posted menu query"]
-        let output = ProcessInfo.processInfo.environment["CORRAL_INSPECTION_MULTISELECT_OUTPUT"]
-            ?? "/tmp/corral-multiselect.json"
+        let contextMenu = event.flatMap { currentOutline.menu(for: $0) }
+        let evidence: [String: Any] = ["checks": checks, "selectedCount": selectedKeys.count,
+                                      "nativeSelectedCount": currentOutline.selectedRowIndexes.count,
+                                      "nativeTables": descendants(root).compactMap { $0 as? NSTableView }.map { $0.numberOfRows },
+                                      "filter": filter, "visibleCount": visibleKeys.count,
+                                      "menuButtonFound": button != nil,
+                                      "contextMenuAvailable": contextMenu != nil,
+                                      "buttons": buttons.map {
+                                          ["title": $0.title, "id": $0.accessibilityIdentifier(),
+                                           "label": $0.accessibilityLabel() ?? "",
+                                           "class": String(describing: type(of: $0)),
+                                           "frame": NSStringFromRect($0.convert($0.bounds, to: nil))]
+                                      },
+                                      "physicalInput": "not exercised; public selection APIs and production menu target/action"]
+        let recorder = MacSessionMenuInspection(output: URL(fileURLWithPath: output)) { evidence }
+        defer { recorder.stop() }
         if let data = try? JSONSerialization.data(withJSONObject: evidence, options: [.prettyPrinted, .sortedKeys]) {
-            try? data.write(to: URL(fileURLWithPath: output), options: .atomic)
+            try? data.write(to: URL(fileURLWithPath: output + ".selection"), options: .atomic)
         }
-        // A bounded hold lets the window helper capture the real menu surface.
-        // No action is invoked and no host metadata or history is mutated.
-        if let menu {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 15) { menu.cancelTracking() }
-            menu.popUp(positioning: nil, at: NSPoint(x: 150, y: outline.rect(ofRow: rows[1].row).midY), in: outline)
+        if let contextMenu {
+            contextMenu.popUp(positioning: nil, at: NSPoint(x: 120, y: currentOutline.rect(ofRow: menuRows[1].row).midY),
+                              in: currentOutline)
+        } else if let button, let action = button.action {
+            NSApp.sendAction(action, to: button.target, from: button)
+        } else if let data = try? JSONSerialization.data(withJSONObject: evidence, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: URL(fileURLWithPath: output), options: .atomic)
         }
         try? await Task.sleep(for: .seconds(15))
         selectedKeys = original.intersection(visibleKeys)

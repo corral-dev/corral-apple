@@ -176,7 +176,7 @@ struct MacCommands: Commands {
             }
                 .labelStyle(.titleAndIcon)
                 .keyboardShortcut("p", modifiers: [.command, .option])
-                .disabled(!center.hasFocusedPane)
+                .disabled(!center.hasFocusedPane || !center.canCreateSession)
             Divider()
             ForEach(0..<4, id: \.self) { index in
                 Button("mac.pane.focus \(index + 1)") {

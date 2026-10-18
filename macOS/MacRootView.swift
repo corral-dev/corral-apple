@@ -98,6 +98,7 @@ struct MacRootView: View {
             let arguments = ProcessInfo.processInfo.arguments
             if arguments.contains("-CorralInspectSettings") { openSettings() }
             if arguments.contains("-CorralInspectPairing") { showPairing = true }
+            Task { await MacTitleMenuInspection.run() }
             // Isolated capture hosts (scripts/readme-captures) pair without the pointer.
             if let raw = ProcessInfo.processInfo.environment["CORRAL_INSPECTION_PAIR_URL"], let url = URL(string: raw) {
                 await pair(url: url, deviceName: "Corral README Capture")
@@ -128,11 +129,12 @@ struct MacRootView: View {
                 .modifier(MacZoomContent())
                 .interfaceFrame(maxWidth: .infinity, maxHeight: .infinity)
             .navigationSplitViewColumnWidth(min: CGFloat(paneCount) * MacSplitArea.paneMinimum, ideal: 760)
+            // The window title names the session for the Window menu and
+            // Mission Control. The bar shows the session through its title
+            // menu instead: on macOS the native title is plain text and
+            // `toolbarTitleMenu` attaches nothing to it (inspected 2026-10-18).
             .navigationTitle(windowTitle)
-            .navigationSubtitle(toolbarSession.map(Self.subtitle(for:)) ?? "")
-            // Splits title each pane in its own header; never repeat one here.
-            .toolbar(removing: toolbarSession == nil ? .title : nil)
-            .toolbarTitleMenu { titleMenu }
+            .toolbar(removing: .title)
             .toolbar { detailToolbar }
         }
         .navigationSplitViewStyle(.balanced)
@@ -277,11 +279,14 @@ struct MacRootView: View {
 
     @ToolbarContentBuilder
     private var detailToolbar: some ToolbarContent {
-        // Without a title (split or empty) the bar would start its items at
-        // the leading edge.
-        if toolbarSession == nil {
-            ToolbarSpacer(.flexible, placement: .primaryAction)
+        if let session = toolbarSession {
+            ToolbarItem(placement: .navigation) {
+                titleMenu(for: session)
+            }
+            .sharedBackgroundVisibility(.hidden)
         }
+        // Without a title the bar would start its items at the leading edge.
+        ToolbarSpacer(.flexible, placement: .primaryAction)
         ToolbarItemGroup(placement: .primaryAction) {
             Menu {
                 ForEach(runtimeChoices, id: \.id) { runtime in
@@ -312,11 +317,10 @@ struct MacRootView: View {
         }
     }
 
-    /// Clicking the lone pane's window title opens its session menu, the
-    /// same menu a split pane's title opens.
-    @ViewBuilder
-    private var titleMenu: some View {
-        if let session = toolbarSession {
+    /// The lone pane's title, subtitle and chevron as one native menu button
+    /// opening its session menu: the same menu a split pane's title opens.
+    private func titleMenu(for session: SessionSummary) -> some View {
+        Menu {
             MacSessionMenuItems(
                 session: session,
                 runtimes: workspace.runtimes,
@@ -325,7 +329,34 @@ struct MacRootView: View {
                 mode: modeBinding(for: session.key),
                 onClose: { workspace.requestClose(session.key) }
             )
+        } label: {
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 5) {
+                    Text(verbatim: SessionPresentation.displayTitle(for: session))
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color.primary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(Color.secondary)
+                        .accessibilityHidden(true)
+                }
+                Text(verbatim: Self.subtitle(for: session))
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.secondary)
+                    .lineLimit(1)
+            }
+            .contentShape(Rectangle())
         }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        // The bar's own inset is 4 pt; a split pane's title starts 12 pt in.
+        .padding(.leading, 8)
+        .help(Text(verbatim: SessionPresentation.fullWorkspacePath(from: session)))
+        .accessibilityLabel(Text(verbatim: "\(SessionPresentation.displayTitle(for: session)), \(Self.subtitle(for: session))"))
+        .accessibilityHint(Text("session.actions.menu"))
     }
 
     private func modeBinding(for key: String) -> Binding<MacWorkspace.PaneMode> {
