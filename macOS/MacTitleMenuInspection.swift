@@ -1,14 +1,16 @@
 #if DEBUG
 import AppKit
 import Foundation
+import SwiftUI
 
 /// Debug-only window top bar acceptance (`-CorralInspectTitleMenu`, usually
 /// with `-CorralInspectConversation`): after the window settles, records the
-/// title bar's views (class, frame, title, menu) and renders the title bar
-/// through `NSView.cacheDisplay`; never a pointer event.
+/// title bar's views (class, frame, title, menu) and whether the focused
+/// pane's session menu items keep template symbols under the app tint
+/// (built through `NSHostingMenu`); never a pointer event.
 @MainActor
 enum MacTitleMenuInspection {
-    static func run() async {
+    static func run(appModel: AppModel, workspace: MacWorkspace, session: @escaping () -> SessionSummary?) async {
         guard ProcessInfo.processInfo.arguments.contains("-CorralInspectTitleMenu") else { return }
         try? await Task.sleep(for: .seconds(8))
         guard let window = NSApp.windows.first(where: { $0.isVisible && $0.toolbar != nil }),
@@ -20,9 +22,27 @@ enum MacTitleMenuInspection {
             "subtitle": window.subtitle,
             "toolbarItems": window.toolbar?.items.map { "\($0.itemIdentifier.rawValue) \(type(of: $0)) \($0.label)" } ?? [],
             "views": views,
+            "sessionMenu": sessionMenuImages(appModel: appModel, workspace: workspace, session: session()),
         ]
         if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: URL(fileURLWithPath: "/tmp/corral-title-menu.json"), options: .atomic)
+        }
+    }
+
+    /// The production session menu under the app's brand tint, converted by
+    /// AppKit; template images invert with a highlighted row's text.
+    private static func sessionMenuImages(appModel: AppModel, workspace: MacWorkspace,
+                                          session: SessionSummary?) -> [String] {
+        guard let session else { return ["no session"] }
+        let menu = NSHostingMenu(rootView: MacSessionMenuItems(
+            session: session, runtimes: workspace.runtimes,
+            mode: .constant(workspace.mode(for: session.key)), onClose: {})
+            .environment(appModel)
+            .environment(workspace)
+            .tint(Palette.accent))
+        menu.update()
+        return menu.items.filter { !$0.isSeparatorItem }.map {
+            "\($0.title) image=\($0.image != nil) template=\($0.image?.isTemplate ?? false)"
         }
     }
 

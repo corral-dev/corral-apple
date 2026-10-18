@@ -445,6 +445,8 @@ struct MacSidebar: View {
                 .disabled(!canCreate || batch.isRunning)
             }
             .labelStyle(.titleAndIcon)
+            // Template symbols that invert with the highlighted row's text.
+            .tint(nil)
         }
     }
 

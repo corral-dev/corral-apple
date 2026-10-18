@@ -299,8 +299,8 @@ struct MacPaneView: View {
 }
 
 /// Pane header, single pane or split: the title toggles the session's Your
-/// prompts card, then its attention dots; the session menu opens from the
-/// kebab beside Close. Focus is the header's surface, never a ring or a tint
+/// prompts card, then its attention dots; the kebab (session menu) and Close
+/// show while the pointer is over the header. Focus is the header's surface, never a ring or a tint
 /// on the reading area (design: Window top bar, owner correction 2026-10-18).
 struct MacPaneHeader: View {
     @Environment(\.interfaceScale) private var interfaceScale
@@ -315,6 +315,7 @@ struct MacPaneHeader: View {
     @Binding var promptsOpen: Bool
 
     @State private var runtimes: [RuntimeEntry] = []
+    @State private var hovering = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -324,19 +325,27 @@ struct MacPaneHeader: View {
                 .layoutPriority(1)
             statusDotsView
             Spacer(minLength: Space.sm)
-            sessionMenu
-            if allowsClose {
-                closeButton
-                    .interfacePadding(.leading, Space.xs)
+            // Hover-only (owner correction 2026-10-18); the slots keep their
+            // width so the title never reflows when they appear.
+            HStack(spacing: 0) {
+                sessionMenu
+                if allowsClose {
+                    closeButton
+                        .interfacePadding(.leading, Space.xs)
+                }
             }
+            .opacity(hovering ? 1 : 0)
+            .allowsHitTesting(hovering)
         }
         .interfacePadding(.horizontal, Space.md)
         .interfaceFrame(minHeight: 40)
         .background(headerSurface)
         .animation(MacMotion.state, value: isFocused)
+        .animation(MacMotion.state, value: hovering)
         .animation(MacMotion.state, value: SessionPresentation.activityMarker(for: session))
         .animation(MacMotion.state, value: SessionPresentation.hasUnread(for: session))
         .contentShape(Rectangle())
+        .onHover { hovering = $0 }
         .onTapGesture { focusPane() }
         .accessibilityAddTraits(isFocused ? .isSelected : [])
         .task { await loadRuntimes() }

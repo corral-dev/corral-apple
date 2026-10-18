@@ -10,8 +10,11 @@ struct MacSessionMenuItems: View {
     @Binding var mode: MacWorkspace.PaneMode
     let onClose: () -> Void
 
+    /// `.tint(nil)` keeps the symbols template images: an inherited tint is
+    /// baked into them, so a highlighted row's icon vanished into the
+    /// same-colour highlight while its text inverted (owner report 0.3.127).
     var body: some View {
-        items.labelStyle(.titleAndIcon)
+        items.labelStyle(.titleAndIcon).tint(nil)
     }
 
     /// A read-only pairing still switches views and copies the path; session

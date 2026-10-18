@@ -97,7 +97,11 @@ struct MacRootView: View {
             let arguments = ProcessInfo.processInfo.arguments
             if arguments.contains("-CorralInspectSettings") { openSettings() }
             if arguments.contains("-CorralInspectPairing") { showPairing = true }
-            Task { await MacTitleMenuInspection.run() }
+            Task {
+                await MacTitleMenuInspection.run(appModel: appModel, workspace: workspace) {
+                    workspace.focusedKey.flatMap { feed?.listStore.session(for: $0) }
+                }
+            }
             // Isolated capture hosts (scripts/readme-captures) pair without the pointer.
             if let raw = ProcessInfo.processInfo.environment["CORRAL_INSPECTION_PAIR_URL"], let url = URL(string: raw) {
                 await pair(url: url, deviceName: "Corral README Capture")
