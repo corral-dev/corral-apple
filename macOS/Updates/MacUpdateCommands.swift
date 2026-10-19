@@ -26,8 +26,6 @@ struct MacUpdateSettings: View {
                 set: { updater.setAutomaticDownloads($0) }
             ))
             .disabled(!updater.allowsAutomaticUpdates)
-            Button("mac.updates.check") { updater.checkForUpdates() }
-                .disabled(!updater.canCheckForUpdates)
         }
     }
 }

@@ -78,11 +78,11 @@ struct MacPaneView: View {
             MacPromptsCard(
                 prompts: prompts,
                 isOpen: promptsOpenBinding,
-                width: min(MacPromptsCard.width * interfaceScale, bodySize.width - Space.md * 2 * interfaceScale),
+                width: promptsCardWidth,
                 overContent: !cardFitsBeside,
                 onTerminal: mode == .terminal,
-                // Over content the card covers at most about half the pane.
-                maxListHeight: max(120, bodySize.height * (cardFitsBeside ? 0.7 : 0.45) - 56),
+                // Over content the whole card covers about a third of the pane.
+                maxListHeight: max(120, bodySize.height * (cardFitsBeside ? 0.7 : MacPromptsCard.overContentHeightFraction) - 56),
                 onSelect: { prompt in
                     if mode == .terminal {
                         terminalPromptRequest = TerminalPromptRequest(seq: prompt.seq, generation: store?.promptHistoryGeneration ?? 0)
@@ -94,6 +94,17 @@ struct MacPaneView: View {
             .interfacePadding(.top, Space.md)
             .interfacePadding(.trailing, Space.md)
         }
+    }
+
+    /// Beside the conversation the card has its full width; over content it
+    /// leaves a strip of the narrow pane visible (design: Prompts card rule 3).
+    private var promptsCardWidth: CGFloat {
+        let full = MacPromptsCard.width * interfaceScale
+        let fitting = bodySize.width - Space.md * 2 * interfaceScale
+        guard !cardFitsBeside else { return min(full, fitting) }
+        let partial = max(MacPromptsCard.overContentMinimumWidth * interfaceScale,
+                          bodySize.width * MacPromptsCard.overContentWidthFraction)
+        return min(full, partial, fitting)
     }
 
     /// Counted once the pane is measured, so the toggle never offers a card

@@ -16,6 +16,11 @@ struct MacPromptsCard: View {
     var onSelect: (RichMessage) -> Void = { _ in }
 
     static let width: CGFloat = 300
+    /// Over content the card leaves part of the narrow pane visible.
+    static let overContentWidthFraction: CGFloat = 0.6
+    static let overContentMinimumWidth: CGFloat = 220
+    /// Over content the whole card stays within about a third of the pane.
+    static let overContentHeightFraction: CGFloat = 1.0 / 3
     /// Trailing space the conversation gives up when the card sits beside it.
     static let reserve: CGFloat = width + Space.md * 2
     /// Narrowest reading column the conversation keeps beside the card.
@@ -109,21 +114,15 @@ struct MacPromptsCard: View {
             currentID = prompt.id
             onSelect(prompt)
         } label: {
-            VStack(alignment: .leading, spacing: 2 * interfaceScale) {
-                if let stamp = Self.timeLabel(prompt) {
-                    Text(verbatim: stamp)
-                        .interfaceFont(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
+            Group {
+                if overContent {
+                    compactRowContent(prompt)
+                } else {
+                    rowContent(prompt)
                 }
-                Text(verbatim: Self.oneLine(prompt))
-                    .interfaceFont(.body)
-                    .foregroundStyle(.primary)
-                    .lineLimit(4)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .multilineTextAlignment(.leading)
             }
             .interfacePadding(.horizontal, Space.sm + 2)
-            .interfacePadding(.vertical, 7)
+            .interfacePadding(.vertical, overContent ? 5 : 7)
             .interfaceFrame(maxWidth: .infinity, alignment: .leading)
             .background(rowFill(prompt.id), in: rowShape)
             .contentShape(rowShape)
@@ -133,7 +132,45 @@ struct MacPromptsCard: View {
         .onHover { inside in
             if inside { hoveredID = prompt.id } else if hoveredID == prompt.id { hoveredID = nil }
         }
-        .help(Text("mac.prompts.jump"))
+        // Compact rows cut long prompts at two lines; hovering shows the rest.
+        .help(overContent ? Text(verbatim: Self.hoverText(prompt)) : Text("mac.prompts.jump"))
+    }
+
+    private func rowContent(_ prompt: RichMessage) -> some View {
+        VStack(alignment: .leading, spacing: 2 * interfaceScale) {
+            if let stamp = Self.timeLabel(prompt) {
+                stampText(stamp)
+            }
+            promptText(prompt, lineLimit: 4)
+        }
+    }
+
+    /// Over content the card is small, so the time moves beside the text
+    /// and the text keeps two lines (design: Prompts card rule 4).
+    private func compactRowContent(_ prompt: RichMessage) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: Space.sm * interfaceScale) {
+            promptText(prompt, lineLimit: 2)
+            Spacer(minLength: 0)
+            if let stamp = Self.timeLabel(prompt) {
+                stampText(stamp)
+                    .fixedSize()
+            }
+        }
+    }
+
+    private func stampText(_ stamp: String) -> some View {
+        Text(verbatim: stamp)
+            .interfaceFont(.caption.monospacedDigit())
+            .foregroundStyle(.secondary)
+    }
+
+    private func promptText(_ prompt: RichMessage, lineLimit: Int) -> some View {
+        Text(verbatim: Self.oneLine(prompt))
+            .interfaceFont(.body)
+            .foregroundStyle(.primary)
+            .lineLimit(lineLimit)
+            .fixedSize(horizontal: false, vertical: true)
+            .multilineTextAlignment(.leading)
     }
 
     /// Concentric with the card: card radius minus the row inset.
@@ -153,6 +190,12 @@ struct MacPromptsCard: View {
 
     private static func oneLine(_ prompt: RichMessage) -> String {
         (prompt.text ?? "").split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+
+    /// Bounded so a very long prompt does not open a screen-sized tooltip.
+    private static func hoverText(_ prompt: RichMessage) -> String {
+        let text = oneLine(prompt)
+        return text.count > 800 ? String(text.prefix(800)) + "…" : text
     }
 
     /// `HH:mm` today, `MM-dd HH:mm` earlier; nothing when the history has no time.
