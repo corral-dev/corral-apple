@@ -85,6 +85,23 @@ final class SessionListStoreTests: XCTestCase {
         XCTAssertEqual(SessionListCache.load(hostID: "delete-host")?.sessions.map(\.key), [kept.key])
     }
 
+    /// Full-text results outside the list window stay openable without joining
+    /// the list; deletion is reported so results cannot resurrect a row.
+    func testRetainedSearchResultOpensWithoutListMembership() throws {
+        let store = SessionListStore()
+        let listed = try session(key: "claude:listed", title: "Listed")
+        let old = try session(key: "codex:old-history", title: "Old history")
+        store.updateSessions([listed])
+        store.rememberOpened(old)
+        store.applySessionEvent(old)
+        XCTAssertEqual(store.session(for: old.key)?.title, "Old history")
+        XCTAssertEqual(store.windowSessions.map(\.key), [listed.key])
+        XCTAssertFalse(store.isDeleted(old.key))
+        store.removeSession(key: old.key)
+        XCTAssertTrue(store.isDeleted(old.key))
+        XCTAssertNil(store.session(for: old.key))
+    }
+
     func testConfirmedDeleteFollowsLateIdentityMigrationAndExistingAliases() throws {
         let store = SessionListStore()
         let provisional = try session(key: "claude:provisional", title: "Provisional")

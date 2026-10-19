@@ -1,13 +1,16 @@
 import Foundation
 import Observation
 
-/// Owns one search panel's requests, including failures and loading cleanup.
+/// Owns one full-text search surface's requests (Mac ⌘F panel, iPhone list
+/// search), including failures and loading cleanup.
 @MainActor
 @Observable
-final class MacFulltextSearchStore {
+final class FulltextSearchStore {
     private(set) var result: FulltextSearchResponse?
     private(set) var isSearching = false
     private(set) var errorMessage: String?
+    /// The host predates `search.fulltext`; callers keep their older search.
+    private(set) var isUnsupported = false
     @ObservationIgnored private var generation = UUID()
     @ObservationIgnored private weak var resultClient: RemoteClient?
     @ObservationIgnored private var resultQuery = ""
@@ -22,11 +25,12 @@ final class MacFulltextSearchStore {
             return
         }
         result = nil
-        isSearching = !trimmed.isEmpty
+        isSearching = !trimmed.isEmpty && !(isUnsupported && resultClient === client)
     }
 
     func invalidate() {
         generation = UUID()
+        isUnsupported = false
         result = nil
         errorMessage = nil
         isSearching = false
@@ -40,6 +44,7 @@ final class MacFulltextSearchStore {
         prepare(text, client: client)
         let mine = generation
         guard !trimmed.isEmpty, !Task.isCancelled else { return }
+        if isUnsupported, resultClient === client { return }
         guard let client else {
             errorMessage = String(localized: String.LocalizationValue("error.not_connected"))
             isSearching = false
@@ -61,6 +66,12 @@ final class MacFulltextSearchStore {
                 return
             } catch {
                 guard generation == mine, !Task.isCancelled, isCurrentClient(client) else { return }
+                if let remote = error as? RemoteCallError, remote.code == WireProtocol.eUsage {
+                    // Hosts before CLI 0.24.255 answer unknown methods with usage_error.
+                    isUnsupported = true
+                    resultClient = client
+                    return
+                }
                 if attempt == 2 {
                     errorMessage = SessionActionsMenu.failureMessage(for: error)
                     return

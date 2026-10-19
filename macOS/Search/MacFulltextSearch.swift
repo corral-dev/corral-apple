@@ -11,7 +11,7 @@ struct MacFulltextSearch: View {
 
     @State private var query = ""
     @State private var retrySerial = 0
-    @State private var searchStore = MacFulltextSearchStore()
+    @State private var searchStore = FulltextSearchStore()
     /// Highlighted hit: first by default, moved by ↑/↓ in the field, opened
     /// by Return. A click selects and opens a hit directly.
     @State private var selection: String?
@@ -111,7 +111,7 @@ struct MacFulltextSearch: View {
     private var results: some View {
         if let errorMessage = searchStore.errorMessage {
             ContentUnavailableView {
-                Label("mac.search.failed", systemImage: "exclamationmark.triangle")
+                Label("search.failed", systemImage: "exclamationmark.triangle")
             } description: {
                 Text(verbatim: errorMessage)
             } actions: {
@@ -134,7 +134,7 @@ struct MacFulltextSearch: View {
                             .tag(match.key).id(match.key)
                     }
                     if result.total > result.matches.count {
-                        Text("mac.search.more \(result.total - result.matches.count)")
+                        Text("search.more \(result.total - result.matches.count)")
                             .interfaceFont(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -225,7 +225,7 @@ struct MacFulltextSearch: View {
                 }
             }
             if match.totalHits > 0 {
-                Text("mac.search.hits \(match.totalHits)")
+                Text("search.hits \(match.totalHits)")
                     .fixedSize()
             }
         }
@@ -258,30 +258,8 @@ struct MacFulltextSearch: View {
         }
     }
 
-    /// Server spans count Unicode scalars (Python string offsets). A first hit
-    /// beyond the visible start reopens the line shortly before it.
     private func highlighted(_ line: FulltextLine) -> Text {
-        let spans = line.spans.filter { $0.count == 2 && $0[0] >= 0 && $0[0] < $0[1] }
-        var scalars = Array(line.text.unicodeScalars)
-        var shift = 0
-        if let first = spans.first?[0], first > SearchMetrics.maxLeadScalars {
-            let start = first - SearchMetrics.windowLead
-            scalars = Array("…".unicodeScalars) + scalars[start...]
-            shift = 1 - start
-        }
-        var text = String.UnicodeScalarView()
-        text.append(contentsOf: scalars)
-        var attributed = AttributedString(String(text))
-        let view = attributed.unicodeScalars
-        for span in spans {
-            let start = span[0] + shift, end = span[1] + shift
-            guard start >= 0, end <= scalars.count else { continue }
-            let lower = view.index(view.startIndex, offsetBy: start)
-            let upper = view.index(view.startIndex, offsetBy: end)
-            attributed[lower..<upper].foregroundColor = Palette.accent
-            attributed[lower..<upper].inlinePresentationIntent = .stronglyEmphasized
-        }
-        return Text(attributed)
+        FulltextHighlight.text(line, maxLeadScalars: SearchMetrics.maxLeadScalars, lead: SearchMetrics.windowLead)
     }
 
     private func editQuery(_ text: String) {

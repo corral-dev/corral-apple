@@ -226,6 +226,11 @@ final class SessionListStore {
         return found
     }
 
+    /// Deleted on this client; search results must not resurrect it.
+    func isDeleted(_ key: String) -> Bool {
+        deletedKeys.contains(key) || deletedKeys.contains(resolvedKey(key))
+    }
+
     func rememberOpened(_ session: SessionSummary) {
         openedKeys.insert(session.key)
         openedKeys.insert(resolvedKey(session.key))

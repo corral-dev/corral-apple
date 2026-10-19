@@ -131,6 +131,12 @@ nonisolated struct FulltextLine: Decodable, Sendable, Hashable {
 
     enum CodingKeys: String, CodingKey { case role, text, spans }
 
+    init(role: String, text: String, spans: [[Int]]) {
+        self.role = role
+        self.text = text
+        self.spans = spans
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         role = container.decodeFlexibleString(forKey: .role)

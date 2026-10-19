@@ -35,12 +35,12 @@ final class RemoteClient {
     }
 }
 
-struct RemoteCallError: Error { let message: String }
+struct RemoteCallError: Error { let message: String; var code = "" }
 
 struct RemoteEvent: @unchecked Sendable { let data: [String: Any] }
 enum WireProtocol {
     static let mShellList = "shell.list", mShellOpen = "shell.open", mShellClose = "shell.close"
-    static let mSearchFulltext = "search.fulltext", chLayout = "layout"
+    static let mSearchFulltext = "search.fulltext", chLayout = "layout", eUsage = "usage_error"
     static let mLayoutRemoveSession = "layout.removeSession", mLayoutSetFocus = "layout.setFocus"
     static let mLayoutSetGroup = "layout.setGroup", mLayoutWatch = "layout.watch", mLayoutUnwatch = "layout.unwatch"
     static let mLayoutRenameGroup = "layout.renameGroup"
@@ -127,7 +127,7 @@ struct LifecycleProbe {
         ])
     }
     @MainActor static func searchRegressions() async throws {
-        let client = RemoteClient(), store = MacFulltextSearchStore(), old = Gate(), fresh = Gate()
+        let client = RemoteClient(), store = FulltextSearchStore(), old = Gate(), fresh = Gate()
         client.handler = { _, params in try await (params["q"] as? String == "old" ? old : fresh).wait() }
         let a = Task { await store.search("old", client: client) { $0 === client } }
         await settle()
@@ -178,7 +178,17 @@ struct LifecycleProbe {
         check(store.isSearching && store.result == nil, "debounce interval has no loading feedback")
         store.prepare("  ", client: client)
         check(!store.isSearching && store.result == nil, "blank query retained loading")
-        print("PASS search: stale failure, cleared query, cancellation, replaced client, transient retry")
+
+        // Hosts before search.fulltext answer usage_error: no retries, no error, no repeat calls.
+        let legacy = RemoteClient(), legacyStore = FulltextSearchStore()
+        legacy.handler = { _, _ in throw RemoteCallError(message: "unsupported", code: "usage_error") }
+        await legacyStore.search("body", client: legacy) { $0 === legacy }
+        check(legacyStore.isUnsupported && legacyStore.errorMessage == nil && legacy.calls.count == 1,
+              "older host was retried or reported as a failure")
+        legacyStore.prepare("next", client: legacy)
+        await legacyStore.search("next", client: legacy) { $0 === legacy }
+        check(!legacyStore.isSearching && legacy.calls.count == 1, "known older host was asked again")
+        print("PASS search: stale failure, cleared query, cancellation, replaced client, transient retry, older host")
     }
     @MainActor static func searchOpeningRegressions() async throws {
         let model = AppModel(), client = RemoteClient(), feed = HostSessionFeed(), workspace = MacWorkspace()

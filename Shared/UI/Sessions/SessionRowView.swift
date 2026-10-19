@@ -76,7 +76,7 @@ struct SessionRowView: View {
     /// 末行：位置在左，时间+状态在右。置顶标不占新行；无状态时占位保持时间不跳。
     private var metaLine: some View {
         HStack(spacing: Space.xs * interfaceScale) {
-            projectLabel
+            SessionProjectLabel(session: session)
             if session.pinned == true {
                 Image(systemName: "pin.fill")
                     .interfaceFont(.caption2)
@@ -96,14 +96,23 @@ struct SessionRowView: View {
                         .lineLimit(1)
                 }
             }
-            statusDotPlaceholder
+            SessionStatusDots(session: session)
                 .fixedSize()
         }
     }
 
+    /// 官方助手标识；未知助手才回退系统符号。
+    private var runtimeBadge: some View {
+        RuntimeBadge(runtimeID: session.runtime, size: SessionRowLayout.badgeSize)
+    }
+}
+
+/// Project name in project ink: list rows and search results.
+struct SessionProjectLabel: View {
+    let session: SessionSummary
+
     /// Project ink distinguishes the semibold metadata from the neutral time.
-    @ViewBuilder
-    private var projectLabel: some View {
+    var body: some View {
         let project = SessionPresentation.projectName(from: session)
         Group {
             if project == "~" {
@@ -119,11 +128,17 @@ struct SessionRowView: View {
         .lineLimit(1)
         .truncationMode(.tail)
     }
+}
+
+/// Activity and unread dots; an empty row keeps one dot of space.
+struct SessionStatusDots: View {
+    @Environment(\.interfaceScale) private var interfaceScale
+    let session: SessionSummary
 
     /// Activity dot plus the independent red unread dot. Both can show at
     /// once; an empty row keeps one dot of space so the time baseline holds.
     @ViewBuilder
-    private var statusDotPlaceholder: some View {
+    var body: some View {
         let dots = statusDots
         if dots.isEmpty {
             Color.clear
@@ -160,11 +175,6 @@ struct SessionRowView: View {
             dots.append((Palette.attentionUnread, "sessions.attention.unread"))
         }
         return dots
-    }
-
-    /// 官方助手标识；未知助手才回退系统符号。
-    private var runtimeBadge: some View {
-        RuntimeBadge(runtimeID: session.runtime, size: SessionRowLayout.badgeSize)
     }
 }
 

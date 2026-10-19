@@ -202,4 +202,26 @@ final class DesktopSidebarProjectionTests: XCTestCase {
         XCTAssertEqual(response.matches[0].lines.first?.spans, [[9, 11]])
         XCTAssertNil(response.matches[1].session)
     }
+
+    /// Hit lines keep host scalar offsets; a late first hit is moved into view.
+    func testFulltextSnippetWindowsLateHitsInScalarOffsets() {
+        let early = FulltextLine(role: "user", text: "find 虚拟 here", spans: [[5, 7]])
+        let kept = FulltextSnippet.window(early, maxLeadScalars: 90, lead: 20)
+        XCTAssertEqual(kept.text, "find 虚拟 here")
+        XCTAssertEqual(kept.ranges, [5..<7])
+
+        // Emoji with a variation selector counts as two scalars, as in Python.
+        let prefix = String(repeating: "字", count: 100) + "👍🏻"
+        let late = FulltextLine(role: "assistant", text: prefix + "关键词尾巴", spans: [[102, 105], [0, 1]])
+        let window = FulltextSnippet.window(late, maxLeadScalars: 90, lead: 20)
+        let scalars = Array(window.text.unicodeScalars)
+        XCTAssertEqual(String(scalars[0]), "…")
+        XCTAssertEqual(window.ranges.first, 21..<24)
+        XCTAssertEqual(String(String.UnicodeScalarView(scalars[21..<24])), "关键词")
+        XCTAssertEqual(window.ranges.count, 1, "spans before the window are dropped")
+
+        let malformed = FulltextLine(role: "user", text: "short", spans: [[3], [4, 2], [2, 99]])
+        XCTAssertEqual(FulltextSnippet.window(malformed, maxLeadScalars: 90, lead: 20).ranges, [2..<5])
+    }
 }
+

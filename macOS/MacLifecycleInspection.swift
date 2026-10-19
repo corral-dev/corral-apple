@@ -41,7 +41,7 @@ enum MacLifecycleInspection {
         outcomes["typing_erased"] = await wait {
             (stream.sink as? TerminalHostView)?.inspectionContains(text) == false
         }
-        let search = MacFulltextSearchStore()
+        let search = FulltextSearchStore()
         await search.search("PHONE", client: appModel.client) { appModel.client === $0 }
         outcomes["real_search"] = search.result != nil && search.errorMessage == nil
         let host = feed.host

@@ -64,6 +64,9 @@ struct SessionListView: View {
     /// from the unfiltered host window, so live updates keep positions.
     @State private var projectChoices: [SessionProjectOption] = []
     @State private var isSearchPresented = false
+    /// Full-text results for the bottom search field (owner request 2026-10-19).
+    @State private var fulltext = FulltextSearchStore()
+    @State private var fulltextRetry = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -81,6 +84,9 @@ struct SessionListView: View {
             )
             .padding(.bottom, Space.xs)
             Divider()
+            if showsFulltext {
+                fulltextResults
+            } else {
             Group {
                 switch SessionListPlaceholderPolicy.resolve(
                 sectionsEmpty: visibleSections.isEmpty,
@@ -208,6 +214,7 @@ struct SessionListView: View {
             }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .navigationBarTitleDisplayMode(.inline)
@@ -235,6 +242,21 @@ struct SessionListView: View {
         .onChange(of: listStore.searchQuery) { _, query in
             scheduleRemoteSearch(query)
         }
+        .task(id: FulltextQueryKey(
+            query: listStore.searchQuery,
+            client: appModel.clientIdentity,
+            ready: appModel.isConnected(to: host),
+            retry: fulltextRetry
+        )) {
+            let query = listStore.searchQuery
+            let client = appModel.isConnected(to: host) ? appModel.client : nil
+            fulltext.prepare(query, client: client)
+            // Typing (and IME composition) settles before the host is asked.
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled, client != nil else { return }
+            await fulltext.search(query, client: client) { [appModel] in appModel.client === $0 }
+        }
+        .onChange(of: appModel.clientIdentity) { _, _ in fulltext.invalidate() }
         .onChange(of: listStore.windowSessions, initial: true) { _, window in
             // Reconcile, never re-sort: existing choices keep their positions
             // while labels refresh and genuinely new identities append.
@@ -292,6 +314,9 @@ struct SessionListView: View {
             #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("-CorralInspectBottomBarSearch") {
                 isSearchPresented = true
+                if let query = ProcessInfo.processInfo.environment["CORRAL_INSPECTION_SEARCH"] {
+                    listStore.searchQuery = query
+                }
             }
             if ProcessInfo.processInfo.arguments.contains("-CorralInspectNewSession") {
                 showNewSession = true
@@ -345,6 +370,102 @@ struct SessionListView: View {
                 systemImage: "bubble.left.and.bubble.right"
             )
         }
+    }
+
+    // MARK: - Full-text search
+
+    /// Connected hosts that support `search.fulltext` answer the bottom search;
+    /// offline or older hosts keep the local title/project filter.
+    private var showsFulltext: Bool {
+        isSearching && !fulltext.isUnsupported && appModel.isConnected(to: host)
+    }
+
+    /// Hits with a visible summary (the cached record wins over the result's
+    /// copy), intersected with the quick filters; host order (newest first).
+    private var fulltextRows: [FulltextRow] {
+        guard let result = fulltext.result else { return [] }
+        let rows = result.matches.compactMap { match -> FulltextRow? in
+            guard !listStore.isDeleted(match.key) else { return nil }
+            let summary = listStore.session(for: match.key)
+                ?? match.session.flatMap { ActiveRuntimeVisibility.isListVisible($0) ? $0 : nil }
+            return summary.map { FulltextRow(session: $0, match: match) }
+        }
+        let kept = Set(SessionListFiltering.apply(
+            sessions: rows.map(\.session),
+            runtimes: runtimeFilter,
+            projects: projectFilter,
+            activeOnly: activeOnly
+        ).map(\.key))
+        return rows.filter { kept.contains($0.session.key) }
+    }
+
+    @ViewBuilder
+    private var fulltextResults: some View {
+        let rows = fulltextRows
+        if let error = fulltext.errorMessage {
+            ContentUnavailableView {
+                Label("search.failed", systemImage: "exclamationmark.triangle")
+            } description: {
+                Text(verbatim: error)
+            } actions: {
+                Button("action.retry") { fulltextRetry += 1 }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Palette.accent)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if fulltext.result == nil {
+            ProgressView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if rows.isEmpty {
+            if activeOnly || !runtimeFilter.isEmpty || !projectFilter.isEmpty {
+                ContentUnavailableView {
+                    Label("sessions.filter.empty.title", systemImage: "magnifyingglass")
+                } description: {
+                    Text(filterScopeDescription)
+                } actions: {
+                    Button("sessions.filter.clear") { clearFilters() }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Palette.accent)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ContentUnavailableView.search(text: listStore.searchQuery)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        } else {
+            List {
+                ForEach(rows) { row in
+                    SessionListItem(
+                        session: row.session,
+                        onPin: { Task { await togglePin(row.session) } },
+                        onStop: { Task { await stopSession(row.session) } },
+                        onDelete: { target in Task { await deleteSession(target) } }
+                    ) {
+                        FulltextResultRow(session: row.session, match: row.match)
+                    }
+                    .onAppear { retainSearchResult(row.session) }
+                }
+                if let result = fulltext.result, result.total > result.matches.count {
+                    Text("search.more \(result.total - result.matches.count)")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .listRowInsets(SessionListLayout.rowInsets)
+                        .listRowSeparator(.hidden)
+                }
+            }
+            .listStyle(.plain)
+            .contentMargins(.top, Space.sm, for: .scrollContent)
+            .contentMargins(.bottom, Self.searchBarClearance, for: .scrollContent)
+            .scrollDismissesKeyboard(.interactively)
+        }
+    }
+
+    /// Results can come from history outside the loaded list window; keep the
+    /// record (without list membership) so the row's link can open it.
+    private func retainSearchResult(_ session: SessionSummary) {
+        let isNew = listStore.session(for: session.key) == nil
+        listStore.rememberOpened(session)
+        if isNew { listStore.applySessionEvent(session) }
     }
 
     private func openPendingCreatedSessionIfNeeded() {
@@ -736,6 +857,19 @@ private struct SessionDateDisclosureStyle: DisclosureGroupStyle {
         }
         .buttonStyle(PressableButtonStyle(pressedScale: 1))
     }
+}
+
+private struct FulltextRow: Identifiable {
+    let session: SessionSummary
+    let match: FulltextMatch
+    var id: String { match.key }
+}
+
+private struct FulltextQueryKey: Hashable {
+    let query: String
+    let client: ObjectIdentifier?
+    let ready: Bool
+    let retry: Int
 }
 
 /// 列表页边距：行文字左缘=分组标题左缘=分隔线左端；图标不吃这层边距。

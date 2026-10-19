@@ -1,17 +1,19 @@
 #if os(iOS)
 import SwiftUI
 
-/// The native row and swipe controls used by the host list and its isolated UI fixture.
-struct SessionListItem: View {
+/// The native row and swipe controls used by the host list, its search
+/// results and its isolated UI fixture. `row` defaults to the list row.
+struct SessionListItem<Row: View>: View {
     let session: SessionSummary
     let onPin: () -> Void
     let onStop: () -> Void
     let onDelete: (SessionSummary) -> Void
+    @ViewBuilder let row: () -> Row
 
     var body: some View {
         SessionDeletionRow(session: session, onDelete: onDelete) { confirmation in
             NavigationLink(value: SessionRoute(key: session.key)) {
-                SessionRowView(session: session)
+                row()
             }
             .listRowSeparator(.visible, edges: .bottom)
             .alignmentGuide(.listRowSeparatorLeading) { dimensions in
@@ -37,6 +39,19 @@ struct SessionListItem: View {
                 }
                 .tint(.gray)
             }
+        }
+    }
+}
+
+extension SessionListItem where Row == SessionRowView {
+    init(
+        session: SessionSummary,
+        onPin: @escaping () -> Void,
+        onStop: @escaping () -> Void,
+        onDelete: @escaping (SessionSummary) -> Void
+    ) {
+        self.init(session: session, onPin: onPin, onStop: onStop, onDelete: onDelete) {
+            SessionRowView(session: session)
         }
     }
 }

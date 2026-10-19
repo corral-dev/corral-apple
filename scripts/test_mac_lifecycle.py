@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCES = [
     'Shared/Core/Models/RemoteDecoding.swift',
     'Shared/Core/Models/DesktopLayoutModels.swift',
-    'macOS/Search/MacFulltextSearchStore.swift',
+    'Shared/UI/Sessions/FulltextSearchStore.swift',
     'Shared/UI/Chat/ChatScrollRequest.swift',
     'macOS/Workspace/MacWorkspace.swift',
     'macOS/Sidebar/MacSessionBatch.swift',

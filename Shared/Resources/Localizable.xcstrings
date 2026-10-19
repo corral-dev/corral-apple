@@ -2416,7 +2416,7 @@
         }
       }
     },
-    "mac.search.failed": {
+    "search.failed": {
       "extractionState": "manual",
       "localizations": {
         "en": {
@@ -2450,7 +2450,7 @@
         }
       }
     },
-    "mac.search.hits %lld": {
+    "search.hits %lld": {
       "extractionState": "manual",
       "localizations": {
         "en": {
@@ -2479,7 +2479,7 @@
         }
       }
     },
-    "mac.search.more %lld": {
+    "search.more %lld": {
       "extractionState": "manual",
       "localizations": {
         "en": {
