@@ -40,6 +40,7 @@ final class MacNotifications: NSObject, UNUserNotificationCenterDelegate {
     func configure(model: AppModel) {
         self.model = model
         center.delegate = self
+        Task.detached(priority: .utility) { Self.installSounds() }
         let reply = UNTextInputNotificationAction(
             identifier: "REPLY", title: String(localized: "composer.send"), options: [.foreground],
             textInputButtonTitle: String(localized: "composer.send"),
@@ -141,7 +142,12 @@ final class MacNotifications: NSObject, UNUserNotificationCenterDelegate {
         content.title = title
         content.subtitle = session.title.isEmpty ? "Corral" : session.title
         content.body = NotificationPreview.body(session.lastAgent, fallback: content.title)
-        content.sound = .default
+        var soundName = NotificationSound.selected.fileName
+        #if DEBUG
+        // Acceptance probes a throwaway name: Notification Center caches a missed name's fallback.
+        soundName = ProcessInfo.processInfo.environment["CORRAL_INSPECTION_NOTIFICATION_SOUND"] ?? soundName
+        #endif
+        content.sound = UNNotificationSound(named: UNNotificationSoundName(soundName))
         content.categoryIdentifier = kind == .waiting ? "CORRAL_WAITING" : "CORRAL_COMPLETION"
         content.userInfo = ["host_id": hostID, "session_key": session.key]
         do {
@@ -156,6 +162,22 @@ final class MacNotifications: NSObject, UNUserNotificationCenterDelegate {
             }
         } catch {
             failure = String(localized: "settings.notifications.registration_failed")
+        }
+    }
+
+    /// Notification Center does not resolve sounds that exist only inside a
+    /// non-sandboxed app bundle; the app container's Library/Sounds (the user's
+    /// ~/Library/Sounds here) is the documented lookup location.
+    private nonisolated static func installSounds() {
+        let manager = FileManager.default
+        guard let library = manager.urls(for: .libraryDirectory, in: .userDomainMask).first else { return }
+        let directory = library.appendingPathComponent("Sounds", isDirectory: true)
+        try? manager.createDirectory(at: directory, withIntermediateDirectories: true)
+        for sound in NotificationSound.allCases {
+            guard let source = Bundle.main.url(forResource: sound.fileName, withExtension: nil),
+                  let data = try? Data(contentsOf: source) else { continue }
+            let target = directory.appendingPathComponent(sound.fileName)
+            if (try? Data(contentsOf: target)) != data { try? data.write(to: target, options: .atomic) }
         }
     }
 

@@ -49,6 +49,12 @@ struct HostSettingsView: View {
                 }
             }
 
+            Section("settings.notifications.sound") {
+                NotificationSoundPicker()
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+            }
+
             Section("settings.connection") {
                 Toggle("hosts.prefer_direct", isOn: Bindable(appModel).preferDirectConnection)
             }

@@ -95,7 +95,18 @@ struct MacRootView: View {
         #if DEBUG
         .task {
             let arguments = ProcessInfo.processInfo.arguments
-            if arguments.contains("-CorralInspectSettings") { openSettings() }
+            if arguments.contains("-CorralInspectSettings") {
+                openSettings()
+                // App rendering of the opened Settings pane, not a desktop screenshot.
+                if let path = ProcessInfo.processInfo.environment["CORRAL_INSPECTION_SETTINGS_IMAGE"] {
+                    try? await Task.sleep(for: .seconds(2))
+                    if let view = NSApp.windows.first(where: { $0.isVisible && $0.title != "Corral" })?.contentView,
+                       let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                        view.cacheDisplay(in: view.bounds, to: bitmap)
+                        try? bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+                    }
+                }
+            }
             if arguments.contains("-CorralInspectPairing") { showPairing = true }
             Task {
                 await MacTitleMenuInspection.run(appModel: appModel, workspace: workspace) {

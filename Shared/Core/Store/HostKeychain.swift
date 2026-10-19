@@ -32,6 +32,8 @@ nonisolated enum HostKeychain {
     static let deviceService = "sh.corral.device.identity"
     static let deviceAccount = "x25519"
     static let hostService = "sh.corral.host.public"
+    static let notificationSoundService = "sh.corral.notification.sound"
+    static let notificationSoundAccount = "preset"
 
     static func readDevicePrivateKey() throws -> Data? {
         let data = try readGeneric(service: deviceService, account: deviceAccount)
@@ -53,6 +55,17 @@ nonisolated enum HostKeychain {
 
     static func readHostPublicKey(hostID: String) throws -> Data? {
         try readGeneric(service: hostService, account: hostID)
+    }
+
+    /// Device-local preference, not a secret: Keychain is the only store the
+    /// notification extension shares with the app (no App Group).
+    static func readNotificationSound() -> String? {
+        (try? readGeneric(service: notificationSoundService, account: notificationSoundAccount))
+            .flatMap { String(data: $0, encoding: .utf8) }
+    }
+
+    static func saveNotificationSound(_ value: String) throws {
+        try saveGeneric(service: notificationSoundService, account: notificationSoundAccount, data: Data(value.utf8))
     }
 
     static func removeHostPublicKey(hostID: String) {
@@ -124,7 +137,13 @@ nonisolated enum HostKeychain {
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
         ]
         #else
-        return [kSecValueData as String: data]
+        // Mac has no extension, but an explicit class keeps sleep/wake and
+        // locked-keychain behavior consistent with iOS instead of depending
+        // on the login-keychain default.
+        return [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+        ]
         #endif
     }
 }

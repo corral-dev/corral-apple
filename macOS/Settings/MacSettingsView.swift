@@ -100,6 +100,8 @@ private struct MacNotificationSettings: View {
                     Toggle("settings.notifications.waiting", isOn: $notifications.waiting)
                     Toggle("settings.notifications.completed", isOn: $notifications.completed)
                     Toggle("settings.notifications.aborted", isOn: $notifications.aborted)
+                    NotificationSoundPicker()
+                        .pickerStyle(.radioGroup)
                     if notifications.authorization == .denied {
                         LabeledContent {
                             Button("action.open_settings") { notifications.openSystemSettings() }

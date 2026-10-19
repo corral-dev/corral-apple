@@ -375,6 +375,7 @@ def wait_for_markers(sim: Simulator, helper: Path, probe: Path, markers: list[st
     """Screenshot-poll until every marker is OCR-visible; False on timeout."""
     deadline = time.monotonic() + timeout
     last: list[str] = []
+    missing = list(markers)
     while time.monotonic() < deadline:
         time.sleep(IPHONE_POLL_INTERVAL)
         try:

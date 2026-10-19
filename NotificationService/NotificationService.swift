@@ -19,6 +19,8 @@ final class NotificationService: UNNotificationServiceExtension {
             contentHandler(request.content)
             return
         }
+        // Set before decrypting so failure and timeout paths keep Corral's own sound.
+        content.sound = UNNotificationSound(named: UNNotificationSoundName(NotificationSound.selected.fileName))
 
         do {
             let payload = try decryptPayload(from: request.content.userInfo)

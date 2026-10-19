@@ -65,6 +65,7 @@ let package = Package(
                 "LanDiscoveryTests.swift",
                 "NativeQuestionTests.swift",
                 "NotificationLedgerTests.swift",
+                "NotificationSoundTests.swift",
                 "SessionNotificationTextTests.swift",
                 "NotificationPreviewTests.swift",
                 "NotificationReplyTests.swift",

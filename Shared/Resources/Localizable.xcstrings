@@ -5055,6 +5055,74 @@
         }
       }
     },
+    "settings.notifications.sound": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notification Sound"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "通知铃声"
+          }
+        }
+      }
+    },
+    "settings.notifications.sound.chime": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chime"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "清铃"
+          }
+        }
+      }
+    },
+    "settings.notifications.sound.marimba": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Marimba"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "木琴"
+          }
+        }
+      }
+    },
+    "settings.notifications.sound.tap": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Soft Tap"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "轻叩"
+          }
+        }
+      }
+    },
     "settings.notifications.completed": {
       "extractionState": "manual",
       "localizations": {

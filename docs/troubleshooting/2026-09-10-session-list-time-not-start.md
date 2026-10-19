@@ -41,3 +41,7 @@ The phone painted green whenever attention was empty but `live` was true (a proc
 `corral remote status` keeps only the last 8 phone requests and `~/.cache/corral/events.log` is truncated at 256 KB (it held only 17:19 onward), so the earlier list traffic could not be reconstructed. Improvement: keep a bounded, longer per-device RPC history (method, time, plane, unchanged/full) for list-freshness forensics.
 
 <!-- 该文档整理/压缩于 2026-09-29 -->
+
+## Mac shows a clock instead of elapsed time (2026-10-19)
+
+The Mac-only `MacSidebarMetrics.compactTime` had bypassed the shared relative-time formatter, showing a clock today and a short date for older days. Both the sidebar and full-text search consumed it. The owner requires readable elapsed time such as "3 minutes ago". Reuse `SessionPresentation.timeLabel(for:now:)`; retain its existing three-minute/hour/day thresholds, localized copy and older-date fallback. The iPhone row and TUI already use the same thresholds. This symptom is presentation drift, separate from stale host activity or list subscription data; see [the Mac row contract](../design/MACOS_CLIENT_DESIGN.md#desktop-first-redesign-owner-requirement-2026-10-04-round-2).

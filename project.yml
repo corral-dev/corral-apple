@@ -32,8 +32,8 @@ settings:
     SWIFT_APPROACHABLE_CONCURRENCY: YES
     GENERATE_ASSET_SYMBOL_EXTENSIONS: YES
     ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: YES
-    MARKETING_VERSION: "1.0.183"
-    CURRENT_PROJECT_VERSION: "193"
+    MARKETING_VERSION: "1.0.184"
+    CURRENT_PROJECT_VERSION: "194"
     CODE_SIGN_STYLE: Automatic
 
 configFiles:
@@ -113,6 +113,8 @@ targets:
       - path: Shared/Core/Store/HostKeychain.swift
       - path: Shared/Core/Push/NotificationPreview.swift
       - path: Shared/Core/Push/SessionNotificationText.swift
+      - path: Shared/Core/Push/NotificationSound.swift
+      - path: Shared/Resources/Sounds
       - path: Shared/Resources/Localizable.xcstrings
     settings:
       base:
@@ -165,8 +167,8 @@ targets:
       base:
         PRODUCT_NAME: Corral
         PRODUCT_BUNDLE_IDENTIFIER: com.example.corral
-        MARKETING_VERSION: "0.3.133"
-        CURRENT_PROJECT_VERSION: "137"
+        MARKETING_VERSION: "0.3.135"
+        CURRENT_PROJECT_VERSION: "139"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         ENABLE_HARDENED_RUNTIME: YES

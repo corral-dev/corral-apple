@@ -185,14 +185,9 @@ enum MacSidebarMetrics {
         }
     }
 
-    /// Clock time today, short date before; the day section names the day.
+    /// Keep sidebar and search times aligned with the shared session-list policy.
     static func compactTime(for session: SessionSummary, now: Date) -> String {
-        guard session.mtime > 0 else { return session.time }
-        let date = Date(timeIntervalSince1970: session.mtime)
-        if Calendar.current.isDate(date, inSameDayAs: now) {
-            return date.formatted(date: .omitted, time: .shortened)
-        }
-        return date.formatted(.dateTime.month(.defaultDigits).day())
+        SessionPresentation.timeLabel(for: session, now: now)
     }
 
     static func color(for marker: SessionPresentation.StatusMarker) -> Color {

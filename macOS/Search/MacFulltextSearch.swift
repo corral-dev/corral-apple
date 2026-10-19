@@ -201,10 +201,12 @@ struct MacFulltextSearch: View {
                 .truncationMode(.tail)
             Spacer(minLength: Space.sm * interfaceScale)
             if let session = match.session, session.mtime > 0 {
-                Text(verbatim: MacSidebarMetrics.compactTime(for: session, now: Date()))
-                    .interfaceFont(.system(size: 13).monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .fixedSize()
+                TimelineView(.periodic(from: .now, by: 60)) { context in
+                    Text(verbatim: MacSidebarMetrics.compactTime(for: session, now: context.date))
+                        .interfaceFont(.system(size: 13).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .fixedSize()
+                }
             }
         }
         .interfaceFrame(height: SearchMetrics.titleLineHeight)
