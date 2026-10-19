@@ -66,7 +66,8 @@ struct AgentTerminalPane: View {
             // The outcome reaches only the tapped row's status; the terminal
             // itself never shows popups, banners or fallback controls.
             guard !Task.isCancelled, let stream, stream.phase == .live else { return }
-            let outcome = await stream.navigatePrompt(seq: request.seq, historyGeneration: request.generation)
+            let outcome = await stream.navigatePrompt(seq: request.seq, historyGeneration: request.generation,
+                                                      text: request.text)
             if !Task.isCancelled { handledPromptRequest = request.id }
             onPromptOutcome(request.id, outcome)
         }

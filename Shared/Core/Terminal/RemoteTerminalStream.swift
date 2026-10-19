@@ -149,7 +149,9 @@ final class RemoteTerminalStream {
 
     /// Resolve full host text by identity; card previews are never search input.
     /// The outcome feeds only the clicked row's status (owner decision 2026-10-19).
-    func navigatePrompt(seq: Int, historyGeneration: Int) async -> TerminalPromptOutcome {
+    /// `text` enables one retry when the host rebuilt the history after the
+    /// prompt list was fetched: the same seq must still carry the same prompt.
+    func navigatePrompt(seq: Int, historyGeneration: Int, text: String? = nil) async -> TerminalPromptOutcome {
         let request = UUID()
         let inputRevision = input.revision
         promptNavigation = request
@@ -157,9 +159,14 @@ final class RemoteTerminalStream {
         // terminal — never switch to the chat renderer, never show a History
         // preview or Return to live terminal control. Guarded native location
         // is host-owned and never submits.
-        guard let client, client.hostCapabilities.terminalPrompt else { return .failed }
+        guard let client, client.hostCapabilities.terminalPrompt else {
+            debugTrace("terminal prompt: host lacks terminal_prompt")
+            return .failed
+        }
         func superseded() -> Bool {
-            Task.isCancelled || promptNavigation != request || input.revision != inputRevision
+            let replaced = Task.isCancelled || promptNavigation != request || input.revision != inputRevision
+            if replaced { debugTrace("terminal prompt: superseded (input \(input.revision != inputRevision))") }
+            return replaced
         }
         // The sheet can close before the pane has its live snapshot. Wait
         // briefly for it instead of dropping the selection on the floor.
@@ -170,7 +177,10 @@ final class RemoteTerminalStream {
             waited += 1
         }
         if superseded() { return .superseded }
-        guard phase == .live, synced else { return .failed }
+        guard phase == .live, synced else {
+            debugTrace("terminal prompt: stream not live (\(phase), synced \(synced))")
+            return .failed
+        }
         let mine = generation
         let params: [String: Any] = ["key": sessionKey, "seq": seq, "generation": historyGeneration,
                                    "navigation": request.uuidString]
@@ -194,7 +204,10 @@ final class RemoteTerminalStream {
             if sink?.terminalRevealPrompt(query, occurrence: occurrence, total: total) == true { return .landed }
             // A resolve never moves the host. Fetch its retained terminal text
             // through the existing ordered snapshot barrier, without agent keys.
-            guard payload["offset"] as? Int != nil else { return .failed }
+            guard payload["offset"] as? Int != nil else {
+                debugTrace("terminal prompt: no offset and no direct capability")
+                return .failed
+            }
             var seen = snapshotRevision
             _ = try await client.call(WireProtocol.mTerminalResync, params: ["key": sessionKey, "history": 10_000])
             for _ in 0..<60 {
@@ -208,11 +221,33 @@ final class RemoteTerminalStream {
             return .failed
         } catch let error as RemoteCallError {
             // This auxiliary action never changes stream/input error state.
-            if superseded() || error.code == "stale" { return .superseded }
+            debugTrace("terminal prompt: host error \(error.code): \(error.message)")
+            if superseded() { return .superseded }
+            // A host "stale" is not this client's newer selection or typing:
+            // retry once on the current history, otherwise report it.
+            if error.code == "stale", let text,
+               let current = await currentGeneration(seq: seq, text: text), current != historyGeneration {
+                return await navigatePrompt(seq: seq, historyGeneration: current)
+            }
             return error.code == "absent" ? .absent : .failed
         } catch {
+            debugTrace("terminal prompt: call failed \(error)")
             return superseded() ? .superseded : .failed
         }
+    }
+
+    /// The host's current history generation when `seq` is still the same prompt.
+    private func currentGeneration(seq: Int, text: String) async -> Int? {
+        guard let client,
+              let response = try? await client.call(WireProtocol.mSessionUserPrompts, params: ["key": sessionKey],
+                                                    as: SessionUserPromptsResponse.self),
+              let listed = response.prompts.first(where: { $0.seq == seq }) else { return nil }
+        // The host list may shorten long texts; compare a whitespace-free opening.
+        func opening(_ value: String?) -> String { String((value ?? "").filter { !$0.isWhitespace }.prefix(32)) }
+        let mine = opening(text), theirs = opening(listed.text)
+        guard !mine.isEmpty, mine.hasPrefix(theirs.trimmingCharacters(in: CharacterSet(charactersIn: "…")))
+                || theirs.hasPrefix(mine) else { return nil }
+        return response.generation
     }
 
     func retry() { recover() }
@@ -483,7 +518,8 @@ private enum TerminalLifecycleQueue {
 @MainActor
 final class TerminalInputSender {
     private enum Input {
-        case bytes(Data)
+        /// `passive`: the emulator answered the program by itself.
+        case bytes(Data, passive: Bool)
         case paste(String)
     }
 
@@ -502,13 +538,37 @@ final class TerminalInputSender {
 
     /// Large input (a paste typed by the emulator itself) is split so no
     /// request exceeds the host's raw-input limit.
-    func send(_ bytes: ArraySlice<UInt8>) {
+    /// `passive`: the emulator's own reply to the program (no key, click or
+    /// paste). Such replies and focus reports (DECSET 1004, e.g. when a Your
+    /// prompts click moves focus) are not typing: they must not retire a prompt
+    /// navigation in progress, here or on the host.
+    func send(_ bytes: ArraySlice<UInt8>, passive: Bool = false) {
+        let passive = passive || Self.isFocusReport(bytes)
+        let typed = !passive
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["CORRAL_INSPECTION_TRACE_INPUT"] == "1" {
+            debugTrace("terminal input \(bytes.count) bytes: \(String(decoding: bytes.prefix(24), as: UTF8.self).debugDescription)")
+        }
+        #endif
         var start = bytes.startIndex
         while start < bytes.endIndex {
             let end = bytes.index(start, offsetBy: Self.maxBatch, limitedBy: bytes.endIndex) ?? bytes.endIndex
-            enqueue(.bytes(Data(bytes[start..<end])))
+            enqueue(.bytes(Data(bytes[start..<end]), passive: passive), typed: typed)
             start = end
         }
+    }
+
+    /// One or more `ESC [ I` / `ESC [ O` focus reports and nothing else.
+    nonisolated static func isFocusReport(_ bytes: ArraySlice<UInt8>) -> Bool {
+        guard !bytes.isEmpty, bytes.count % 3 == 0 else { return false }
+        var index = bytes.startIndex
+        while index < bytes.endIndex {
+            let report = bytes[index..<(index + 3)]
+            guard report.first == 0x1b, report.dropFirst().first == 0x5b,
+                  report.last == 0x49 || report.last == 0x4f else { return false }
+            index += 3
+        }
+        return true
     }
 
     func paste(_ text: String) {
@@ -516,8 +576,8 @@ final class TerminalInputSender {
         enqueue(.paste(text))
     }
 
-    private func enqueue(_ input: Input) {
-        revision &+= 1
+    private func enqueue(_ input: Input, typed: Bool = true) {
+        if typed { revision &+= 1 }
         queue.append(input)
         guard !draining else { return }
         draining = true
@@ -526,9 +586,10 @@ final class TerminalInputSender {
 
     private func takeBatch() -> Input {
         var head = queue.removeFirst()
-        while case .bytes(let joined) = head, let next = queue.first, case .bytes(let more) = next,
+        while case .bytes(let joined, let passive) = head, let next = queue.first,
+              case .bytes(let more, let morePassive) = next, passive == morePassive,
               joined.count + more.count <= Self.maxBatch {
-            head = .bytes(joined + more)
+            head = .bytes(joined + more, passive: passive)
             queue.removeFirst()
         }
         return head
@@ -546,11 +607,10 @@ final class TerminalInputSender {
             }
             do {
                 switch next {
-                case .bytes(let data):
-                    _ = try await client.call(
-                        WireProtocol.mTerminalInput,
-                        params: ["key": sessionKey, "data": data.base64EncodedString()]
-                    )
+                case .bytes(let data, let passive):
+                    var params: [String: Any] = ["key": sessionKey, "data": data.base64EncodedString()]
+                    if passive { params["passive"] = true }
+                    _ = try await client.call(WireProtocol.mTerminalInput, params: params)
                 case .paste(let text):
                     _ = try await client.call(
                         WireProtocol.mInputText,

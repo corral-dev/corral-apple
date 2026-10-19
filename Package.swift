@@ -87,6 +87,7 @@ let package = Package(
                 "DesktopSidebarProjectionTests.swift",
                 "SessionUserPromptsTests.swift",
                 "ComposerHistoryTests.swift",
+                "TerminalInputPassiveTests.swift",
             ],
             swiftSettings: [
                 .swiftLanguageMode(.v6),

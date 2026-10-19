@@ -99,7 +99,12 @@ struct MacPaneView: View {
         }
         // A second click on the row being located does not restart it.
         if promptStatus?.seq == prompt.seq, promptStatus?.kind == .locating { return }
-        let request = TerminalPromptRequest(seq: prompt.seq, generation: store?.promptHistoryGeneration ?? 0)
+        var generation = store?.promptHistoryGeneration ?? 0
+        #if DEBUG
+        // `CORRAL_INSPECTION_STALE_GENERATION=1`: model a host history rebuild.
+        if ProcessInfo.processInfo.environment["CORRAL_INSPECTION_STALE_GENERATION"] == "1" { generation -= 1 }
+        #endif
+        let request = TerminalPromptRequest(seq: prompt.seq, generation: generation, text: prompt.text)
         terminalPromptRequest = request
         promptStatus = TerminalPromptRowStatus(locating: request)
     }
@@ -175,7 +180,7 @@ struct MacPaneView: View {
         .task { await MacPromptJumpInspection.run(key: session.key, workspace: workspace) { prompts } }
         .task { await MacCopyInspection.run(key: session.key, workspace: workspace) }
         .task(id: prompts.count) {
-            MacPromptStatusInspection.start(key: session.key, mode: mode, prompts: prompts,
+            MacPromptStatusInspection.start(key: session.key, mode: mode, prompts: { prompts },
                                             select: selectPrompt, status: { promptStatus })
         }
         .task { await MacTerminalReturnInspection.inspectColdChatIfRequested(appModel: appModel) }

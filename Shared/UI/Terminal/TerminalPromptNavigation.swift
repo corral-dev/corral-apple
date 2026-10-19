@@ -6,6 +6,8 @@ struct TerminalPromptRequest: Identifiable {
     let id = UUID()
     let seq: Int
     let generation: Int
+    /// The selected prompt's text, to recognise it after a host history rebuild.
+    var text: String? = nil
 }
 
 /// Re-run a pending selection when its stream is created or presented.

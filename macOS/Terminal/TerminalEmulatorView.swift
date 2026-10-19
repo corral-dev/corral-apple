@@ -199,6 +199,21 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
 
     func inspectionFocus() { window?.makeFirstResponder(terminal) }
 
+    /// Pointer movement over the terminal, through SwiftTerm's own handler
+    /// (it reports motion when the program enabled any-event tracking).
+    func inspectionHover(steps: Int) {
+        guard let window else { return }
+        for step in 0..<steps {
+            let local = CGPoint(x: terminal.bounds.midX + CGFloat(step * 7), y: terminal.bounds.midY)
+            let point = terminal.convert(local, to: nil)
+            guard let event = NSEvent.mouseEvent(with: .mouseMoved, location: point, modifierFlags: [],
+                                                 timestamp: ProcessInfo.processInfo.systemUptime,
+                                                 windowNumber: window.windowNumber, context: nil,
+                                                 eventNumber: 0, clickCount: 0, pressure: 0) else { continue }
+            terminal.mouseMoved(with: event)
+        }
+    }
+
     func inspectionScrollUp(lines: Int) { terminal.scrollUp(lines: lines) }
     var inspectionScrollPosition: Double { terminal.scrollPosition }
 
@@ -463,7 +478,24 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
         // SwiftTerm only scrolls when the caret is off screen, so after a
         // small scroll back a shell `clear` drew its prompt rows below the top.
         if NSApp.currentEvent?.type == .keyDown { terminal.scroll(toPosition: 1) }
-        stream?.input.send(data)
+        stream?.input.send(data, passive: Self.isEmulatorReply(data))
+    }
+
+    /// SwiftTerm answers the program's queries (cursor position, attributes,
+    /// colours) through this same callback. A reply is an escape sequence sent
+    /// with no person's key, click or scroll in the last half second.
+    private static func isEmulatorReply(_ data: ArraySlice<UInt8>) -> Bool {
+        guard data.count >= 3, data.first == 0x1b,
+              let kind = data.dropFirst().first, kind == 0x5b || kind == 0x5d || kind == 0x50 else { return false }
+        guard let event = NSApp.currentEvent,
+              ProcessInfo.processInfo.systemUptime - event.timestamp < 0.5 else { return true }
+        switch event.type {
+        case .keyDown, .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp, .otherMouseDown,
+             .otherMouseUp, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged, .scrollWheel:
+            return false
+        default:
+            return true
+        }
     }
 
     func sizeChanged(source: SwiftTerm.TerminalView, newCols: Int, newRows: Int) {

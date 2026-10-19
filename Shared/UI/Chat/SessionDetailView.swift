@@ -374,7 +374,8 @@ struct SessionDetailView: View {
         }
         // A second tap on the row being located does not restart it.
         if promptStatus?.seq == message.seq, promptStatus?.kind == .locating { return true }
-        let request = TerminalPromptRequest(seq: message.seq, generation: conversationStore?.promptHistoryGeneration ?? 0)
+        let request = TerminalPromptRequest(seq: message.seq, generation: conversationStore?.promptHistoryGeneration ?? 0,
+                                            text: message.text)
         terminalPromptRequest = request
         promptStatus = TerminalPromptRowStatus(locating: request)
         return true
