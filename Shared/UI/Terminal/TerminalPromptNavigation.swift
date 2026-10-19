@@ -1,5 +1,5 @@
-import Foundation
 import SwiftTerm
+import SwiftUI
 
 /// A selection retains its history identity through sheet dismissal/view updates.
 struct TerminalPromptRequest: Identifiable {
@@ -14,6 +14,80 @@ struct TerminalPromptTaskKey: Hashable {
     let stream: ObjectIdentifier?
     let presented: Bool
     let ready: Bool
+}
+
+/// The clicked prompt row's status (owner decision 2026-10-19): it replaces
+/// the row's time label with a spinner while locating, then a short reason
+/// for two seconds on failure. No popup, banner or focus change.
+struct TerminalPromptRowStatus: Equatable {
+    enum Kind: Equatable { case locating, absent, failed }
+
+    let request: UUID
+    let seq: Int
+    var kind: Kind
+
+    static let failureDuration: Duration = .seconds(2)
+    /// A stream that never settles must not leave the spinner running.
+    static let locatingLimit: Duration = .seconds(25)
+
+    init(locating request: TerminalPromptRequest) {
+        self.request = request.id
+        seq = request.seq
+        kind = .locating
+    }
+
+    /// The status after `outcome` for `request`; other requests leave it alone.
+    func finishing(_ request: UUID, with outcome: TerminalPromptOutcome) -> TerminalPromptRowStatus? {
+        guard request == self.request, kind == .locating else { return self }
+        var next = self
+        switch outcome {
+        case .landed, .superseded: return nil
+        case .absent: next.kind = .absent
+        case .failed: next.kind = .failed
+        }
+        return next
+    }
+}
+
+extension View {
+    /// Clears a failure reason after two seconds; a request that never ends
+    /// turns into a failure at the locating limit.
+    func expiringPromptStatus(_ status: Binding<TerminalPromptRowStatus?>) -> some View {
+        task(id: status.wrappedValue) {
+            guard let current = status.wrappedValue else { return }
+            let locating = current.kind == .locating
+            try? await Task.sleep(for: locating ? TerminalPromptRowStatus.locatingLimit
+                                                : TerminalPromptRowStatus.failureDuration)
+            guard !Task.isCancelled, status.wrappedValue == current else { return }
+            status.wrappedValue = locating ? current.finishing(current.request, with: .failed) : nil
+        }
+    }
+}
+
+/// The time-label replacement for a prompt row with a status.
+struct TerminalPromptStatusLabel: View {
+    let kind: TerminalPromptRowStatus.Kind
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if kind == .locating {
+                ProgressView()
+                    .controlSize(.mini)
+            }
+            Text(title)
+                .fontWeight(.semibold)
+        }
+        .foregroundStyle(.secondary)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var title: LocalizedStringKey {
+        switch kind {
+        case .locating: "terminal.prompt.locating"
+        case .absent: "terminal.prompt.not_in_terminal"
+        case .failed: "terminal.prompt.not_located"
+        }
+    }
 }
 
 extension TerminalView {

@@ -49,6 +49,15 @@ struct CorralApp: App {
             #endif
             .task {
                 let arguments = ProcessInfo.processInfo.arguments
+                #if DEBUG
+                // Simulator acceptance pairs without the system's open-URL
+                // confirmation, which would need a pointer tap.
+                if appModel.hosts.isEmpty,
+                   let link = ProcessInfo.processInfo.environment["CORRAL_INSPECTION_PAIRING_URL"],
+                   let url = URL(string: link), let payload = try? PairingPayload.parse(url: url) {
+                    _ = try? await appModel.completePairing(payload, deviceName: UIDeviceName.current)
+                }
+                #endif
                 guard arguments.contains("-CorralInspectConversation")
                     || arguments.contains("-CorralInspectLoadEarlier") else { return }
                 if appModel.hosts.isEmpty {

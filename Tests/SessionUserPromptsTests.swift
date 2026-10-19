@@ -62,6 +62,22 @@ final class SessionUserPromptsTests: XCTestCase {
         XCTAssertEqual(merged.map(\.text), ["first…", "loaded full text"])
     }
 
+    func testHostListIsTheFilterAuthorityUpToItsNewestPrompt() throws {
+        let loaded = try RemoteJSONDecoder.decode(SessionMessagesResponse.self, from: [
+            "messages": [
+                ["seq": 10, "role": "user", "text": "This session is being continued from a previous conversation…"],
+                ["seq": 11, "role": "user", "text": "Task: relay\n\nYou are picking up a session from Codex."],
+                ["seq": 12, "role": "assistant", "text": "answer"],
+                ["seq": 13, "role": "user", "text": "<system-reminder>later injected</system-reminder>"],
+                ["seq": 14, "role": "user", "text": "typed after the list"],
+            ], "generation": 4, "oldest_seq": 10, "newest_seq": 14,
+        ]).messages
+        // The host filtered seq 10 and kept the relay prompt it renders natively.
+        let host = [RichMessage(seq: 11, role: "user", text: "Task: relay…")]
+        let merged = ConversationMessagePolicy.userPrompts(loaded: loaded, session: host)
+        XCTAssertEqual(merged.map(\.seq), [11, 14])
+    }
+
     func testHelloDecodesUserPromptsCapability() throws {
         let hello = try RemoteJSONDecoder.decode(HelloResponse.self, from: [
             "paired": true, "capabilities": ["user_prompts": true],

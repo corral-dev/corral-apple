@@ -148,32 +148,37 @@ final class RemoteTerminalStream {
     }
 
     /// Resolve full host text by identity; card previews are never search input.
-    func navigatePrompt(seq: Int, historyGeneration: Int) async -> String? {
+    /// The outcome feeds only the clicked row's status (owner decision 2026-10-19).
+    func navigatePrompt(seq: Int, historyGeneration: Int) async -> TerminalPromptOutcome {
         let request = UUID()
         let inputRevision = input.revision
         promptNavigation = request
         // Owner requirement (2026-10-17): a prompt jump stays in the live
-        // terminal. Every miss below is silent — never switch to the chat
-        // renderer, never show a History preview or Return to live terminal
-        // control. Guarded native location is host-owned and never submits.
-        guard let client, client.hostCapabilities.terminalPrompt else { return nil }
+        // terminal — never switch to the chat renderer, never show a History
+        // preview or Return to live terminal control. Guarded native location
+        // is host-owned and never submits.
+        guard let client, client.hostCapabilities.terminalPrompt else { return .failed }
+        func superseded() -> Bool {
+            Task.isCancelled || promptNavigation != request || input.revision != inputRevision
+        }
         // The sheet can close before the pane has its live snapshot. Wait
         // briefly for it instead of dropping the selection on the floor.
         var waited = 0
         while !(phase == .live && synced), waited < 40 {
-            guard !Task.isCancelled, promptNavigation == request, input.revision == inputRevision else { return nil }
+            if superseded() { return .superseded }
             try? await Task.sleep(for: .milliseconds(50))
             waited += 1
         }
-        guard !Task.isCancelled, phase == .live, synced, promptNavigation == request, input.revision == inputRevision else { return nil }
+        if superseded() { return .superseded }
+        guard phase == .live, synced else { return .failed }
         let mine = generation
         let params: [String: Any] = ["key": sessionKey, "seq": seq, "generation": historyGeneration,
                                    "navigation": request.uuidString]
         do {
             let value = try await client.call("terminal.prompt", params: params)
-            guard !Task.isCancelled, generation == mine, promptNavigation == request, input.revision == inputRevision else { return nil }
+            if superseded() || generation != mine { return .superseded }
             guard let payload = value as? [String: Any], let query = payload["query"] as? String else {
-                return nil
+                return .failed
             }
             let occurrence = payload["occurrence"] as? Int ?? 0
             let total = payload["total"] as? Int ?? 1
@@ -181,30 +186,32 @@ final class RemoteTerminalStream {
                 var native = params
                 native["native"] = true
                 _ = try await client.call("terminal.prompt", params: native)
-                guard !Task.isCancelled, generation == mine, promptNavigation == request,
-                      input.revision == inputRevision else { return nil }
+                if superseded() || generation != mine { return .superseded }
                 // The host suppresses intermediate editor frames and emits
                 // the verified native viewport through its ordered snapshot.
-                return nil
+                return .landed
             }
-            if sink?.terminalRevealPrompt(query, occurrence: occurrence, total: total) == true { return nil }
+            if sink?.terminalRevealPrompt(query, occurrence: occurrence, total: total) == true { return .landed }
             // A resolve never moves the host. Fetch its retained terminal text
             // through the existing ordered snapshot barrier, without agent keys.
-            guard payload["offset"] as? Int != nil else { return nil }
+            guard payload["offset"] as? Int != nil else { return .failed }
             var seen = snapshotRevision
             _ = try await client.call(WireProtocol.mTerminalResync, params: ["key": sessionKey, "history": 10_000])
             for _ in 0..<60 {
-                guard !Task.isCancelled, generation == mine, promptNavigation == request, input.revision == inputRevision else { return nil }
+                if superseded() || generation != mine { return .superseded }
                 if snapshotRevision != seen {
                     seen = snapshotRevision
-                    if sink?.terminalRevealPrompt(query, occurrence: occurrence, total: total) == true { return nil }
+                    if sink?.terminalRevealPrompt(query, occurrence: occurrence, total: total) == true { return .landed }
                 }
                 try? await Task.sleep(for: .milliseconds(50))
             }
-            return nil
-        } catch {
+            return .failed
+        } catch let error as RemoteCallError {
             // This auxiliary action never changes stream/input error state.
-            return nil
+            if superseded() || error.code == "stale" { return .superseded }
+            return error.code == "absent" ? .absent : .failed
+        } catch {
+            return superseded() ? .superseded : .failed
         }
     }
 
@@ -573,6 +580,16 @@ final class TerminalInputSender {
         }
         draining = false
     }
+}
+
+/// How one host prompt jump ended.
+enum TerminalPromptOutcome: Sendable {
+    case landed
+    /// The prompt is no longer in the agent's terminal (for example compacted).
+    case absent
+    case failed
+    /// A later selection or user input replaced this one; nothing to report.
+    case superseded
 }
 
 /// Debug builds record failed terminal input to /tmp for acceptance runs;

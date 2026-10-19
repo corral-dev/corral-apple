@@ -36,12 +36,23 @@ enum ConversationMessagePolicy {
         return prompts
     }
 
-    /// Your prompts across the whole session: the host's list fills in prompts
-    /// outside the loaded window; a loaded message wins for the same seq.
+    /// Your prompts across the whole session. The host's list is the authority
+    /// up to its newest prompt: it applies the host's injected-input filter,
+    /// the same one the terminal UI and host prompt navigation use, so this
+    /// client keeps no second copy of those rules. A loaded message wins for
+    /// the same seq; only prompts newer than the list use the local filter.
     static func userPrompts(loaded: [RichMessage], session: [RichMessage]) -> [RichMessage] {
-        let loadedSeqs = Set(loaded.map(\.seq))
-        let missing = session.filter { $0.seq > 0 && !loadedSeqs.contains($0.seq) }
-        return userPrompts(from: loaded + missing)
+        let listed = session.filter { $0.seq > 0 }
+        guard let newest = listed.map(\.seq).max() else { return userPrompts(from: loaded) }
+        var loadedBySeq: [Int: RichMessage] = [:]
+        for message in loaded { loadedBySeq[message.seq] = message }
+        let hosted = listed.compactMap { prompt -> RichMessage? in
+            guard let current = loadedBySeq[prompt.seq] else { return prompt }
+            let role = current.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let text = current.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return role == "user" && !text.isEmpty ? current : nil
+        }
+        return hosted + userPrompts(from: loaded.filter { $0.seq > newest || $0.seq < 0 })
     }
 
     static func timelineItems(

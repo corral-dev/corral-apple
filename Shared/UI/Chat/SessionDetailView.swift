@@ -78,7 +78,8 @@ struct SessionDetailView: View {
     @State private var blockedQuestionRequestID: String? = nil
     /// Prompt chosen in the Your prompts sheet, applied after the sheet closes.
     @State private var pendingPromptJump: String?
-    @State private var pendingTerminalPrompt: TerminalPromptRequest?
+    /// The tapped terminal prompt row's status; the sheet stays open while it locates.
+    @State private var promptStatus: TerminalPromptRowStatus?
     @State private var terminalPromptRequest: TerminalPromptRequest?
     @State private var draftHostID = ""
     @State private var didLoadDraft = false
@@ -122,24 +123,14 @@ struct SessionDetailView: View {
         #endif
         .sheet(isPresented: $showUserPrompts, onDismiss: {
             // Jump once the sheet is gone, so the landing is seen, not hidden behind it.
-            if let pendingTerminalPrompt {
-                self.pendingTerminalPrompt = nil
-                terminalPromptRequest = pendingTerminalPrompt
-                return
-            }
             guard let pendingPromptJump else { return }
             self.pendingPromptJump = nil
             scrollToMessageID = pendingPromptJump
         }) {
             UserPromptsView(
                 prompts: userPrompts,
-                onSelect: { message in
-                    if pane == .terminal {
-                        pendingTerminalPrompt = TerminalPromptRequest(seq: message.seq, generation: conversationStore?.promptHistoryGeneration ?? 0)
-                    } else {
-                        pendingPromptJump = ConversationTimelineItem.message(message).id
-                    }
-                }
+                status: pane == .terminal ? promptStatus : nil,
+                onSelect: selectPrompt
             )
             .environment(\.sessionTextScale, appModel.sessionTextSize.scale)
             .presentationDetents([.large])
@@ -147,6 +138,7 @@ struct SessionDetailView: View {
             .presentationContentInteraction(.scrolls)
             .interactiveDismissDisabled(false)
         }
+        .expiringPromptStatus($promptStatus)
         #endif
         // First frame must already show the cached tail and draft: build them
         // synchronously on appear, never behind a network call (open-jump fix).
@@ -181,6 +173,7 @@ struct SessionDetailView: View {
             }
 #if os(iOS) && DEBUG
             await inspectPromptJumpIfRequested()
+            await inspectTerminalPromptSheetIfRequested()
 #endif
         }
         .onChange(of: draft) { _, newValue in
@@ -260,6 +253,39 @@ struct SessionDetailView: View {
     }
 
 #if os(iOS) && DEBUG
+    /// `-CorralInspectTerminalPromptSheet` with `-CorralInspectAgentTerminal` and
+    /// `CORRAL_INSPECTION_SESSION_KEY`: opens Your prompts over the terminal and
+    /// taps the middle prompt through the production selection path, logging
+    /// the row status and sheet state so simulator screenshots can be timed.
+    private func inspectTerminalPromptSheetIfRequested() async {
+        guard ProcessInfo.processInfo.arguments.contains("-CorralInspectTerminalPromptSheet"),
+              ProcessInfo.processInfo.environment["CORRAL_INSPECTION_SESSION_KEY"] == sessionKey else { return }
+        for _ in 0..<60 where userPrompts.count < 2 || pane != .terminal {
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+        try? await Task.sleep(for: .seconds(6))
+        let prompts = userPrompts
+        guard prompts.count >= 2 else { return print("[prompt-sheet] step=error") }
+        showUserPrompts = true
+        try? await Task.sleep(for: .seconds(2))
+        let index = Int(ProcessInfo.processInfo.environment["CORRAL_INSPECTION_PROMPT_INDEX"] ?? "")
+            .map { min(max($0, 0), prompts.count - 1) } ?? prompts.count / 2
+        let started = Date()
+        print("[prompt-sheet] step=tap seq=\(prompts[index].seq)")
+        if !selectPrompt(prompts[index]) { showUserPrompts = false }
+        var last = ""
+        while Date().timeIntervalSince(started) < 30 {
+            let state = "\(String(describing: promptStatus?.kind)) sheet=\(showUserPrompts)"
+            if state != last {
+                print("[prompt-sheet] t=\(String(format: "%.2f", Date().timeIntervalSince(started))) \(state)")
+                last = state
+            }
+            if promptStatus == nil && !showUserPrompts { break }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        print("[prompt-sheet] step=done")
+    }
+
     /// `-CorralInspectPromptJump` with `CORRAL_INSPECTION_SESSION_KEY`: waits for
     /// the session's prompts, then jumps to the first, second and last with fixed
     /// dwell times so device screenshots can capture each landing. The owner rule
@@ -338,6 +364,30 @@ struct SessionDetailView: View {
         #endif
     }
 
+    #if os(iOS)
+    /// Returns whether the prompts sheet stays open: it does while a terminal
+    /// prompt is located, so its row shows the status (owner decision 2026-10-19).
+    private func selectPrompt(_ message: RichMessage) -> Bool {
+        guard pane == .terminal else {
+            pendingPromptJump = ConversationTimelineItem.message(message).id
+            return false
+        }
+        // A second tap on the row being located does not restart it.
+        if promptStatus?.seq == message.seq, promptStatus?.kind == .locating { return true }
+        let request = TerminalPromptRequest(seq: message.seq, generation: conversationStore?.promptHistoryGeneration ?? 0)
+        terminalPromptRequest = request
+        promptStatus = TerminalPromptRowStatus(locating: request)
+        return true
+    }
+
+    private func finishPrompt(_ request: UUID, _ outcome: TerminalPromptOutcome) {
+        guard promptStatus?.request == request else { return }
+        promptStatus = promptStatus?.finishing(request, with: outcome)
+        // Landing closes the sheet so the moved terminal is seen.
+        if outcome == .landed { showUserPrompts = false }
+    }
+    #endif
+
     private var detailContent: some View {
         VStack(spacing: 0) {
             ZStack {
@@ -349,8 +399,14 @@ struct SessionDetailView: View {
                 if visitedTerminal && canShowAgentTerminal {
                     AgentTerminalPane(
                         session: session,
-                        isPresented: pane == .terminal && !showProjectTerminal && !showUserPrompts,
-                        promptRequest: terminalPromptRequest
+                        // The terminal stays connected under the sheet while a
+                        // tapped prompt is located, so the host moves at this
+                        // terminal's size; it takes no input meanwhile.
+                        isPresented: pane == .terminal && !showProjectTerminal
+                            && (!showUserPrompts || promptStatus?.kind == .locating),
+                        inputSuspended: showUserPrompts,
+                        promptRequest: terminalPromptRequest,
+                        onPromptOutcome: finishPrompt
                     )
                 }
                 #endif

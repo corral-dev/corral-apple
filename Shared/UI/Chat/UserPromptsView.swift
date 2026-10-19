@@ -4,7 +4,10 @@ import SwiftUI
 struct UserPromptsView: View {
     @Environment(\.interfaceScale) private var interfaceScale
     let prompts: [RichMessage]
-    var onSelect: ((RichMessage) -> Void)?
+    /// The tapped row's terminal jump status, shown in place of its time.
+    var status: TerminalPromptRowStatus? = nil
+    /// Returns whether the sheet stays open (a terminal prompt is being located).
+    var onSelect: ((RichMessage) -> Bool)?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.sessionTextScale) private var sessionTextScale
 
@@ -22,8 +25,7 @@ struct UserPromptsView: View {
                         LazyVStack(alignment: .leading, spacing: Space.sm * interfaceScale) {
                             ForEach(Array(prompts.enumerated()), id: \.element.id) { index, prompt in
                                 Button {
-                                    onSelect?(prompt)
-                                    dismiss()
+                                    if onSelect?(prompt) != true { dismiss() }
                                 } label: {
                                     promptCard(index: index, prompt: prompt)
                                 }
@@ -70,7 +72,10 @@ struct UserPromptsView: View {
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: Space.xs * interfaceScale) {
-                if let stamp = timeLabel(for: prompt) {
+                if status?.seq == prompt.seq, let kind = status?.kind {
+                    TerminalPromptStatusLabel(kind: kind)
+                        .interfaceFont(.caption)
+                } else if let stamp = timeLabel(for: prompt) {
                     Text(stamp)
                         .interfaceFont(.caption)
                         .foregroundStyle(.tertiary)

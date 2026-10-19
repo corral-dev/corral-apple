@@ -19,6 +19,7 @@ struct MacPaneView: View {
     @State private var paneFrame: CGRect = .zero
     @State private var terminalVisited = false
     @State private var terminalPromptRequest: TerminalPromptRequest?
+    @State private var promptStatus: TerminalPromptRowStatus?
     @State private var chatVisited = false
     /// Bumped on every (re)appearance; a disappear-triggered stop only runs
     /// when no reappearance has happened since, so a fast close→reopen can
@@ -83,17 +84,24 @@ struct MacPaneView: View {
                 onTerminal: mode == .terminal,
                 // Over content the whole card covers about a third of the pane.
                 maxListHeight: max(120, bodySize.height * (cardFitsBeside ? 0.7 : MacPromptsCard.overContentHeightFraction) - 56),
-                onSelect: { prompt in
-                    if mode == .terminal {
-                        terminalPromptRequest = TerminalPromptRequest(seq: prompt.seq, generation: store?.promptHistoryGeneration ?? 0)
-                    } else {
-                        workspace.scrollToPrompt(ConversationTimelineItem.message(prompt).id, in: session.key)
-                    }
-                }
+                status: mode == .terminal ? promptStatus : nil,
+                onSelect: selectPrompt
             )
             .interfacePadding(.top, Space.md)
             .interfacePadding(.trailing, Space.md)
         }
+    }
+
+    private func selectPrompt(_ prompt: RichMessage) {
+        guard mode == .terminal else {
+            workspace.scrollToPrompt(ConversationTimelineItem.message(prompt).id, in: session.key)
+            return
+        }
+        // A second click on the row being located does not restart it.
+        if promptStatus?.seq == prompt.seq, promptStatus?.kind == .locating { return }
+        let request = TerminalPromptRequest(seq: prompt.seq, generation: store?.promptHistoryGeneration ?? 0)
+        terminalPromptRequest = request
+        promptStatus = TerminalPromptRowStatus(locating: request)
     }
 
     /// Beside the conversation the card has its full width; over content it
@@ -155,6 +163,7 @@ struct MacPaneView: View {
             if lifetime == nil { workspace.paneFrames[session.key] = frame }
         }
         .onAppear { prepareStore() }
+        .expiringPromptStatus($promptStatus)
         .onChange(of: mode, initial: true) { _, current in
             if current == .terminal && !terminalVisited { terminalVisited = true }
             if current == .chat && !chatVisited { chatVisited = true }
@@ -165,6 +174,10 @@ struct MacPaneView: View {
         }
         .task { await MacPromptJumpInspection.run(key: session.key, workspace: workspace) { prompts } }
         .task { await MacCopyInspection.run(key: session.key, workspace: workspace) }
+        .task(id: prompts.count) {
+            MacPromptStatusInspection.start(key: session.key, mode: mode, prompts: prompts,
+                                            select: selectPrompt, status: { promptStatus })
+        }
         .task { await MacTerminalReturnInspection.inspectColdChatIfRequested(appModel: appModel) }
         .task { await MacSelectionDragInspection.run(key: session.key, workspace: workspace) }
         .task(id: store.map(ObjectIdentifier.init)) {
@@ -210,7 +223,10 @@ struct MacPaneView: View {
                     session: session,
                     isFocused: isFocused && mode == .terminal,
                     isPresented: mode == .terminal && (lifetime?.isPresented ?? true),
-                    promptRequest: terminalPromptRequest
+                    promptRequest: terminalPromptRequest,
+                    onPromptOutcome: { request, outcome in
+                        promptStatus = promptStatus?.finishing(request, with: outcome)
+                    }
                 )
                 .environment(\.conversationScrollReadAction, acknowledgeTerminalScrollRead)
                 .id(session.key)

@@ -13,6 +13,8 @@ struct MacPromptsCard: View {
     var overContent = false
     var onTerminal = false
     var maxListHeight: CGFloat = 360
+    /// The clicked row's jump status, shown in place of its time.
+    var status: TerminalPromptRowStatus? = nil
     var onSelect: (RichMessage) -> Void = { _ in }
 
     static let width: CGFloat = 300
@@ -138,7 +140,9 @@ struct MacPromptsCard: View {
 
     private func rowContent(_ prompt: RichMessage) -> some View {
         VStack(alignment: .leading, spacing: 2 * interfaceScale) {
-            if let stamp = Self.timeLabel(prompt) {
+            if let kind = statusKind(prompt) {
+                statusText(kind)
+            } else if let stamp = Self.timeLabel(prompt) {
                 stampText(stamp)
             }
             promptText(prompt, lineLimit: 4)
@@ -151,11 +155,23 @@ struct MacPromptsCard: View {
         HStack(alignment: .firstTextBaseline, spacing: Space.sm * interfaceScale) {
             promptText(prompt, lineLimit: 2)
             Spacer(minLength: 0)
-            if let stamp = Self.timeLabel(prompt) {
+            if let kind = statusKind(prompt) {
+                statusText(kind)
+                    .fixedSize()
+            } else if let stamp = Self.timeLabel(prompt) {
                 stampText(stamp)
                     .fixedSize()
             }
         }
+    }
+
+    private func statusKind(_ prompt: RichMessage) -> TerminalPromptRowStatus.Kind? {
+        status?.seq == prompt.seq ? status?.kind : nil
+    }
+
+    private func statusText(_ kind: TerminalPromptRowStatus.Kind) -> some View {
+        TerminalPromptStatusLabel(kind: kind)
+            .interfaceFont(.caption)
     }
 
     private func stampText(_ stamp: String) -> some View {

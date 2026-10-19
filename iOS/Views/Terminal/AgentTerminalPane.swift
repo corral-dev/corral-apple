@@ -8,7 +8,11 @@ struct AgentTerminalPane: View {
     @Environment(\.colorScheme) private var colorScheme
     let session: SessionSummary
     let isPresented: Bool
+    /// Visible beneath a sheet: the stream stays live but takes no input.
+    var inputSuspended = false
     var promptRequest: TerminalPromptRequest? = nil
+    /// Reports how a prompt request ended, for the tapped row's status.
+    var onPromptOutcome: (UUID, TerminalPromptOutcome) -> Void = { _, _ in }
 
     @State private var stream: RemoteTerminalStream?
     @State private var isResuming = false
@@ -23,7 +27,7 @@ struct AgentTerminalPane: View {
         ZStack {
             if let stream {
                 ShellTerminalView(stream: stream, isPresented: isPresented,
-                                  allowsInput: isActive && isReady && !isReadonly && stream.phase == .live,
+                                  allowsInput: isActive && isReady && !isReadonly && !inputSuspended && stream.phase == .live,
                                   isAgent: true)
             }
             if isPresented { status }
@@ -59,11 +63,12 @@ struct AgentTerminalPane: View {
                                          presented: isPresented, ready: stream?.phase == .live)) {
             guard isPresented, let request = promptRequest, handledPromptRequest != request.id else { return }
             await Task.yield()
-            // Owner requirement: prompt jumps never surface anything visible.
-            // A miss is a silent no-op by design; the error is intentionally dropped.
+            // The outcome reaches only the tapped row's status; the terminal
+            // itself never shows popups, banners or fallback controls.
             guard !Task.isCancelled, let stream, stream.phase == .live else { return }
-            _ = await stream.navigatePrompt(seq: request.seq, historyGeneration: request.generation)
+            let outcome = await stream.navigatePrompt(seq: request.seq, historyGeneration: request.generation)
             if !Task.isCancelled { handledPromptRequest = request.id }
+            onPromptOutcome(request.id, outcome)
         }
         .onDisappear {
             visibility.active = false
