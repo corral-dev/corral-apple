@@ -7,7 +7,12 @@ import os
 @MainActor
 final class RemoteClient {
     var calls: [(String, [String: Any])] = []
-    struct Capabilities { var sessionCreateReceipts = false; var desktopLayout = true; var terminalPrompt = true }
+    struct Capabilities {
+        var sessionCreateReceipts = false
+        var desktopLayout = true
+        var terminalPrompt = true
+        var terminalPromptDirect = false
+    }
     var hostCapabilities = Capabilities()
     var readyHandlers: [UUID: @MainActor () -> Void] = [:]
     var subscriptions: [String: AsyncStream<RemoteEvent>.Continuation] = [:]
@@ -440,6 +445,31 @@ struct LifecycleProbe {
         _ = await interrupted.value
         check(sink.reveals == beforeTyping, "late prompt lookup took over after ordinary input")
         check(client.calls.contains { $0.0 == WireProtocol.mTerminalInput }, "prompt lookup blocked ordinary input")
+        client.hostCapabilities.terminalPromptDirect = true
+        let nativeStart = client.calls.count
+        let localReveals = sink.reveals
+        client.handler = { _, params in
+            if params["native"] as? Bool == true { return [:] }
+            return ["query": "fullscreen native prompt", "occurrence": 2, "total": 3]
+        }
+        _ = await stream.navigatePrompt(seq: 35, historyGeneration: 9)
+        let nativeCalls = Array(client.calls.dropFirst(nativeStart)).filter { $0.0 == "terminal.prompt" }
+        check(nativeCalls.count == 2, "fullscreen host was not asked to locate the selected prompt")
+        check(nativeCalls.last?.1["native"] as? Bool == true, "native capability was ignored")
+        check(nativeCalls[0].1["navigation"] as? String == nativeCalls[1].1["navigation"] as? String,
+              "native phase lost navigation identity")
+        check(nativeCalls[1].1["seq"] as? Int == 35 && nativeCalls[1].1["generation"] as? Int == 9,
+              "native phase used card text instead of history identity")
+        check(sink.reveals == localReveals, "fullscreen target was falsely resolved from a pinned local header")
+        client.handler = { _, params in
+            if params["native"] as? Bool == true { throw NSError(domain: "native fixture", code: 2) }
+            return ["query": "native miss"]
+        }
+        let nativeMiss = await stream.navigatePrompt(seq: 36, historyGeneration: 9)
+        check(nativeMiss == nil && stream.phase == .live, "native failure damaged the terminal")
+        stream.input.send(Array("ordinary typing after native failure".utf8)[...])
+        await settle()
+        check(client.calls.last?.0 == WireProtocol.mTerminalInput, "native failure blocked ordinary typing")
         stream.stop()
         print("PASS prompt lifecycle: host identity, local read-only path, silent miss, retired response")
     }

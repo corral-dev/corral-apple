@@ -986,7 +986,7 @@ Owner request (screenshot of a single-pane window, toolbar plus pane header outl
 
 - The window toolbar is titled with the app name, "Corral", which identifies nothing ([HIG Toolbars](https://developer.apple.com/design/human-interface-guidelines/toolbars): "Don't title windows with your app name"). The session's identity sits in a second 48-pt pane header below it, so one session spends about 100 pt on two stacked bars.
 - Two control languages are stacked: large glass toolbar capsules above, small segmented control and bare glyphs below.
-- The `terminal` symbol means two things in the same view: the toolbar's project-terminal button and the pane header's agent-terminal segment (icon rule: one symbol, one function).
+- The `terminal` symbol means two things in the same view: the toolbar's project-terminal button and the pane header's agent-terminal segment ([icon rule](~/.config/agentsync/docs/UI_DESIGN_GUIDE.md#图标与文字icon--label): one symbol, one function).
 
 Rejected on the way (owner, same day): (a) moving the lone pane's switch and menu into the toolbar while split panes keep them in their headers — two places for the same controls; (b) toolbar controls acting on the focused pane — a learning cost and wrong-pane risk, given focus visibility is already judged weak; (c) every pane header moved into the titlebar row with its full control set — one dense row of repeated icons in a split.
 

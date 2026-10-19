@@ -156,6 +156,9 @@ struct MacPaneView: View {
         .task { await MacCopyInspection.run(key: session.key, workspace: workspace) }
         .task { await MacTerminalReturnInspection.inspectColdChatIfRequested(appModel: appModel) }
         .task { await MacSelectionDragInspection.run(key: session.key, workspace: workspace) }
+        .task(id: store.map(ObjectIdentifier.init)) {
+            MacTerminalPromptInspection.start(session: session, store: store, workspace: workspace)
+        }
         #endif
         .background {
             MacPaneConnection(sessionKey: session.key, lifetime: lifetime, store: store,

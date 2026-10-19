@@ -197,6 +197,8 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
         }
     }
 
+    func inspectionFocus() { window?.makeFirstResponder(terminal) }
+
     func inspectionScrollUp(lines: Int) { terminal.scrollUp(lines: lines) }
     var inspectionScrollPosition: Double { terminal.scrollPosition }
 

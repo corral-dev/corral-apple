@@ -70,6 +70,18 @@ final class SessionUserPromptsTests: XCTestCase {
         XCTAssertFalse(HostCapabilities.empty.userPrompts)
     }
 
+    func testDirectPromptCapabilityIsExplicitAndSurvivesHostCacheRoundTrip() throws {
+        let old = try JSONDecoder().decode(HostCapabilities.self, from: Data(#"{"terminal_prompt":true}"#.utf8))
+        XCTAssertTrue(old.terminalPrompt)
+        XCTAssertFalse(old.terminalPromptDirect)
+        let direct = try JSONDecoder().decode(HostCapabilities.self,
+            from: Data(#"{"terminal_prompt":true,"terminal_prompt_direct":true}"#.utf8))
+        XCTAssertTrue(direct.terminalPromptDirect)
+        let restored = try JSONDecoder().decode(HostCapabilities.self, from: JSONEncoder().encode(direct))
+        XCTAssertTrue(restored.terminalPrompt)
+        XCTAssertTrue(restored.terminalPromptDirect)
+    }
+
     func testPromptCacheUpdatesWhenTextOrRoleChangesAtSameSequence() throws {
         let store = ConversationStore(sessionKey: "claude:corrected", client: nil, live: false)
         func apply(_ text: String, role: String = "user") throws {

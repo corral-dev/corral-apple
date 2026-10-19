@@ -155,7 +155,7 @@ final class RemoteTerminalStream {
         // Owner requirement (2026-10-17): a prompt jump stays in the live
         // terminal. Every miss below is silent — never switch to the chat
         // renderer, never show a History preview or Return to live terminal
-        // control, and never send agent input.
+        // control. Guarded native location is host-owned and never submits.
         guard let client, client.hostCapabilities.terminalPrompt else { return nil }
         // The sheet can close before the pane has its live snapshot. Wait
         // briefly for it instead of dropping the selection on the floor.
@@ -177,6 +177,16 @@ final class RemoteTerminalStream {
             }
             let occurrence = payload["occurrence"] as? Int ?? 0
             let total = payload["total"] as? Int ?? 1
+            if payload["offset"] as? Int == nil, client.hostCapabilities.terminalPromptDirect {
+                var native = params
+                native["native"] = true
+                _ = try await client.call("terminal.prompt", params: native)
+                guard !Task.isCancelled, generation == mine, promptNavigation == request,
+                      input.revision == inputRevision else { return nil }
+                // The host suppresses intermediate editor frames and emits
+                // the verified native viewport through its ordered snapshot.
+                return nil
+            }
             if sink?.terminalRevealPrompt(query, occurrence: occurrence, total: total) == true { return nil }
             // A resolve never moves the host. Fetch its retained terminal text
             // through the existing ordered snapshot barrier, without agent keys.

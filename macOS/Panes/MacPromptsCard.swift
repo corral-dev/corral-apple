@@ -129,6 +129,7 @@ struct MacPromptsCard: View {
             .contentShape(rowShape)
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("corral.prompt.\(prompt.seq)")
         .onHover { inside in
             if inside { hoveredID = prompt.id } else if hoveredID == prompt.id { hoveredID = nil }
         }

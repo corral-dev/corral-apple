@@ -199,6 +199,7 @@ nonisolated struct HostCapabilities: Codable, Sendable, Equatable {
     /// Host streams raw pane output and takes desktop size votes (`terminal.*`).
     var terminalStream: Bool = false
     var terminalPrompt: Bool = false
+    var terminalPromptDirect: Bool = false
     /// Host lists every human prompt of a session (`session.userPrompts`).
     var userPrompts: Bool = false
     /// Host runs project shells for the project terminal (`shell.*`).
@@ -216,6 +217,7 @@ nonisolated struct HostCapabilities: Codable, Sendable, Equatable {
         case desktopLayout = "desktop_layout"
         case terminalStream = "terminal_stream"
         case terminalPrompt = "terminal_prompt"
+        case terminalPromptDirect = "terminal_prompt_direct"
         case userPrompts = "user_prompts"
         case projectShell = "project_shell"
     }
@@ -234,6 +236,7 @@ nonisolated struct HostCapabilities: Codable, Sendable, Equatable {
         sessionInterrupt = (try? container.decode(Bool.self, forKey: .sessionInterrupt)) ?? features.contains("session_interrupt")
         desktopLayout = (try? container.decode(Bool.self, forKey: .desktopLayout)) ?? features.contains("desktop_layout")
         terminalPrompt = (try? container.decode(Bool.self, forKey: .terminalPrompt)) ?? features.contains("terminal_prompt")
+        terminalPromptDirect = (try? container.decode(Bool.self, forKey: .terminalPromptDirect)) ?? features.contains("terminal_prompt_direct")
         terminalStream = (try? container.decode(Bool.self, forKey: .terminalStream)) ?? features.contains("terminal_stream")
         userPrompts = (try? container.decode(Bool.self, forKey: .userPrompts)) ?? features.contains("user_prompts")
         projectShell = (try? container.decode(Bool.self, forKey: .projectShell)) ?? features.contains("project_shell")
@@ -269,6 +272,8 @@ nonisolated struct HostCapabilities: Codable, Sendable, Equatable {
         try container.encode(sessionRestart, forKey: .sessionRestart)
         try container.encode(desktopLayout, forKey: .desktopLayout)
         try container.encode(terminalStream, forKey: .terminalStream)
+        try container.encode(terminalPrompt, forKey: .terminalPrompt)
+        try container.encode(terminalPromptDirect, forKey: .terminalPromptDirect)
         try container.encode(userPrompts, forKey: .userPrompts)
         try container.encode(projectShell, forKey: .projectShell)
     }
