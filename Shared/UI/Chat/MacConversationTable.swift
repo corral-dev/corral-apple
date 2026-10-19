@@ -58,7 +58,6 @@ struct MacConversationTable: NSViewRepresentable {
     var insets: EdgeInsets
     var scrollToLatestRequest: Int
     @Binding var scrollToMessageID: String?
-    var jumpGlides: (_ target: String, _ visible: String?) -> Bool
     /// Nil when no older pages exist. Returns whether older rows arrived.
     var onLoadEarlier: (() async -> Bool)?
     var onFollowChange: (Bool) -> Void
@@ -220,7 +219,6 @@ struct MacConversationTable: NSViewRepresentable {
         private var rowContent: ((MacConversationRow) -> AnyView)?
         private var environment = EnvironmentValues()
         private var insets = NSEdgeInsets()
-        private var jumpGlides: ((String, String?) -> Bool)?
         private var onLoadEarlier: (() async -> Bool)?
         private var onFollowChange: ((Bool) -> Void)?
         private var scrollToMessageID: Binding<String?>?
@@ -240,14 +238,11 @@ struct MacConversationTable: NSViewRepresentable {
         private var autoLoadHeld = false
         private var historyCheckScheduled = false
         private var lastHistoryLoadRows: [MacConversationRow]?
-        private var isJumping = false
-        private var jumpGeneration = 0
         private var lastReadAck = Date.distantPast
         private var adjustingPosition = false
         private var observers: [NSObjectProtocol] = []
         private var liveCorrectionScheduled = false
         private var pinScheduled = false
-        private var isGliding = false
         private var pendingLiveCorrections: Set<String> = []
 
         override init() {
@@ -310,7 +305,6 @@ struct MacConversationTable: NSViewRepresentable {
                 }
             }
             rowContent = view.rowContent
-            jumpGlides = view.jumpGlides
             onLoadEarlier = view.onLoadEarlier
             onFollowChange = view.onFollowChange
             scrollToMessageID = view.$scrollToMessageID
@@ -585,7 +579,7 @@ struct MacConversationTable: NSViewRepresentable {
             }
         }
 
-        private func setReadingTop(_ y: CGFloat, animated: Bool = false) {
+        private func setReadingTop(_ y: CGFloat) {
             guard let scroll else { return }
             let clip = scroll.contentView
             let maxTop = max(contentHeight - readingRect.height, 0)
@@ -593,26 +587,8 @@ struct MacConversationTable: NSViewRepresentable {
             guard abs(clip.bounds.origin.y - origin.y) > 0.25 else { return }
             adjustingPosition = true
             defer { adjustingPosition = false }
-            if animated {
-                isGliding = true
-                NSAnimationContext.runAnimationGroup { context in
-                    context.duration = MacConversationMotion.glideDuration
-                    context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                    clip.animator().setBoundsOrigin(origin)
-                }
-            } else {
-                if isGliding {
-                    // Supersede an in-flight jump glide, or it would pull the
-                    // viewport back into history after this move.
-                    isGliding = false
-                    NSAnimationContext.runAnimationGroup { context in
-                        context.duration = 0
-                        clip.animator().setBoundsOrigin(origin)
-                    }
-                }
-                clip.scroll(to: origin)
-                scroll.reflectScrolledClipView(clip)
-            }
+            clip.scroll(to: origin)
+            scroll.reflectScrolledClipView(clip)
         }
 
         private func setFollowsLatest(_ value: Bool) {
@@ -623,11 +599,6 @@ struct MacConversationTable: NSViewRepresentable {
         }
 
         private func requestLatest() {
-            if isJumping {
-                jumpGeneration += 1
-                isJumping = false
-                scroll?.alphaValue = 1
-            }
             setFollowsLatest(true)
             pinToLatest()
         }
@@ -698,7 +669,6 @@ struct MacConversationTable: NSViewRepresentable {
         }
 
         private func updateFollowFromViewport() {
-            guard !isJumping else { return }
             let distance = contentHeight - readingRect.maxY
             setFollowsLatest(distance <= 44)
         }
@@ -731,7 +701,7 @@ struct MacConversationTable: NSViewRepresentable {
 
         private func loadEarlierIfReading() {
             guard canMeasure, !needsRemeasure, measuredWidth > 1,
-                  let load = onLoadEarlier, !isAutoLoading, !autoLoadHeld, !isJumping,
+                  let load = onLoadEarlier, !isAutoLoading, !autoLoadHeld,
                   lastHistoryLoadRows != rows,
                   ChatAutoLoadEarlierPolicy.shouldLoad(
                       contentHeight: contentHeight,
@@ -752,48 +722,14 @@ struct MacConversationTable: NSViewRepresentable {
 
         // MARK: Jumps
 
-        /// Prompt jumps: a nearby target glides, a far one fades out, moves and
-        /// fades back in (owner request 2026-10-07). Reduce Motion always fades.
+        /// Prompt jumps land the target in one unanimated move (owner,
+        /// 2026-10-19); row heights are exact, so no settle pass is needed.
         private func jump(to id: String) {
             guard table != nil, let index = indexByID[id] else { return }
             setFollowsLatest(false)
             userHasScrolled = true
-            isJumping = true
-            jumpGeneration += 1
-            let generation = jumpGeneration
-            if environment.promptJumpAnimated == false {
-                setReadingTop(jumpTarget(id, fallback: index), animated: false)
-                isJumping = false
-                return
-            }
-            let topID = readingRowIndexes().first.map { rows[$0].id }
-            let glides = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-                && (jumpGlides?(id, topID) ?? true)
-            if glides {
-                setReadingTop(jumpTarget(id, fallback: index), animated: true)
-                DispatchQueue.main.asyncAfter(deadline: .now() + MacConversationMotion.glideDuration + 0.05) { [weak self] in
-                    guard let self, generation == self.jumpGeneration else { return }
-                    self.isGliding = false
-                    self.isJumping = false
-                    self.loadEarlierIfReading()
-                }
-            } else {
-                NSAnimationContext.runAnimationGroup { context in
-                    context.duration = MacConversationMotion.fadeOutDuration
-                    scroll?.animator().alphaValue = 0
-                } completionHandler: { [weak self] in
-                    MainActor.assumeIsolated {
-                        guard let self, generation == self.jumpGeneration else { return }
-                        self.setReadingTop(self.jumpTarget(id, fallback: index))
-                        NSAnimationContext.runAnimationGroup { context in
-                            context.duration = MacConversationMotion.fadeInDuration
-                            self.scroll?.animator().alphaValue = 1
-                        }
-                        self.isJumping = false
-                        self.loadEarlierIfReading()
-                    }
-                }
-            }
+            setReadingTop(jumpTarget(id, fallback: index))
+            loadEarlierIfReading()
         }
 
         /// Lands the target row on the reading viewport's top edge.
@@ -868,7 +804,6 @@ struct MacConversationScroller: View {
     var rowContent: (MacConversationRow) -> AnyView
     var scrollToLatestRequest: Int
     @Binding var scrollToMessageID: String?
-    var jumpGlides: (_ target: String, _ visible: String?) -> Bool
     var onLoadEarlier: (() async -> Bool)?
     var onFollowChange: (Bool) -> Void = { _ in }
 
@@ -884,7 +819,6 @@ struct MacConversationScroller: View {
             insets: insets,
             scrollToLatestRequest: scrollToLatestRequest + latestBump,
             scrollToMessageID: $scrollToMessageID,
-            jumpGlides: jumpGlides,
             onLoadEarlier: onLoadEarlier,
             onFollowChange: { followsLatest = $0; onFollowChange($0) }
         )
@@ -896,22 +830,6 @@ struct MacConversationScroller: View {
                     .padding(.bottom, insets.bottom)
             }
         }
-    }
-}
-
-/// Jump motion, matching the lazy-stack conversation (`ChatJumpMotion`).
-private enum MacConversationMotion {
-    static let glideDuration: TimeInterval = seconds(0.45)
-    static let fadeOutDuration: TimeInterval = seconds(0.12)
-    static let fadeInDuration: TimeInterval = seconds(0.22)
-
-    private static func seconds(_ value: Double) -> Double {
-        #if DEBUG
-        let slowdown = Double(ProcessInfo.processInfo.environment["CORRAL_INSPECTION_MOTION_SLOWDOWN"] ?? "") ?? 1
-        return value * max(slowdown, 1)
-        #else
-        return value
-        #endif
     }
 }
 

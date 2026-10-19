@@ -121,7 +121,7 @@ struct SessionDetailView: View {
         }
         #endif
         .sheet(isPresented: $showUserPrompts, onDismiss: {
-            // Jump once the sheet is gone, so the glide is seen, not hidden behind it.
+            // Jump once the sheet is gone, so the landing is seen, not hidden behind it.
             if let pendingTerminalPrompt {
                 self.pendingTerminalPrompt = nil
                 terminalPromptRequest = pendingTerminalPrompt
@@ -897,7 +897,7 @@ struct SessionDetailView: View {
 
         func showQuestionPending() {
             // The host refused chat input while its picker owns the keyboard:
-            // glide to the open question card and show its quiet hint
+            // move to the open question card and show its quiet hint
             // instead of staging a bubble the host would refuse.
             view.blockedQuestionRequestID = view.conversationStore?.prompts.first?.requestID
             view.scrollToMessageID = "prompts"

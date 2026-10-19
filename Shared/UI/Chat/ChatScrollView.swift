@@ -72,9 +72,6 @@ struct ChatScrollView<Header: View, Content: View>: View {
     /// raw bottom edge so a short transcript never overshoots into blank.
     let latestID: String?
     @Binding var scrollToMessageID: String?
-    /// Whether a jump from `visible` (topmost visible row) to `target` is short
-    /// enough to glide; a far jump fades instead.
-    var jumpGlides: ((_ target: String, _ visible: String?) -> Bool)?
     /// Nil when no older pages exist. Returns whether older messages arrived.
     /// Pulled by gesture, and loaded automatically while reading near the top.
     var onPullToLoadEarlier: (() async -> Bool)?
@@ -87,7 +84,6 @@ struct ChatScrollView<Header: View, Content: View>: View {
         scrollToLatestRequest: Int,
         latestID: String? = nil,
         scrollToMessageID: Binding<String?>,
-        jumpGlides: ((_ target: String, _ visible: String?) -> Bool)? = nil,
         onPullToLoadEarlier: (() async -> Bool)? = nil,
         pullProgress: Binding<Double?> = .constant(nil),
         @ViewBuilder header: () -> Header,
@@ -96,7 +92,6 @@ struct ChatScrollView<Header: View, Content: View>: View {
         self.scrollToLatestRequest = scrollToLatestRequest
         self.latestID = latestID
         self._scrollToMessageID = scrollToMessageID
-        self.jumpGlides = jumpGlides
         self.header = header()
         self.content = content()
         self.onPullToLoadEarlier = onPullToLoadEarlier
@@ -109,7 +104,6 @@ struct ChatScrollView<Header: View, Content: View>: View {
                 scrollToLatestRequest: scrollToLatestRequest,
                 latestID: latestID,
                 scrollToMessageID: $scrollToMessageID,
-                jumpGlides: jumpGlides,
                 onPullToLoadEarlier: onPullToLoadEarlier,
                 pullProgress: pullProgress,
                 header: header,
@@ -205,14 +199,11 @@ private struct NativeChatScrollView<Header: View, Content: View>: View {
     let scrollToLatestRequest: Int
     let latestID: String?
     @Binding var scrollToMessageID: String?
-    var jumpGlides: ((_ target: String, _ visible: String?) -> Bool)?
     var onPullToLoadEarlier: (() async -> Bool)?
     var pullProgress: Binding<Double?> = .constant(nil)
     let header: Header
     let content: Content
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.promptJumpAnimated) private var promptJumpAnimated
     @Environment(\.conversationScrollReadAction) private var acknowledgeRead
     #if os(macOS)
     @Environment(\.macConversationTextDocument) private var selectionDocument
@@ -229,11 +220,9 @@ private struct NativeChatScrollView<Header: View, Content: View>: View {
     @State private var isAutoLoading = false
     /// A fetch that brought nothing waits for the next scroll gesture, never per frame.
     @State private var autoLoadHeld = false
-    /// A message jump is gliding; automatic earlier loading would cut it short.
+    /// A message jump is settling; automatic earlier loading would shift its target.
     @State private var isJumping = false
     @State private var jumpGeneration = 0
-    /// The conversation is faded out while a far jump moves under it.
-    @State private var isJumpFaded = false
     /// An explicit latest request (composer focus, send, jump button) arrived
     /// while the reader's fling was still coasting. Coasting must not cancel it:
     /// it lands again once the scroll comes to rest; a new drag withdraws it.
@@ -252,7 +241,6 @@ private struct NativeChatScrollView<Header: View, Content: View>: View {
             .scrollTargetLayout()
             .chatReadableColumn()
             .nativeOverlayScrollers()
-            .opacity(isJumpFaded ? 0 : 1)
         }
         #if os(macOS)
         // Messages pass under the window toolbar; a hard edge keeps the title legible.
@@ -409,10 +397,10 @@ private struct NativeChatScrollView<Header: View, Content: View>: View {
         }
     }
 
-    /// Moves to a message (Your prompts) with visible motion. A nearby target
-    /// glides. A far one fades out, moves and fades back in: lazy rows far from
-    /// the viewport only have estimated heights, and gliding through them
-    /// flickers on the Mac (measured 2026-10-07). Reduce Motion always fades.
+    /// Lands a message (Your prompts) at the top edge in one unanimated move
+    /// (owner, 2026-10-19). Rows far from the viewport only have estimated
+    /// heights, so once the rows around the target have realized it settles on
+    /// the target again, still without motion.
     private func jump(to messageID: String) {
         followsLatest = false
         // A jump to a message is reading history, like the reader's own scroll.
@@ -420,29 +408,11 @@ private struct NativeChatScrollView<Header: View, Content: View>: View {
         isJumping = true
         jumpGeneration += 1
         let generation = jumpGeneration
-        if !promptJumpAnimated {
-            withoutAnimation { position.scrollTo(id: messageID, anchor: .top) }
-            isJumping = false
-            return
-        }
-        let glides = !reduceMotion && (jumpGlides?(messageID, topVisibleID) ?? true)
+        withoutAnimation { position.scrollTo(id: messageID, anchor: .top) }
         Task { @MainActor in
-            if glides {
-                withAnimation(ChatJumpMotion.glide) { position.scrollTo(id: messageID, anchor: .top) }
-                // Scroll animations report completion at once, so wait out the glide.
-                try? await Task.sleep(for: ChatJumpMotion.glideDuration)
-            } else {
-                withAnimation(ChatJumpMotion.fadeOut) { isJumpFaded = true }
-                try? await Task.sleep(for: ChatJumpMotion.fadeOutDuration)
-                guard generation == jumpGeneration else { return }
-                withoutAnimation { position.scrollTo(id: messageID, anchor: .top) }
-                // Let the rows around the target realize and measure.
-                try? await Task.sleep(for: .milliseconds(60))
-            }
+            try? await Task.sleep(for: .milliseconds(60))
             guard generation == jumpGeneration else { return }
-            // Rows measured on the way can shift the target; settle on it without motion.
             withoutAnimation { position.scrollTo(id: messageID, anchor: .top) }
-            if isJumpFaded { withAnimation(ChatJumpMotion.fadeIn) { isJumpFaded = false } }
             isJumping = false
             loadEarlierIfReading()
         }
@@ -494,7 +464,7 @@ private struct NativeChatScrollView<Header: View, Content: View>: View {
         #endif
     }
 
-    /// The reader asked for the latest messages. It outranks motion already in
+    /// The reader asked for the latest messages. It outranks work already in
     /// flight: a message jump's delayed settle would otherwise drag the view back
     /// into history (reproduced 2026-10-13 when the keyboard rose right after a
     /// Your prompts jump), and a coasting fling would clear following before the
@@ -503,7 +473,6 @@ private struct NativeChatScrollView<Header: View, Content: View>: View {
         if isJumping {
             jumpGeneration += 1
             isJumping = false
-            if isJumpFaded { withAnimation(ChatJumpMotion.fadeIn) { isJumpFaded = false } }
         }
         if isUserScrolling { latestPending = true }
         showLatest()
@@ -535,8 +504,6 @@ private struct CompatibleChatScrollView<Header: View, Content: View>: View {
     var pullProgress: Binding<Double?> = .constant(nil)
     let header: Header
     let content: Content
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.promptJumpAnimated) private var promptJumpAnimated
     @Environment(\.conversationScrollReadAction) private var acknowledgeRead
     @State private var positionID: String?
     @State private var containerHeight: CGFloat = 0
@@ -580,11 +547,11 @@ private struct CompatibleChatScrollView<Header: View, Content: View>: View {
             .onChange(of: scrollToMessageID) { _, messageID in
                 guard let messageID else { return }
                 scrollToMessageID = nil
-                // The Your prompts landing is the viewport's top edge. The
-                // former `positionID` assignment always used the bottom anchor.
-                withAnimation(reduceMotion || !promptJumpAnimated ? nil : ChatJumpMotion.glide) {
-                    proxy.scrollTo(messageID, anchor: .top)
-                }
+                // The Your prompts landing is the viewport's top edge, reached
+                // without motion. `positionID` would use the bottom anchor.
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) { proxy.scrollTo(messageID, anchor: .top) }
             }
             .overlay(alignment: .bottomTrailing) {
                 if positionID != nil, positionID != Self.bottomID {
@@ -600,25 +567,6 @@ private struct CompatibleChatScrollView<Header: View, Content: View>: View {
             containerHeight: containerHeight
         ) else { return }
         proxy.scrollTo(latestID ?? Self.bottomID, anchor: .bottom)
-    }
-}
-
-/// Motion of a message jump (Your prompts). Debug window captures may slow it
-/// with `CORRAL_INSPECTION_MOTION_SLOWDOWN` (e.g. 10); Release never does.
-private enum ChatJumpMotion {
-    static let glide = Animation.smooth(duration: seconds(0.45))
-    static let glideDuration = Duration.seconds(seconds(0.5))
-    static let fadeOut = Animation.easeIn(duration: seconds(0.12))
-    static let fadeOutDuration = Duration.seconds(seconds(0.12))
-    static let fadeIn = Animation.easeOut(duration: seconds(0.22))
-
-    private static func seconds(_ value: Double) -> Double {
-        #if DEBUG
-        let slowdown = Double(ProcessInfo.processInfo.environment["CORRAL_INSPECTION_MOTION_SLOWDOWN"] ?? "") ?? 1
-        return value * max(slowdown, 1)
-        #else
-        return value
-        #endif
     }
 }
 

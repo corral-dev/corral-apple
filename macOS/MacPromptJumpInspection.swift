@@ -4,8 +4,8 @@ import Foundation
 
 /// Debug-only prompt jump acceptance (`-CorralInspectPromptJump`, with
 /// `-CorralInspectConversation` and `CORRAL_INSPECTION_SESSION_KEY` naming a long
-/// session). The pane jumps to its first prompt (far: fades through), the second
-/// (near: glides) and the last; each step first writes its name to
+/// session). The pane jumps to its first prompt, the second and the last, each in
+/// one unanimated move; each step first writes its name to
 /// `/tmp/corral-mac-prompt-jump-step.txt` so an external sampler can capture frames.
 ///
 /// After each jump settles the harness writes the live table's first visible
@@ -34,14 +34,37 @@ enum MacPromptJumpInspection {
             let target = ConversationTimelineItem.message(prompt).id
             mark(name)
             try? await Task.sleep(for: .milliseconds(400))
+            let before = sample(key: key, workspace: workspace)
             workspace.scrollToPrompt(target, in: key)
-            try? await Task.sleep(for: .seconds(4))
-            reports.append(record(step: name, target: target, key: key, workspace: workspace))
+            var frames: [[String: Double]] = []
+            for _ in 0..<75 {
+                try? await Task.sleep(for: .milliseconds(8))
+                if let frame = sample(key: key, workspace: workspace) { frames.append(frame) }
+            }
+            try? await Task.sleep(for: .seconds(3))
+            var report = record(step: name, target: target, key: key, workspace: workspace)
+            report["before"] = before ?? [:]
+            report["frames"] = frames
+            reports.append(report)
             if let data = try? JSONSerialization.data(withJSONObject: reports, options: [.prettyPrinted, .sortedKeys]) {
                 try? data.write(to: URL(fileURLWithPath: "/tmp/corral-mac-prompt-jump.json"), options: .atomic)
             }
         }
         mark("done")
+    }
+
+    /// Clip origin and conversation opacity of the pane, sampled while a jump
+    /// runs: an unanimated jump shows only the start and final offsets at full
+    /// opacity, never intermediate positions or a fade.
+    private static func sample(key: String, workspace: MacWorkspace) -> [String: Double]? {
+        guard let pane = workspace.paneSurfaces.existingEntry(for: key)?.view,
+              let table = descendants(pane).compactMap({ $0 as? MacConversationTable.ConversationTableView })
+                .max(by: { $0.frame.height < $1.frame.height }),
+              let scroll = table.enclosingScrollView else { return nil }
+        return ["t": Date.now.timeIntervalSince1970,
+                "originY": Double(scroll.contentView.bounds.origin.y),
+                "alpha": Double(scroll.alphaValue),
+                "layerOpacity": Double(scroll.layer?.presentation()?.opacity ?? scroll.layer?.opacity ?? 1)]
     }
 
     /// The comparison is against the reading viewport, not the raw clip view:

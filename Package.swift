@@ -52,7 +52,6 @@ let package = Package(
                 "ChatComposerPolicyTests.swift",
                 "HapticFeedbackPolicyTests.swift",
                 "ChatHistoryPullTests.swift",
-                "ChatJumpPlanTests.swift",
                 "ChatImageReferenceTests.swift",
                 "ConversationProvisionalWorkingTests.swift",
                 "ConversationSendCoordinatorTests.swift",

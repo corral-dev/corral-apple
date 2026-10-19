@@ -6,7 +6,3 @@ struct ChatScrollRequest: Hashable {
     let messageID: String
     let token = UUID()
 }
-
-extension EnvironmentValues {
-    @Entry var promptJumpAnimated = true
-}

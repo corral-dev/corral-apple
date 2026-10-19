@@ -183,8 +183,14 @@ struct ChatView: View {
             await store.loadEarlier(through: seq)
         }
         #if os(macOS)
-        if let index = store.timelineItems.firstIndex(where: { $0.id == messageID }) {
-            macHistoryStartID = store.timelineItems[max(0, index - 1)].id
+        // Only widen the window: trimming rows above an already visible target
+        // moves the reader once before the jump lands (a two-step jump).
+        let items = store.timelineItems
+        if let index = items.firstIndex(where: { $0.id == messageID }),
+           let first = macVisibleItems.first,
+           let start = items.firstIndex(where: { $0.id == first.id }),
+           index - 1 < start {
+            macHistoryStartID = items[max(0, index - 1)].id
         }
         #endif
         revealedMessageID = messageID
@@ -256,9 +262,6 @@ struct ChatView: View {
             scrollToLatestRequest: scrollToLatestRequest + promptSubmission,
             latestID: latestID,
             scrollToMessageID: $revealedMessageID,
-            jumpGlides: { target, visible in
-                ChatJumpPlan.glides(in: store.timelineItems.map(\.id), target: target, visible: visible)
-            },
             onPullToLoadEarlier: store.hasMoreHistory ? {
                 let oldest = store.oldestSequence
                 await store.loadEarlier()
@@ -421,9 +424,6 @@ struct ChatView: View {
             rowContent: { AnyView(macRowContent($0)) },
             scrollToLatestRequest: scrollToLatestRequest + promptSubmission,
             scrollToMessageID: $revealedMessageID,
-            jumpGlides: { target, visible in
-                ChatJumpPlan.glides(in: store.timelineItems.map(\.id), target: target, visible: visible)
-            },
             onLoadEarlier: macHasHiddenHistory || store.hasMoreHistory ? {
                 await macLoadEarlier()
             } : nil,
