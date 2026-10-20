@@ -26,6 +26,8 @@ final class AppModel {
     /// 当前连接通路（局域网 / 中继），未连上时为 nil。
     private(set) var activeTransport: ConnectionTransport?
     private(set) var client: RemoteClient?
+    /// Restart feedback shared by the iPhone and Mac session surfaces.
+    let restarts = SessionRestartTracker()
     /// 开启时局域网与中继并发抢答；关闭时只走中继（写入 UserDefaults）。
     var preferDirectConnection: Bool {
         didSet {

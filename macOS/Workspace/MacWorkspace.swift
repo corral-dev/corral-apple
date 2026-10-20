@@ -686,8 +686,14 @@ final class MacWorkspace {
         await createBeside(source, method: WireProtocol.mSessionHandoff, params: ["key": source.key, "runtime": runtimeID])
     }
 
+    /// The shared tracker shows the cue in the pane header and composer in the
+    /// same frame as the menu selection; the call only settles it.
+    var restarts: SessionRestartTracker? { appModel?.restarts }
+
     func restart(_ key: String) async {
-        await call(WireProtocol.mSessionRestart, ["key": key])
+        guard let restarts, restarts.begin(key) else { return }
+        let result = await call(WireProtocol.mSessionRestart, ["key": key])
+        restarts.finish(key, succeeded: result != nil)
     }
 
     func stop(_ key: String) async {

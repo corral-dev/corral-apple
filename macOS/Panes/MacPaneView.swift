@@ -358,7 +358,14 @@ struct MacPaneHeader: View {
             // conversation below it (owner report 2026-10-17).
             titleButton
                 .layoutPriority(1)
-            statusDotsView
+            projectLabel
+            if let phase = appModel.restarts.phase(for: session.key) {
+                SessionRestartStatusLabel(phase: phase, font: .system(size: 12), compact: true)
+                    .interfacePadding(.leading, 8)
+                    .fixedSize()
+            } else {
+                statusDotsView
+            }
             Spacer(minLength: Space.sm)
             // Hover-only (owner correction 2026-10-18); the slots keep their
             // width so the title never reflows when they appear.
@@ -414,6 +421,22 @@ struct MacPaneHeader: View {
         .accessibilityLabel(Text(verbatim: SessionPresentation.displayTitle(for: session)))
         .accessibilityValue(promptsCount > 0 ? Text("mac.prompts.title \(promptsCount)") : Text(verbatim: ""))
         .accessibilityAddTraits(promptsOpen && promptsCount > 0 ? .isSelected : [])
+    }
+
+    /// The project names the pane among splits; it shortens before the title
+    /// (owner report 2026-10-20).
+    @ViewBuilder
+    private var projectLabel: some View {
+        let project = SessionPresentation.projectName(from: session)
+        if !project.isEmpty {
+            Text(verbatim: project)
+                .interfaceFont(.system(size: 12))
+                .foregroundStyle(Color.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .interfacePadding(.leading, 8)
+                .accessibilityLabel(Text(verbatim: project))
+        }
     }
 
     /// Kebab: the system ellipsis turned upright (no vertical variant ships).

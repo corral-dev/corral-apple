@@ -29,6 +29,7 @@ enum MacPaneHeaderInspection {
         let enteredModes = workspace.paneKeys.map { ($0, workspace.mode(for: $0)) }
         var report: [[String: Any]] = []
         report.append(contentsOf: capture(workspace: workspace, step: "entry"))
+        report.append(contentsOf: await inspectRestart(workspace: workspace))
         if workspace.paneKeys.count > 1 {
             let other = workspace.paneKeys.first { $0 != workspace.focusedKey }
             if let other {
@@ -60,6 +61,32 @@ enum MacPaneHeaderInspection {
         if let data = try? JSONSerialization.data(withJSONObject: summary, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: URL(fileURLWithPath: "/tmp/corral-pane-header.json"), options: .atomic)
         }
+    }
+
+    /// `-CorralInspectRestart`: restart the focused disposable pane through the
+    /// production menu handler and capture the cue while it runs, on success and
+    /// after it clears. Refuses any session outside a `corral-phone-acceptance` project.
+    private static func inspectRestart(workspace: MacWorkspace) async -> [[String: Any]] {
+        guard ProcessInfo.processInfo.arguments.contains("-CorralInspectRestart"),
+              let key = workspace.focusedKey,
+              workspace.projectPath(of: key).contains("corral-phone-acceptance"),
+              let restarts = workspace.restarts else { return [] }
+        var results: [[String: Any]] = []
+        let started = Date()
+        let call = Task { await workspace.restart(key) }
+        try? await Task.sleep(for: .milliseconds(150))
+        results.append(["step": "restart-phase-150ms", "phase": String(describing: restarts.phase(for: key))])
+        results.append(contentsOf: capture(workspace: workspace, step: "restarting"))
+        await call.value
+        let elapsed = Date().timeIntervalSince(started)
+        results.append(["step": "restart-settled", "seconds": elapsed,
+                        "phase": String(describing: restarts.phase(for: key)),
+                        "actionError": workspace.actionError ?? ""])
+        results.append(contentsOf: capture(workspace: workspace, step: "restarted"))
+        try? await Task.sleep(for: .seconds(3))
+        results.append(["step": "restart-cleared", "phase": String(describing: restarts.phase(for: key))])
+        results.append(contentsOf: capture(workspace: workspace, step: "cleared"))
+        return results
     }
 
     private static func capture(workspace: MacWorkspace, step: String) -> [[String: Any]] {

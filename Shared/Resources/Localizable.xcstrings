@@ -3429,6 +3429,22 @@
         }
       }
     },
+    "session.actions.restarted": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Session restarted"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会话已重启"
+          }
+        }
+      }
+    },
     "session.actions.restart.update_host": {
       "localizations": {
         "en": {
@@ -3457,6 +3473,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "正在重启…"
+          }
+        }
+      }
+    },
+    "session.actions.restarting_session": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restarting session…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在重启会话…"
           }
         }
       }

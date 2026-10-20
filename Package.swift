@@ -50,6 +50,7 @@ let package = Package(
             ],
             sources: [
                 "ChatComposerPolicyTests.swift",
+                "SessionRestartTrackerTests.swift",
                 "HapticFeedbackPolicyTests.swift",
                 "ChatHistoryPullTests.swift",
                 "ChatImageReferenceTests.swift",

@@ -63,7 +63,6 @@ struct SessionDetailView: View {
     @State private var draftAttachments: [DraftImageAttachment] = []
     @State private var isSending = false
     @State private var isActionBusy = false
-    @State private var isRestarting = false
     @State private var isInterrupting = false
     @State private var restartFailed = false
     @State private var runtimes: [RuntimeEntry] = []
@@ -447,11 +446,8 @@ struct SessionDetailView: View {
                 .lineLimit(1)
             // Running / waiting live only in the activity cue above the composer.
             HStack(spacing: Space.xs * interfaceScale) {
-                if isRestarting {
-                    ProgressView().interfaceControlSize(.mini)
-                    Text("session.actions.restarting")
-                        .interfaceFont(.caption2)
-                        .foregroundStyle(.secondary)
+                if let restartPhase {
+                    SessionRestartStatusLabel(phase: restartPhase, font: .caption2, compact: true)
                 } else if let runtimeLabel = runtimeSubtitle {
                     Circle()
                         .fill(Palette.runtime(session.runtime))
@@ -459,6 +455,15 @@ struct SessionDetailView: View {
                     Text(runtimeLabel)
                         .interfaceFont(.caption2)
                         .foregroundStyle(.secondary)
+                        .layoutPriority(1)
+                    // The project identifies the page; it truncates before the assistant.
+                    if !headerProject.isEmpty {
+                        Text(verbatim: "· \(headerProject)")
+                            .interfaceFont(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
                     Image(systemName: "chevron.down")
                         .interfaceFont(.caption2.weight(.semibold))
                         .foregroundStyle(.tertiary)
@@ -481,6 +486,10 @@ struct SessionDetailView: View {
         return name.isEmpty ? nil : name
     }
 
+    private var headerProject: String { SessionPresentation.projectName(from: session) }
+
+    private var restartPhase: SessionRestartTracker.Phase? { appModel.restarts.phase(for: sessionKey) }
+
     /// Clear all client projections synchronously; the host confirms asynchronously.
     /// Keeping this on the detail also covers injected Mac pane stores.
     private func acknowledgeScrollRead() {
@@ -496,6 +505,10 @@ struct SessionDetailView: View {
 
     private var composerStack: some View {
         VStack(spacing: 0) {
+            if let restartPhase {
+                SessionRestartStatusRow(phase: restartPhase)
+                    .transition(.opacity)
+            }
             if let composerError {
                 HStack(spacing: Space.sm * interfaceScale) {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -532,7 +545,7 @@ struct SessionDetailView: View {
             ComposerBar(
                 text: $draft,
                 attachments: $draftAttachments,
-                isBusy: isSending || isActionBusy,
+                isBusy: isSending || isActionBusy || restartPhase == .restarting,
                 autoFocus: autoFocusComposer,
                 focusRequest: composerFocusRequest,
                 onFocusChange: composerFocusChanged,
@@ -709,19 +722,20 @@ struct SessionDetailView: View {
               let client = appModel.client,
               client.hostCapabilities.sessionRestart else { return }
         // Acquire before scheduling the task; repeated taps cannot start a second request.
+        let restarts = appModel.restarts
+        let key = sessionKey
+        guard restarts.begin(key) else { return }
         isActionBusy = true
-        isRestarting = true
         clearComposerError()
         let operationID = hapticScope.beginOperation()
         Task {
-            defer {
-                isActionBusy = false
-                isRestarting = false
-            }
+            defer { isActionBusy = false }
             do {
-                _ = try await client.call(WireProtocol.mSessionRestart, params: ["key": sessionKey])
+                _ = try await client.call(WireProtocol.mSessionRestart, params: ["key": key])
+                restarts.finish(key, succeeded: true)
                 HapticFeedback.shared.emit(.success, operationID: operationID, scope: hapticScope)
             } catch {
+                restarts.finish(key, succeeded: false)
                 showComposerError(SessionActionsMenu.failureMessage(for: error), operationID: operationID)
                 restartFailed = true
             }
