@@ -24,6 +24,9 @@ final class MacWorkspace {
 
     private(set) var paneKeys: [String] = []
     var focusedKey: String?
+    /// Explicit pane activation also reconciles sidebar selection when the
+    /// pane was already focused (for example after a native batch selection).
+    private(set) var paneFocusSerial = 0
     /// Panes the user added, which fade in. Panes opened by a sidebar click,
     /// restoration or a machine switch are absent.
     private(set) var pendingEntrances: Set<String> = []
@@ -364,6 +367,7 @@ final class MacWorkspace {
     }
 
     func focus(_ key: String) {
+        paneFocusSerial &+= 1
         guard focusedKey != key else { return }
         focusedKey = key
         guard paneKeys.count >= 2, layout.group(containing: key) != nil else { return }

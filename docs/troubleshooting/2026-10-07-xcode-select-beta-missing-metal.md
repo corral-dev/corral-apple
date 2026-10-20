@@ -22,3 +22,5 @@ then build as usual. Install the component for a new Xcode with `xcodebuild -dow
 ## Environment improvement (open)
 
 Build scripts (`scripts/ios_sim.sh`, Mac release scripts) inherit whatever `xcode-select` points to. They should check the Metal component of the selected Xcode before compiling and name the fix, instead of failing deep in the SwiftTerm package build.
+
+<!-- 该文档整理/压缩于 2026-10-20 -->

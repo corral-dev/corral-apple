@@ -54,7 +54,7 @@ Always quiet: launch, opening/returning between pages, ordinary scrolling, searc
 4. When one operation produces a start and outcome in the same UI update, play its outcome only. During an asynchronous send, a later warning/error is useful because it changes the visible pending state. Never play a backlog after the page disappears or the app becomes active again.
 5. A starting tuning budget for incidental selection/threshold taps is at most one per 150 ms; suppress extras instead of queuing them. This is a Corral comfort budget, not an Apple requirement. It must not suppress a distinct explicit failure or change the task's visible state.
 6. App-authored feedback requires an active foreground scene. Unsolicited question/turn feedback additionally requires the matching host and session detail to be visible, reading position following the latest content, and no active typing or text selection. In history-reading mode, show the existing new-content cue without vibrating. Suppressed feedback is consumed, not deferred until return.
-7. Other sessions and hosts remain silent inside the app. Lock-screen/background alerts remain owned by the existing system-notification path and its preferences. A turn/request handled by that path must not also produce an app pulse for the same event; returning from a notification never replays it. See [completion notification design](https://github.com/corral-dev/corral/blob/main/docs/design/AGENT_COMPLETION_NOTIFICATIONS_DESIGN.md) for terminal evidence and notification deduplication ownership.
+7. Other sessions and hosts remain silent inside the app. Lock-screen/background alerts remain owned by the existing system-notification path and its preferences. A turn/request handled by that path must not also produce an app pulse for the same event; returning from a notification never replays it. See [completion notification design](../https://github.com/corral-dev/corral/blob/main/docs/design/AGENT_COMPLETION_NOTIFICATIONS_DESIGN.md) for terminal evidence and notification deduplication ownership.
 8. For unsolicited events that coincide, an interruption takes priority over completion, which takes priority over a question-card arrival tap. Do not stack several notification rhythms for one state change.
 
 ## Default behavior and accessibility
@@ -117,3 +117,5 @@ Record the source commit, installed version, event/attempt identity, outcome and
 - [UIKit UIFeedbackGenerator](https://developer.apple.com/documentation/uikit/uifeedbackgenerator): system feedback-generator family for imperative integration.
 
 These references support API scope and semantic principles. The Corral event matrix, intensity starting point, suppression budget and current-session eligibility are product design choices requiring real-device acceptance.
+
+<!-- 该文档整理/压缩于 2026-10-20 -->

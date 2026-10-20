@@ -28,3 +28,5 @@ The fresh universal Mac and generic-device iPhone Release logs retain only the i
 Swift indices follow encoded storage rather than integer grapheme counts; substrings retain their original indices. Reference: [Swift strings and characters](https://docs.swift.org/swift-book/LanguageGuide/StringsAndCharacters.html).
 
 The signed Mac app and DMG have accepted notarization submissions; download/update publication runs through the maintained detached pipeline. Its first tag push classified the private source repository as public because background environment filtering removed the authentication token. Authenticated visibility reports `private=True`; pushing the exact tag through the authenticated hook passes, and the publication resumption reads the hook's token from Keychain in-process. No gate bypass, warning suppression or history rewrite is used. Public export is separately sanitized and scanned with the public profile.
+
+<!-- 该文档整理/压缩于 2026-10-20 -->

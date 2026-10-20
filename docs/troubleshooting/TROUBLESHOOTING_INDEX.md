@@ -42,7 +42,6 @@
 | 通知能收到但点进去是空白 No sessions、新会话通知点进空页 | [2026-09-30-notification-tap-blank-sessions.md](2026-09-30-notification-tap-blank-sessions.md)（session 腿禁止为未知 key push 路由；等整窗快照，缺席才 consume 给明确恢复） |
 
 远程协议、压缩、消息窗口和断线恢复的架构约束见 `https://github.com/corral-dev/corral/blob/main/docs/design/MOBILE_REMOTE_DATA_PLANE_DESIGN.md`。
-
-<!-- 该文档整理/压缩于 2026-09-05 -->
-
 - [Simulator markdown table crash](2026-09-14-simulator-markdown-table-rewrite-crash.md): read when the simulator repeatedly reports Corral quitting during Markdown table tests.
+
+<!-- 该文档整理/压缩于 2026-10-20 -->

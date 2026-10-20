@@ -20,3 +20,5 @@ Time labels use system subheadline, secondary colour, and native full-width text
 Acceptance must include a long conversation and the expanded prompts card, as well as a narrow window. iPhone uses the same label and requires no horizontal correction. TUI has no corresponding native time-label control. Prior installed versions: Mac 0.3.33 (37), iPhone 1.0.124 (134). Phone chat layout remains unverified; prior AppShelf uploads failed independently of successful installation.
 
 Verified in the exact long conversation from the owner screenshot (photo-share preview, historical Sep 28 12:53 label): the corrected wide Debug window has message/composer edges at x=307 and x=1067, and the label centre at x=687, their midpoint. The expanded prompts card is to the right. The erroneous manual offset is absent across Shared and macOS sources. SwiftUI native [frame alignment](https://developer.apple.com/documentation/swiftui/view/frame(minwidth:idealwidth:maxwidth:minheight:idealheight:maxheight:alignment:)) supplies the centring.
+
+<!-- 该文档整理/压缩于 2026-10-20 -->

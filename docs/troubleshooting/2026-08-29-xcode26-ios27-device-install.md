@@ -62,4 +62,4 @@ Apple 的 Xcode 26.3 发布说明标明其 SDK 为 iOS 26.2；Apple 的系统要
   regressions, signed app builds, installation, and phone interaction require
   separate evidence.
 
-<!-- 该文档整理/压缩于 2026-09-05 -->
+<!-- 该文档整理/压缩于 2026-10-20 -->

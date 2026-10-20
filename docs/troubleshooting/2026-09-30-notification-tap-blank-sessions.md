@@ -72,3 +72,5 @@ still returns it from a direct `session.get`:
 
 - Portable suite green; localization check green; Release generic build green.
   No on-device tap proof in this session (device limits in the report).
+
+<!-- 该文档整理/压缩于 2026-10-20 -->

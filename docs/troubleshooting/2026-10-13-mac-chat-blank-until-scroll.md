@@ -61,3 +61,5 @@ Mac 0.3.88 (92), built from `21a3f86`, is installed at `/Applications/Corral.app
 
 - iPhone: shares the file but has its own `#if os(iOS)` re-anchor; not changed.
 - TUI: no lazy conversation stack; not applicable.
+
+<!-- 该文档整理/压缩于 2026-10-20 -->

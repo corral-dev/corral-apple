@@ -64,4 +64,4 @@ Refine the iOS client's layout, visual hierarchy, and interactions across the ex
 - 跨端共享契约与样例，不共享 Python/Swift 界面代码；手机保留防穿透。
 - 浅色/深色/中文/配对失败/工具区/输入键盘已验；被观看终端实时画面仍需真机补验。
 
-<!-- 该文档整理/压缩于 2026-09-05 -->
+<!-- 该文档整理/压缩于 2026-10-20 -->

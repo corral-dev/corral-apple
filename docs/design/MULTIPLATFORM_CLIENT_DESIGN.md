@@ -16,7 +16,7 @@ The native Apple client is to become Corral's headline product, ahead of its ope
 4. **Split panes**: several sessions visible and operable at once.
 5. **Free switching between chat mode and terminal (TUI) mode** for every session.
 
-Features that weaken these points need an explicit owner trade-off. Public presentation follows the [presentation guide](https://github.com/corral-dev/corral/blob/main/docs/PUBLIC_PRESENTATION_GUIDE.md). The [Apple client repository](https://github.com/corral-dev/corral-apple) now publishes a self-build beta for iPhone and Mac; public App Store and TestFlight downloads are not available.
+Features that weaken these points need an explicit owner trade-off. Public presentation follows the [presentation guide](../https://github.com/corral-dev/corral/blob/main/docs/PUBLIC_PRESENTATION_GUIDE.md). The [Apple client repository](https://github.com/corral-dev/corral-apple) now publishes a self-build beta for iPhone and Mac; public App Store and TestFlight downloads are not available.
 
 ## Route
 
@@ -58,3 +58,5 @@ The Apple client repository holds the iPhone app, the Mac app, the notification 
 - Empty legacy folders left in the iPhone shell after the move to `Shared/Core` are removed.
 - The rename runs only when no other task has uncommitted edits in the repository; it must never move another task's in-flight files.
 - Done 2026-10-05 (`84844f8`): Mac 0.3.14 (18) and iPhone 1.0.112 (122) built from the new layout and installed. Untracked links from the old names (`Corral/ios`, and `Corral`, `CorralMac`, `CorralNSE`, `CorralTests` inside `apple/`) are kept only so sessions started before the move keep working; delete them once no running task uses the old paths. The old remote URL `corral-ios` does not redirect.
+
+<!-- 该文档整理/压缩于 2026-10-20 -->

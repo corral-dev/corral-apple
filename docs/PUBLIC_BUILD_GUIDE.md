@@ -101,3 +101,5 @@ The official Developer ID-signed Mac download is available in [Mac releases](htt
 Public exports replace the private Keychain access-group literal with an adapter that reads the build-expanded `CorralKeychainAccessGroup` property. Both the app and notification extension must declare that property through `project.yml`, using `$(AppIdentifierPrefix)$(CORRAL_KEYCHAIN_GROUP)`, and declare the same group in their entitlements. Verify both generated property lists and the built entitlements after XcodeGen; private-source literal behavior does not describe the sanitized public adapter.
 
 A public-source merge may advance `main` after preparation while retaining exactly the same full Git tree. Resume may push that descendant main, but the release tag and assets remain bound to the original prepared public commit. Verify both ancestry and full tree identity; any changed file still invalidates the prepared public identity. Never rewrite a published tag or retarget prepared application bytes to resolve publication contention.
+
+<!-- 该文档整理/压缩于 2026-10-20 -->

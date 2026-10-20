@@ -39,3 +39,5 @@ The Mac bubble text (`Shared/UI/Chat/SelectableAttributedText.swift`, macOS bran
 - Do not switch the Mac bubble back to TextKit 2 or to `boundingRect` sizing.
 - Do not paper over the band with extra scroll-to-bottom retries.
 - Do not force a full `ensureLayout` on every `layout()`; that was a diagnostic and costs a full relayout per pass.
+
+<!-- 该文档整理/压缩于 2026-10-20 -->

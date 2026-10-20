@@ -73,8 +73,8 @@
 - [手机客户端职责与验收入口](../../AGENTS.md)
 - [手机客户端界面知识库](../UI_DESIGN_KNOWLEDGE_BASE.md)
 - [手机客户端性能知识库](../PERFORMANCE_KNOWLEDGE_BASE.md)
-- [移动端数据面设计](https://github.com/corral-dev/corral/blob/main/docs/design/MOBILE_REMOTE_DATA_PLANE_DESIGN.md)
-- [远程接力知识库](https://github.com/corral-dev/corral/blob/main/docs/REMOTE_KNOWLEDGE_BASE.md)
+- [移动端数据面设计](../https://github.com/corral-dev/corral/blob/main/docs/design/MOBILE_REMOTE_DATA_PLANE_DESIGN.md)
+- [远程接力知识库](../https://github.com/corral-dev/corral/blob/main/docs/REMOTE_KNOWLEDGE_BASE.md)
 - [中继协议 v2](https://github.com/corral-dev/corral-relay/blob/main/docs/PROTOCOL_V2.md)
 
 ## 3. 建议成立的专项优化小组
@@ -227,8 +227,8 @@
 - [iOS 项目入口与真机验收](../../AGENTS.md)
 - [UI 设计知识库](../UI_DESIGN_KNOWLEDGE_BASE.md)
 - [性能知识库](../PERFORMANCE_KNOWLEDGE_BASE.md)
-- [移动端数据面设计](https://github.com/corral-dev/corral/blob/main/docs/design/MOBILE_REMOTE_DATA_PLANE_DESIGN.md)
-- [远程接力知识库](https://github.com/corral-dev/corral/blob/main/docs/REMOTE_KNOWLEDGE_BASE.md)
+- [移动端数据面设计](../https://github.com/corral-dev/corral/blob/main/docs/design/MOBILE_REMOTE_DATA_PLANE_DESIGN.md)
+- [远程接力知识库](../https://github.com/corral-dev/corral/blob/main/docs/REMOTE_KNOWLEDGE_BASE.md)
 - [中继协议 v2](https://github.com/corral-dev/corral-relay/blob/main/docs/PROTOCOL_V2.md)
 
 ### 官方与同类实现
@@ -242,9 +242,6 @@
 ## 当前建议
 
 先启动横向质量与观测、用户旅程与交互、协议与连接三条线；它们分别回答“到底慢在哪里”“用户到底卡在哪一步”“数据怎样不丢不重”。随后让手机运行时、远程数据面、开发机服务、中继安全四组按同一协议草案并行实施，视觉无障碍小组贯穿每个可见页面。这样既能尽快改善用户感知，也不会把 UI 重绘、网络调参和服务端重构做成互相独立的项目。
-
-<!-- 该文档整理/压缩于 2026-09-05 -->
-
 ## Connection and notification identity corrections (2026-09-30)
 
 Requirements recorded before implementation:
@@ -386,7 +383,7 @@ An independent fresh-Agent usability evaluation was not run: the current task do
 
 ## Creation and input outcome reliability (2026-10-09)
 
-Owner-approved shared iPhone/Mac correction: retain a durable creation identity before calling the host and reuse it after a transport failure; reconcile the same request instead of launching another empty session. Poll accepted/dispatching text receipts until the host establishes native acceptance or a useful uncertain/failure outcome. Cancel provisional Working on failure/uncertainty and retain the original outgoing instruction for review. Existing native New Session `Button`, `ProgressView` and error text remain the interface; no extra confirmation step is introduced. Host semantics and acceptance matrix are owned by [the mobile data plane design](https://github.com/corral-dev/corral/blob/main/docs/design/MOBILE_REMOTE_DATA_PLANE_DESIGN.md#10-creation-and-first-input-reliability-2026-10-09).
+Owner-approved shared iPhone/Mac correction: retain a durable creation identity before calling the host and reuse it after a transport failure; reconcile the same request instead of launching another empty session. Poll accepted/dispatching text receipts until the host establishes native acceptance or a useful uncertain/failure outcome. Cancel provisional Working on failure/uncertainty and retain the original outgoing instruction for review. Existing native New Session `Button`, `ProgressView` and error text remain the interface; no extra confirmation step is introduced. Host semantics and acceptance matrix are owned by [the mobile data plane design](../https://github.com/corral-dev/corral/blob/main/docs/design/MOBILE_REMOTE_DATA_PLANE_DESIGN.md#10-creation-and-first-input-reliability-2026-10-09).
 
 The Mac workspace assistant shortcut must use the same creation coordinator as New Session. A host/client switch while creation awaits must not open the result in another machine’s workspace; the original durable operation remains recoverable.
 
@@ -394,3 +391,5 @@ The Mac workspace assistant shortcut must use the same creation coordinator as N
 Validation: 362 portable Core tests pass, including a real ConversationStore polling task resolving accepted to reviewable unknown while its connection remains open. Core compilation has no new warnings; native lifecycle/selection probes and localization coverage pass. Fresh generic-device iOS and native Mac Release builds include these changes. The existing native font/paragraph, serial camera queue, terminal trait and App Intents warnings retain the individual origin/risk/follow-up assessments in [New Session diagnostic review](../PERFORMANCE_KNOWLEDGE_BASE.md#new-session-delivery-diagnostic-review); no warning suppression was introduced. The Mac is locked during SSH work, so physical window and phone gesture/error presentation remain unverified. Build/logic checks are not physical acceptance.
 
 Delivery: shared source `6965329` is pushed/tagged as iPhone 1.0.138 (148) and Mac 0.3.60 (64). AppShelf release 227 holds the signature/profile-verified iPhone artifact at the internal install page; paired-device installation/launch failed independently with `device_unavailable`. Mac 0.3.60 is installed from the signed universal export and the actual process is ready over local control with data attached after the CLI 0.24.276 host restart. This proves installation/connectivity, not physical New Session or receipt-error interaction. Distribution follow-up is tracked in [Mac distribution](MACOS_CLIENT_DESIGN.md#distribution-and-software-updates).
+
+<!-- 该文档整理/压缩于 2026-10-20 -->

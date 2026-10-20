@@ -39,3 +39,5 @@ Mac 0.3.18 (22), source commit `5049c92` and tag `mac-v0.3.18`, was pushed and i
 The installed Release opened the exact reported working conversation through native accessibility row selection, without moving the pointer. Real chat, newest content, composer and three prompts were inspected in the window capture. The native inspector button completed two visibility transitions; native window sizing changed to 1320 pt and back to 1080 pt without hanging or crashing. Sequential captures showed the dots changing phase. Real transport remained ready with the conversation subscription attached; idle CPU was 0.1% (0.4% during live updates), about 95–97 MB resident memory. This verifies the installed behavior, in addition to the Debug resize/interaction probes.
 
 The semantic action route uses Apple's [accessibility action API](https://developer.apple.com/documentation/applicationservices/1462091-axuielementperformaction) and selected/size attributes; it requires existing accessibility permission. It does not inject pointer events.
+
+<!-- 该文档整理/压缩于 2026-10-20 -->

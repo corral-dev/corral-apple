@@ -52,6 +52,7 @@ enum WireProtocol {
     static let mLayoutPin = "layout.pin", mLayoutPinGroup = "layout.pinGroup", mLayoutCollapse = "layout.collapse"
     static let mRuntimesList = "runtimes.list", mSessionCopy = "session.copy", mSessionHandoff = "session.handoff"
     static let mSessionRestart = "session.restart", mSessionStop = "session.stop", mSessionResume = "session.resume"
+    static let mSessionUserPrompts = "session.userPrompts"
     static let mSessionNew = "session.new", mSessionGet = "session.get", mSessionDelete = "session.delete"
     static let mTerminalAttach = "terminal.attach", mTerminalDetach = "terminal.detach"
     static let mTerminalResize = "terminal.resize", mTerminalInput = "terminal.input"
@@ -60,9 +61,17 @@ enum WireProtocol {
     static func terminalChannel(sessionKey: String) -> String { "term:" + sessionKey }
 }
 struct SessionSummary: Codable { var key: String; var cwd = ""; var hosted = false }
+struct SessionUserPromptsResponse: Decodable {
+    struct Prompt: Decodable { let seq: Int; let text: String? }
+    let prompts: [Prompt]
+    let generation: Int
+}
 enum ActiveRuntimeVisibility { static func isListVisible(_ session: SessionSummary) -> Bool { true } }
 struct RuntimeEntry: Decodable { var id: String; var isActive: Bool { true } }
-@MainActor final class AppModel { var client: RemoteClient? }
+@MainActor final class AppModel {
+    var client: RemoteClient?
+    let restarts = SessionRestartTracker()
+}
 @MainActor final class SessionListStore {
     var sessions: [String: SessionSummary] = [:]
     var windowSessions: [SessionSummary] { Array(sessions.values) }
@@ -374,12 +383,12 @@ struct LifecycleProbe {
         await settle()
         client.handler = { _, _ in ["query": "host resolved text"] }
         let error = await stream.navigatePrompt(seq: 7, historyGeneration: 9)
-        check(error == nil && sink.reveals == ["host resolved text"], "local navigation did not use host identity")
+        check(error == .landed && sink.reveals == ["host resolved text"], "local navigation did not use host identity")
         check(!client.calls.contains { $0.1["native"] as? Bool == true }, "local jump sent agent input")
         sink.revealResult = false
         let attempts = sink.reveals.count
         let miss = await stream.navigatePrompt(seq: 8, historyGeneration: 9)
-        check(miss == nil, "missing buffer surfaced a prompt error")
+        check(miss == .failed, "missing buffer did not report a row-level failure")
         check(sink.reveals.count == attempts + 1, "unavailable host text was repeatedly searched without a new snapshot")
         check(!client.calls.contains { $0.1["native"] as? Bool == true }, "history miss sent native navigation")
         // The offset proves the host still retains the target. Only an
@@ -396,11 +405,11 @@ struct LifecycleProbe {
             return [:]
         }
         let retainedResult = await stream.navigatePrompt(seq: 8, historyGeneration: 9)
-        check(retainedResult == nil, "retained history raised an error")
+        check(retainedResult == .landed, "retained history did not report arrival")
         check(sink.resets > resets && sink.reveals.last == "older retained text", "extended snapshot was not revealed")
         client.handler = { _, _ in throw NSError(domain: "fixture", code: 1) }
         let failedResult = await stream.navigatePrompt(seq: 8, historyGeneration: 9)
-        check(failedResult == nil && stream.phase == .live,
+        check(failedResult == .failed && stream.phase == .live,
               "optional lookup failure affected the live terminal")
         let gate = Gate()
         client.handler = { method, _ in
@@ -466,7 +475,7 @@ struct LifecycleProbe {
             return ["query": "native miss"]
         }
         let nativeMiss = await stream.navigatePrompt(seq: 36, historyGeneration: 9)
-        check(nativeMiss == nil && stream.phase == .live, "native failure damaged the terminal")
+        check(nativeMiss == .failed && stream.phase == .live, "native failure damaged the terminal")
         stream.input.send(Array("ordinary typing after native failure".utf8)[...])
         await settle()
         check(client.calls.last?.0 == WireProtocol.mTerminalInput, "native failure blocked ordinary typing")
@@ -616,7 +625,31 @@ struct LifecycleProbe {
         print("PASS first mode toggle: persisted Chat/Terminal observation and pane isolation")
     }
 
+    @MainActor static func paneActivationRegressions() {
+        let workspace = MacWorkspace()
+        workspace.restorePanes(["first", "second"])
+        let initial = workspace.paneFocusSerial
+        let same = ModeChangeCounter()
+        withObservationTracking { _ = workspace.paneFocusSerial }
+            onChange: { same.increment() }
+        workspace.focus("first")
+        check(same.value == 1 && workspace.paneFocusSerial == initial + 1,
+              "reactivating the focused pane did not notify sidebar selection")
+        check(workspace.focusedKey == "first", "reactivation changed the focused identity")
+        workspace.focusPane(at: 1)
+        check(workspace.focusedKey == "second" && workspace.paneFocusSerial == initial + 2,
+              "pane shortcut did not reconcile sidebar selection")
+        workspace.composerDidGainFocus("second")
+        check(workspace.paneFocusSerial == initial + 3,
+              "returning to the focused composer did not reconcile sidebar selection")
+        workspace.restorePanes(["first", "second"])
+        check(workspace.paneFocusSerial == initial + 3,
+              "passive pane restoration synthesized explicit activation")
+        print("PASS pane activation: repeated focus, pane shortcut, composer and passive restoration")
+    }
+
     @MainActor static func main() async throws {
+        paneActivationRegressions()
         await sessionBatchRegressions()
         modeObservationRegressions()
         await sidebarSplitRestorationRegressions()

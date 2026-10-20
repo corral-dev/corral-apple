@@ -55,6 +55,10 @@ struct MacSidebar: View {
             .task {
                   feed.listStore.refreshCalendar()
                 #if DEBUG
+                  if ProcessInfo.processInfo.arguments.contains("-CorralInspectPaneSelection") {
+                      await inspectPaneSelection()
+                      return
+                  }
                 await MacScrollbarInspection.runIfRequested()
                 if ProcessInfo.processInfo.arguments.contains("-CorralInspectDateDisclosures") {
                     await inspectDateDisclosures()
@@ -118,8 +122,10 @@ struct MacSidebar: View {
                 deleteTargets.removeAll()
             }
             .onChange(of: workspace.focusedKey, initial: true) { _, key in
-                guard selectedKeys.count <= 1 else { return }
                 selectedKeys = key.map { visibleKeys.contains($0) ? [$0] : [] } ?? []
+            }
+            .onChange(of: workspace.paneFocusSerial) { _, _ in
+                selectedKeys = workspace.focusedKey.map { visibleKeys.contains($0) ? [$0] : [] } ?? []
             }
             .onChange(of: visibleKeys) { previous, visible in
                 selectedKeys.formIntersection(visible)
@@ -553,6 +559,99 @@ struct MacSidebar: View {
     }
 
     #if DEBUG
+    /// Exercise the mounted native List without posting pointer/key events.
+    /// Reuses the restored pane and changes no session/group membership.
+    private func inspectPaneSelection() async {
+        func descendants(_ view: NSView) -> [NSView] {
+            view.subviews.flatMap { [$0] + descendants($0) }
+        }
+        func mountedOutline() -> NSOutlineView? {
+            NSApp.windows.compactMap(\.contentView).flatMap(descendants)
+                .compactMap { $0 as? NSOutlineView }.first { $0.window != nil }
+        }
+        var outline: NSOutlineView?
+        for _ in 0..<100 {
+            outline = mountedOutline()
+            if outline != nil, visibleKeys.count >= 2 { break }
+            try? await Task.sleep(for: .milliseconds(200))
+        }
+        guard let outline, let key = workspace.focusedKey.flatMap({ visibleKeys.contains($0) ? $0 : nil })
+            ?? sessions.first(where: { $0.hosted && visibleKeys.contains($0.key) })?.key else { return }
+        let original = selectedKeys
+        let originalPanes = workspace.paneKeys, originalFocus = workspace.focusedKey
+        // Local restoration avoids any layout write or new assistant launch.
+        workspace.restorePanes([key])
+        try? await Task.sleep(for: .milliseconds(350))
+        func nativeKeys() -> Set<String> {
+            var rows: [Int: String] = [:]
+            var index = 0
+            for section in sidebarSections {
+                index += 1
+                if expansion(for: section).wrappedValue {
+                    for item in section.items { rows[index] = item.session.key; index += 1 }
+                }
+            }
+            return Set((mountedOutline()?.selectedRowIndexes ?? []).compactMap { rows[$0] })
+        }
+        func settleSelection() async {
+            for _ in 0..<50 {
+                if selectedKeys == [key], nativeKeys() == [key] { return }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+        }
+        var availableRows: [(key: String, row: Int)] = []
+        var rowIndex = 0
+        for section in sidebarSections {
+            rowIndex += 1
+            if expansion(for: section).wrappedValue {
+                for item in section.items { availableRows.append((item.session.key, rowIndex)); rowIndex += 1 }
+            }
+        }
+        let pair = Set([key, availableRows.first(where: { $0.key != key })?.key].compactMap { $0 })
+        let rowIndexes = IndexSet(availableRows.filter { pair.contains($0.key) }.map(\.row))
+        mountedOutline()?.selectRowIndexes(rowIndexes, byExtendingSelection: false)
+        try? await Task.sleep(for: .milliseconds(350))
+        var checks = ["nativeBatchPreservesPane": selectedKeys.count >= 2 && workspace.focusedKey == key]
+        workspace.focus(key)
+        await settleSelection()
+        checks["reactivationClearsBatch"] = selectedKeys == [key] && nativeKeys() == [key]
+        let batchResult: [String: Any] = ["selected": selectedKeys.sorted(), "native": nativeKeys().sorted(),
+                                          "outlineReplaced": mountedOutline() !== outline,
+                                          "focused": workspace.focusedKey ?? "", "serial": workspace.paneFocusSerial]
+        mountedOutline()?.deselectAll(nil)
+        try? await Task.sleep(for: .milliseconds(350))
+        checks["nativeClear"] = selectedKeys.isEmpty
+        workspace.focus(key)
+        await settleSelection()
+        checks["reactivationRestoresClearedRow"] = selectedKeys == [key] && nativeKeys() == [key]
+        var selectAllAvailable = false
+        if let table = mountedOutline() {
+            table.window?.makeFirstResponder(table)
+            let dispatched = NSApp.sendAction(NSSelectorFromString("selectAll:"), to: nil, from: nil)
+            try? await Task.sleep(for: .milliseconds(350))
+            selectAllAvailable = dispatched && selectedKeys.count >= 2
+            if selectAllAvailable {
+                workspace.focus(key)
+                await settleSelection()
+                checks["reactivationAfterSelectAllAction"] = selectedKeys == [key] && nativeKeys() == [key]
+            }
+        }
+        let output = ProcessInfo.processInfo.environment["CORRAL_INSPECTION_PANE_SELECTION_OUTPUT"]
+            ?? "/tmp/corral-pane-selection.json"
+        let evidence: [String: Any] = ["checks": checks, "selected": selectedKeys.sorted(),
+                                      "selectAllActionAvailable": selectAllAvailable,
+                                      "batchResult": batchResult,
+                                      "nativeSelected": nativeKeys().sorted(),
+                                      "physicalInput": "not exercised; native List selection and production workspace focus"]
+        if let data = try? JSONSerialization.data(withJSONObject: evidence, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: URL(fileURLWithPath: output), options: .atomic)
+        }
+        selectedKeys = original.intersection(visibleKeys)
+        if originalPanes.isEmpty { workspace.closePane(key) }
+        else { workspace.restorePanes(originalPanes) }
+        workspace.focusedKey = originalFocus
+    }
+
     /// Public native selection, a non-posted context-menu query and native
     /// menu actions only. No input event is posted; host data is untouched.
     private func inspectSessionMultiSelection() async {
