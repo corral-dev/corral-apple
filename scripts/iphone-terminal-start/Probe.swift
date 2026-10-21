@@ -27,7 +27,8 @@ import SwiftUI
 }
 struct SessionSummary { var key = "fixture"; var hosted = false; var live = false }
 struct TerminalPromptTaskKey: Hashable { let request: UUID?; let stream: ObjectIdentifier?; let presented: Bool; let ready: Bool }
-struct TerminalPromptRequest { var id = UUID(); var seq = 0; var generation = 0 }
+struct TerminalPromptRequest { var id = UUID(); var seq = 0; var generation = 0; var text: String? = nil }
+enum TerminalPromptOutcome { case landed, superseded, absent, failed }
 enum SessionActionsMenu {
     static func isReadonly(access: String) -> Bool { access == "readonly" }
     static func failureMessage(for error: Error) -> String { "Fixture failure" }
@@ -56,9 +57,9 @@ struct TerminalColorScheme {
     func start() { phase = client.awaitingSnapshot ? .connecting : client.running ? .live : .ended }
     func stop() {}
     func retry() { start() }
-    func navigatePrompt(seq: Int, historyGeneration: Int) async -> String? {
+    func navigatePrompt(seq: Int, historyGeneration: Int, text: String?) async -> TerminalPromptOutcome {
         reveals.append((seq, historyGeneration))
-        return nil
+        return .landed
     }
 }
 struct ShellTerminalView: View {
