@@ -1,0 +1,158 @@
+{
+  "date": "2026-10-24",
+  "status": "Design study only; no production client acceptance",
+  "sdk": "Xcode 27.2 beta 2",
+  "runtime": "macOS 27.2",
+  "engines": {
+    "mermaid": "12.0.0",
+    "plantuml": "1.2026.8"
+  },
+  "loadRoute": "WKURLSchemeHandler; temporary HTTP server stopped for final run",
+  "rendered": 16,
+  "pdfExportedAndReopened": 16,
+  "rendererExecutionMeasurementsExcludeEngineLoading": true,
+  "results": [
+    {
+      "id": "flow",
+      "appearance": "light",
+      "engineCallMs": 170,
+      "svgBytes": 16719,
+      "pdfBytes": 12662,
+      "extractedLabelCharacters": 67
+    },
+    {
+      "id": "sequence",
+      "appearance": "light",
+      "engineCallMs": 23,
+      "svgBytes": 26126,
+      "pdfBytes": 9201,
+      "extractedLabelCharacters": 132
+    },
+    {
+      "id": "class",
+      "appearance": "light",
+      "engineCallMs": 46,
+      "svgBytes": 25040,
+      "pdfBytes": 13710,
+      "extractedLabelCharacters": 126
+    },
+    {
+      "id": "mindmap",
+      "appearance": "light",
+      "engineCallMs": 72,
+      "svgBytes": 37664,
+      "pdfBytes": 22953,
+      "extractedLabelCharacters": 48
+    },
+    {
+      "id": "plant-sequence",
+      "appearance": "light",
+      "engineCallMs": 146,
+      "svgBytes": 4849,
+      "pdfBytes": 15230,
+      "extractedLabelCharacters": 130
+    },
+    {
+      "id": "plant-activity",
+      "appearance": "light",
+      "engineCallMs": 105,
+      "svgBytes": 5115,
+      "pdfBytes": 18511,
+      "extractedLabelCharacters": 36
+    },
+    {
+      "id": "plant-class",
+      "appearance": "light",
+      "engineCallMs": 69,
+      "svgBytes": 5908,
+      "pdfBytes": 18597,
+      "extractedLabelCharacters": 132
+    },
+    {
+      "id": "plant-c4",
+      "appearance": "light",
+      "engineCallMs": 726,
+      "svgBytes": 10181,
+      "pdfBytes": 27683,
+      "extractedLabelCharacters": 280
+    },
+    {
+      "id": "flow",
+      "appearance": "dark",
+      "engineCallMs": 26,
+      "svgBytes": 16616,
+      "pdfBytes": 12655,
+      "extractedLabelCharacters": 67
+    },
+    {
+      "id": "sequence",
+      "appearance": "dark",
+      "engineCallMs": 10,
+      "svgBytes": 26049,
+      "pdfBytes": 9187,
+      "extractedLabelCharacters": 132
+    },
+    {
+      "id": "class",
+      "appearance": "dark",
+      "engineCallMs": 33,
+      "svgBytes": 24937,
+      "pdfBytes": 13661,
+      "extractedLabelCharacters": 126
+    },
+    {
+      "id": "mindmap",
+      "appearance": "dark",
+      "engineCallMs": 27,
+      "svgBytes": 36243,
+      "pdfBytes": 22815,
+      "extractedLabelCharacters": 48
+    },
+    {
+      "id": "plant-sequence",
+      "appearance": "dark",
+      "engineCallMs": 29,
+      "svgBytes": 4849,
+      "pdfBytes": 15192,
+      "extractedLabelCharacters": 130
+    },
+    {
+      "id": "plant-activity",
+      "appearance": "dark",
+      "engineCallMs": 27,
+      "svgBytes": 5115,
+      "pdfBytes": 18503,
+      "extractedLabelCharacters": 36
+    },
+    {
+      "id": "plant-class",
+      "appearance": "dark",
+      "engineCallMs": 37,
+      "svgBytes": 5904,
+      "pdfBytes": 18584,
+      "extractedLabelCharacters": 132
+    },
+    {
+      "id": "plant-c4",
+      "appearance": "dark",
+      "engineCallMs": 610,
+      "svgBytes": 10181,
+      "pdfBytes": 27646,
+      "extractedLabelCharacters": 280
+    }
+  ],
+  "unverified": [
+    "physical iPhone performance and visuals",
+    "minimum supported OS",
+    "native attachment selection/copy/activation",
+    "hostile-input containment",
+    "production lifecycle and resource limits"
+  ],
+  "previewSHA256": "3aab2efabf8040e4bb348d6e56cfcd8b8f03df89db3ca0bd0c9fc345f8065189",
+  "referenceRawJavaScriptBytes": {
+    "mermaidEntryAndModuleFamily": 5457829,
+    "plantumlAndGraphviz": 5393006,
+    "C4": 181698,
+    "notPackagedDownloadOrMemoryMeasurement": true
+  }
+}

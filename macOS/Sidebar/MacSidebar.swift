@@ -20,6 +20,7 @@ struct MacSidebar: View {
     @State private var projectFilter: Set<SessionProjectFilter> = []
     @State private var orderBox = OrderBox()
     @State private var selectedKeys: Set<String> = []
+    @State private var pendingRevealSerial: Int?
     @State private var deleteTargets: [SessionSummary] = []
     @State private var batch = MacSessionBatch()
     @State private var batchError: String?
@@ -55,6 +56,10 @@ struct MacSidebar: View {
             .task {
                   feed.listStore.refreshCalendar()
                 #if DEBUG
+                  if ProcessInfo.processInfo.arguments.contains("-CorralInspectSearchNavigation") {
+                      filter = "__corral_navigation_conflicting_filter__"
+                      activeOnly = true
+                  }
                   if ProcessInfo.processInfo.arguments.contains("-CorralInspectPaneSelection") {
                       await inspectPaneSelection()
                       return
@@ -261,43 +266,35 @@ struct MacSidebar: View {
         let sections = sidebarSections
         return ScrollViewReader { proxy in
         VStack(spacing: 0) {
-        List(selection: selectionBinding) {
+        List(selection: selectionBinding(for: sections)) {
             ForEach(sections) { section in
-                Section {
-                    if expansion(for: section).wrappedValue {
-                        ForEach(section.items) { item in
-                            itemView(item)
-                        }
+                Section(isExpanded: expansion(for: section)) {
+                    ForEach(section.items, id: \.session.key) { item in
+                        itemView(item)
                     }
                 } header: {
-                    DisclosureGroup(isExpanded: expansion(for: section)) {
-                        EmptyView()
-                    } label: {
-                        Button {
-                            toggleSection(section)
-                        } label: {
-                            HStack(spacing: Space.sm * interfaceScale) {
-                                Text(verbatim: title(for: section))
-                                    .interfaceFont(.system(size: 12, weight: .semibold))
-                                    .foregroundStyle(Color(nsColor: .secondaryLabelColor))
-                                    .fixedSize()
-                                VStack(spacing: 0) {
-                                    Divider()
-                                        .overlay(Color(nsColor: .separatorColor).opacity(0.65))
-                                }
-                                .frame(maxWidth: .infinity)
-                                Text(verbatim: section.items.count.formatted())
-                                    .interfaceFont(.system(size: 11).monospacedDigit())
-                                    .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
-                                    .fixedSize()
+                    Button { toggleSection(section) } label: {
+                        HStack(spacing: Space.sm * interfaceScale) {
+                            Text(verbatim: title(for: section))
+                                .interfaceFont(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                                .fixedSize()
+                            VStack(spacing: 0) {
+                                Divider()
+                                    .overlay(Color(nsColor: .separatorColor).opacity(0.65))
                             }
-                            .interfaceFrame(height: MacSidebarMetrics.sectionHeight)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
+                                .frame(maxWidth: .infinity)
+                            Text(verbatim: section.items.count.formatted())
+                                .interfaceFont(.system(size: 11).monospacedDigit())
+                                .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+                                .fixedSize()
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("corral.date-section.\(section.id)")
+                        .interfaceFrame(height: MacSidebarMetrics.sectionHeight)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("corral.date-section.\(section.id)")
                 }
             }
         }
@@ -315,20 +312,46 @@ struct MacSidebar: View {
         #if DEBUG
         .focused($inspectionFocused)
         #endif
-        // Retire old native cell hosts when rows move across the outline.
-        // Streaming metadata must keep the existing list lifetime.
-        .id(listStructure(sections))
         .focusEffectDisabled()
+        .task(id: pendingRevealSerial) {
+            let serial = workspace.navigation.host.revealSerial
+            guard pendingRevealSerial == serial,
+                  let key = workspace.navigation.host.revealKey, visibleKeys.contains(key) else { return }
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            selectedKeys = [key]
+            proxy.scrollTo(key, anchor: .center)
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(1))
+                guard pendingRevealSerial == serial,
+                      workspace.navigation.host.revealSerial == serial else { return }
+                // A destination that never mounts must not keep swallowing
+                // native selection callbacks.
+                pendingRevealSerial = nil
+            }
+            #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("-CorralInspectSearchNavigation") {
+                Task { @MainActor in
+                for _ in 0..<20 {
+                    try? await Task.sleep(for: .milliseconds(100))
+                    guard workspace.navigation.host.revealKey == key else { break }
+                    recordNavigationReveal(key)
+                }
+                }
+            }
+            #endif
+        }
         }
         .onChange(of: workspace.navigation.host.revealSerial, initial: true) { _, _ in
-            guard let key = revealNavigationTarget() else { return }
-            Task { @MainActor in
-                // Native row identity exists after the filter/disclosure update.
-                await Task.yield()
-                guard workspace.navigation.host.revealKey == key else { return }
-                selectedKeys = [key]
-                proxy.scrollTo("session:\(key)", anchor: .center)
+            #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("-CorralInspectSearchNavigation") {
+                workspace.navigation.host.inspectionEvents.append("reveal observer: \(workspace.navigation.host.revealKey ?? "nil")")
             }
+            #endif
+            guard workspace.navigation.host.revealKey != nil else { return }
+            pendingRevealSerial = workspace.navigation.host.revealSerial
+            guard let key = revealNavigationTarget() else { pendingRevealSerial = nil; return }
+            selectedKeys = [key]
         }
         }
     }
@@ -352,6 +375,28 @@ struct MacSidebar: View {
         return key
     }
 
+    #if DEBUG
+    private func recordNavigationReveal(_ key: String) {
+        func marker(_ view: NSView) -> NativeSidebarSelection.SelectionAppearanceView? {
+            if let found = view as? NativeSidebarSelection.SelectionAppearanceView, found.debugKey == key {
+                return found
+            }
+            return view.subviews.lazy.compactMap(marker).first
+        }
+        let root = NSApp.windows.first(where: { $0.title == "Corral" })?.contentView
+        let state = root.flatMap(marker)?.debugRowState()
+        workspace.navigation.host.inspectionSidebarKey = key
+        workspace.navigation.host.inspectionSidebar = [
+            "membership": sessions.contains { $0.key == key },
+            "expanded": visibleKeys.contains(key),
+            "selected": selectedKeys == [key],
+            "nativeSelected": state?.selected == true,
+            "rowVisible": state?.visible == true,
+            "conflictingFiltersCleared": filter.isEmpty && !activeOnly,
+        ]
+    }
+    #endif
+
     /// Titles, previews, timestamps and attention update in place. Selection
     /// and disclosure state are owned outside the native list lifetime.
     private enum StructureEntry: Hashable {
@@ -363,7 +408,7 @@ struct MacSidebar: View {
         var entries: [StructureEntry] = []
         for section in sections {
             entries.append(.section(section.id))
-            for item in section.items {
+            for item in section.items where expansion(for: section).wrappedValue {
                 entries.append(.session(item.session.key))
             }
         }
@@ -382,7 +427,15 @@ struct MacSidebar: View {
             .listRowInsets(.vertical, 0)
             .listRowSeparator(.visible, edges: .bottom)
             .listRowSeparatorTint(Color(nsColor: .separatorColor).opacity(0.5), edges: .bottom)
-            .background(NativeSidebarSelection())
+            .background(NativeSidebarSelection(
+                revealSerial: workspace.navigation.host.revealKey == session.key ? pendingRevealSerial : nil,
+                onReveal: {
+                    guard workspace.navigation.host.revealKey == session.key else { return }
+                    selectedKeys = [session.key]
+                    pendingRevealSerial = nil
+                },
+                debugKey: ProcessInfo.processInfo.arguments.contains("-CorralInspectSearchNavigation")
+                    ? session.key : nil))
             .tag(session.key)
             .onAppear { feed.listStore.rememberOpened(session) }
             #if DEBUG
@@ -539,13 +592,21 @@ struct MacSidebar: View {
         sidebarSections.flatMap(\.items).map(\.session).filter { keys.contains($0.key) }
     }
 
-    private var selectionBinding: Binding<Set<String>> {
-        Binding(
+    private func selectionBinding(for sections: [DesktopSidebarProjection.Section]) -> Binding<Set<String>> {
+        let structure = listStructure(sections)
+        return Binding(
             get: { selectedKeys },
             set: { keys in
                 #if DEBUG
                 guard !ProcessInfo.processInfo.arguments.contains("-CorralInspectSidebar") else { return }
+                if ProcessInfo.processInfo.arguments.contains("-CorralInspectSearchNavigation") {
+                    workspace.navigation.host.inspectionEvents.append("native selection: \(keys.sorted()) focus=\(workspace.focusedKey ?? "nil")")
+                }
                 #endif
+                // A retired native outline can report its previous row index
+                // after a structural update. That is reconciliation, not input.
+                guard structure == listStructure(sidebarSections) else { return }
+                if pendingRevealSerial != nil, keys != Set(workspace.navigation.host.revealKey.map { [$0] } ?? []) { return }
                 selectedKeys = keys.intersection(visibleKeys)
                 // Native selection owns Command/Shift/range gestures. Extending
                 // or reducing a batch never navigates away from the open pane.

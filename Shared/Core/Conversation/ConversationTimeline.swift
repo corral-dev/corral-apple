@@ -86,7 +86,9 @@ enum ConversationMessagePolicy {
 
             switch role {
             case "user":
-                // 接力和运行时会把内部提示写成 user 轮次；它们不能伪装成人话。
+                // Runtimes write internal context as user turns; it must not look
+                // like a human bubble. Corral's own handoff prompt is a human
+                // prompt here and stays visible (see `isInjectedUserPrompt`).
                 guard !text.isEmpty, !isInjectedUserPrompt(text) else { continue }
                 flushTools()
                 result.append(.message(message))
@@ -116,6 +118,12 @@ enum ConversationMessagePolicy {
         return result
     }
 
+    /// Runtime-injected user turns, which must not render as human bubbles.
+    ///
+    /// Corral's own cross-runtime handoff prompt is deliberately absent: the
+    /// owner treats it as a normal user message, the host's Your prompts list
+    /// keeps it, and the TUI keeps it. Do not re-add the handoff intro or task
+    /// prefix here just because it is long or repeats another session's excerpt.
     static func isInjectedUserPrompt(_ text: String) -> Bool {
         let raw = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else { return false }
@@ -128,11 +136,6 @@ enum ConversationMessagePolicy {
             return true
         }
 
-        if raw.hasPrefix("任务：") && (
-            raw.contains("你正在接力一个来自") || raw.contains("这是跨运行时接力")
-        ) {
-            return true
-        }
         if raw.hasPrefix("原始任务：") && (
             raw.contains("用户最新补充") || raw.contains("【本轮回复契约】")
         ) {
@@ -165,9 +168,6 @@ enum ConversationMessagePolicy {
             "Do NOT edit the plan file itself",
             "To-do's from the plan have already been created",
             "Briefly inform the user about the task result",
-            "你正在接力一个来自",
-            "这是跨运行时接力，不是原生恢复",
-            "You are picking up a session from",
             "【本轮回复契约】",
         ]
         return markers.contains(where: raw.contains)

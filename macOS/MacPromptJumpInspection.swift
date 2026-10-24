@@ -24,13 +24,18 @@ enum MacPromptJumpInspection {
             try? await Task.sleep(for: .milliseconds(500))
         }
         let list = prompts()
-        guard list.count >= 3 else {
-            mark("error: fewer than three prompts")
+        guard !list.isEmpty else {
+            mark("error: no prompts")
             return
         }
         try? await Task.sleep(for: .seconds(4))
         var reports: [[String: Any]] = []
-        for (name, prompt) in [("first", list[0]), ("second", list[1]), ("last", list[list.count - 1])] {
+        // A handoff target often has a single human prompt. Keep the long-session
+        // three-step sweep, but still verify that one prompt lands on top.
+        let steps = list.count >= 3
+            ? [("first", list[0]), ("second", list[1]), ("last", list[list.count - 1])]
+            : [("first", list[0])]
+        for (name, prompt) in steps {
             let target = ConversationTimelineItem.message(prompt).id
             mark(name)
             try? await Task.sleep(for: .milliseconds(400))

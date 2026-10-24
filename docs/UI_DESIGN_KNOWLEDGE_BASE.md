@@ -186,6 +186,8 @@ Multi-select verification (2026-10-01): all 275 portable regressions and 225 loc
 
 ### Conversation composition
 
+Planned Mermaid/PlantUML rendering is specified in the [chat diagram design](design/CHAT_DIAGRAM_RENDERING_DESIGN.md). It preserves native message selection and original source; its rendering study is design evidence, not an installed-client feature or acceptance result.
+
 - **Fork opens with inherited messages immediately (owner correction, 2026-10-01).** After the host confirms `session.copy`, seed the destination conversation with the source conversation already available on the phone before navigating. The first destination frame must show that history while its own subscription synchronizes. Keep the source unchanged; never transfer source drafts, unresolved sends, live questions, execution status or replay cursors. Empty initial host snapshots must not erase inherited context; the first usable destination snapshot reconciles it against the destination history without duplicate messages. This is local presentation continuity, not offline execution. Use the existing native navigation and `@Observable`/`@State` model ownership ([Apple model data](https://developer.apple.com/documentation/SwiftUI/Managing-model-data-in-your-app)); the installed Xcode 27.0 / iOS 27.0 SDK declares `Observable()` in its public Observation interface. Inherited history is stored separately from destination messages and cursors; only a usable destination tail replaces it, and early destination deltas request that tail instead of merging source sequence numbers.
 
 - Working/waiting is shown once, by the activity cue above the composer (`ChatActivityFooter`), not in the conversation header (owner decision 2026-10-01: the header repeat was redundant). Initial watch and reconnect snapshots restore execution state, while newer live events take precedence over an older in-flight snapshot. Do not put a full-width Working strip inside the conversation stack: a hugging bar plus the loading spinner is centered by the expanding pane, so entering a live session parks Working in the middle of the screen. The loading spinner fills the remaining conversation pane. See [Conversation polish](#conversation-polish-2026-10-01) for the instant Working rule after sending.
@@ -523,6 +525,10 @@ SIM_NAME="iPhone 17" scripts/ios_sim.sh run
 ### Rebuilt conversation order (2026-10-07)
 
 Human prompts stay in the main conversation at their original chronological position, independently of the Your prompts card. A host `history_reset` snapshot replaces the previous projection generation using the existing tail-snapshot policy; it must not merge renumbered cards into old rows. Keep unconfirmed local echoes through the existing reconciliation. Host cause and contract: `https://github.com/corral-dev/corral/blob/main/docs/REMOTE_KNOWLEDGE_BASE.md`, Rebuilt conversation sequences.
+
+### Handoff prompts are human messages (owner correction, 2026-10-24)
+
+A Corral cross-runtime handoff prompt (`任务：…` / `Task: …` followed by the pickup intro and the extracted excerpt) is a normal user message. It must render as an ordinary user bubble in the chat timeline and appear in Your prompts and composer history. Do not add its intro, task prefix or English/Chinese wording to `ConversationMessagePolicy.isInjectedUserPrompt`; the host's `session.userPrompts` already keeps it, and the TUI keeps it in both its Your prompts HUD and its conversation preview. Owner report: iPhone and Mac chat mode hid the prompt entirely, so a handed-off session looked like it had no first request. Long-bubble rules (bubble caps and in-bubble scrolling) apply unchanged. Runtime/OpenConductor injected context is still filtered; the host list stays the filter authority, and the local filter only covers prompts newer than it.
 
 ### Composer continuity during incoming messages (2026-10-11)
 

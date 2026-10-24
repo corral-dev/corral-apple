@@ -94,7 +94,7 @@ struct MacFulltextSearch: View {
         }
         .onChange(of: appModel.clientIdentity) { _, _ in cancelOpening(); searchStore.invalidate(); searchStore.prepare(query, client: appModel.client) }
         .onChange(of: appModel.connectionState) { _, _ in cancelOpening(); searchStore.invalidate(); searchStore.prepare(query, client: appModel.client) }
-        .onDisappear { cancelOpening(); searchStore.cancelPending() }
+        .onDisappear { state.detachScroll(); cancelOpening(); searchStore.cancelPending() }
         .onExitCommand { dismissSearch() }
         #if DEBUG
         .onChange(of: searchStore.result?.matches.map(\.key)) { _, keys in
@@ -139,6 +139,7 @@ struct MacFulltextSearch: View {
                             .buttonStyle(.plain)
                             .disabled(openingKey != nil)
                             .tag(match.key).id(match.key)
+                            .background(MacSearchScrollBookmark(state: state))
                     }
                     if result.total > result.matches.count {
                         Text("search.more \(result.total - result.matches.count)")
@@ -152,10 +153,7 @@ struct MacFulltextSearch: View {
                 .onChange(of: selection) { _, key in
                     if let key { proxy.scrollTo(key) }
                 }
-                .onAppear {
-                    highlightFirst(of: result)
-                    if let selection { proxy.scrollTo(selection) }
-                }
+                .onAppear { highlightFirst(of: result) }
                 }
                 .onAppear { highlightFirst(of: result) }
                 .onChange(of: result.matches.map(\.key)) { _, _ in highlightFirst(of: result) }
@@ -279,6 +277,7 @@ struct MacFulltextSearch: View {
         cancelOpening()
         query = text
         selection = nil
+        state.resetScroll()
         openingError = nil
         searchStore.prepare(text, client: appModel.client)
     }

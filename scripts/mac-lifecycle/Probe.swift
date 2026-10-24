@@ -194,6 +194,20 @@ struct LifecycleProbe {
         check(!store.isSearching && store.result != nil, "equal trimmed query discarded completed result")
         await store.search("  retry  ", client: client) { $0 === client }
         check(client.calls.count == calls, "equal trimmed query repeated remote search")
+        store.cancelPending()
+        await store.search("retry", client: client) { $0 === client }
+        check(client.calls.count == calls && store.result?.matches.first?.key == "recovered",
+              "closing and reopening search discarded accepted results")
+        let browser = MacNavigationState()
+        browser.selectHost("first")
+        browser.host.search.query = "remember"
+        browser.host.search.selection = "old"
+        browser.host.history.visit("old")
+        browser.selectHost("second")
+        check(browser.host.search.query.isEmpty && browser.host.history.keys.isEmpty, "host search/history leaked")
+        browser.selectHost("first")
+        check(browser.host.search.query == "remember" && browser.host.search.selection == "old"
+              && browser.host.history.current == "old", "host search/history was lost on return")
         store.prepare("edited", client: client)
         check(store.isSearching && store.result == nil, "debounce interval has no loading feedback")
         store.prepare("  ", client: client)

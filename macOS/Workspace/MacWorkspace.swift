@@ -545,6 +545,11 @@ final class MacWorkspace {
 
     /// The sidebar reflects the focused pane.
     func replaceKey(_ old: String, with new: String) {
+        navigation.host.history.replace(old, with: new)
+        if let position = navigation.host.reading.removeValue(forKey: old) {
+            navigation.host.reading[new] = position
+        }
+        if navigation.host.search.selection == old { navigation.host.search.selection = new }
         if let index = paneKeys.firstIndex(of: old) { paneKeys[index] = new }
         if focusedKey == old { focusedKey = new }
     }

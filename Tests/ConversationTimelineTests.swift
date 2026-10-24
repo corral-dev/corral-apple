@@ -88,12 +88,44 @@ final class ConversationTimelineTests: XCTestCase {
             message(seq: 3, role: "user", text: "第二句"),
             message(seq: 1, role: "user", text: "第一句"),
             message(seq: 2, role: "assistant", text: "好的"),
-            message(seq: 4, role: "user", text: "You are picking up a session from Claude"),
+            message(seq: 4, role: "user", text: "<system-reminder>注入</system-reminder>"),
             message(seq: 5, role: "user", text: "第二句"),
         ]
 
         let prompts = ConversationMessagePolicy.userPrompts(from: messages)
         XCTAssertEqual(prompts.map(\.text), ["第一句", "第二句"])
+    }
+
+    func testRelayHandoffPromptIsAHumanMessage() throws {
+        let chinese = try message(
+            seq: 1,
+            role: "user",
+            text: "任务：Subswap 余量不显示\n\n你正在接力一个来自 Cursor 的会话。"
+                + "请新建自己的会话继续工作；这不是对原会话的原生恢复。"
+        )
+        let english = try message(
+            seq: 2,
+            role: "user",
+            text: "Task: Fix the flaky login\n\nYou are picking up a session from Claude Code. "
+                + "Start a new session of your own and continue the work; "
+                + "this is not a native resume of the original session."
+        )
+
+        let items = ConversationMessagePolicy.timelineItems(from: [chinese, english])
+        XCTAssertEqual(items.count, 2, "接力提示词是真人消息，必须留在聊天时间线")
+        for (item, source) in zip(items, [chinese, english]) {
+            guard case .message(let rendered) = item else {
+                return XCTFail("接力提示词应渲染成普通用户气泡")
+            }
+            XCTAssertEqual(rendered.seq, source.seq)
+            XCTAssertEqual(rendered.text, source.text)
+        }
+        XCTAssertEqual(
+            ConversationMessagePolicy.userPrompts(from: [chinese, english]).map(\.seq),
+            [1, 2],
+            "Your prompts 与输入历史也必须保留接力提示词")
+        XCTAssertFalse(ConversationMessagePolicy.isInjectedUserPrompt(chinese.text ?? ""))
+        XCTAssertFalse(ConversationMessagePolicy.isInjectedUserPrompt(english.text ?? ""))
     }
 
     func testRichMessageRejectsUnknownOrMissingRole() {
@@ -307,8 +339,6 @@ final class ConversationTimelineTests: XCTestCase {
             "只回复 OK。",
             "<turn_aborted>用户中断了上一轮</turn_aborted>",
             "你是 OpenConductor 的编排助手",
-            "You are picking up a session from another runtime",
-            "这是跨运行时接力，不是原生恢复",
             "【本轮回复契约】请只返回结果",
         ]
 

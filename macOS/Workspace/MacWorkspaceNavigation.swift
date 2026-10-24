@@ -15,7 +15,8 @@ extension MacWorkspace {
         guard let key = focusedKey, let entry = paneSurfaces.existingEntry(for: key) else { return }
         if mode(for: key) == .terminal,
            let terminal = descendant(StreamTerminalView.self, in: entry.view) {
-            navigation.host.reading[key] = .terminal(terminal.scrollPosition)
+            navigation.host.reading[key] = .terminal(row: terminal.getTerminal().buffer.yDisp,
+                followsLatest: !terminal.canScroll || terminal.scrollPosition >= 1)
         } else if let scroll = descendant(MacConversationTable.ConversationScrollView.self, in: entry.view),
                   let coordinator = scroll.coordinator {
             let position = coordinator.navigationPosition
@@ -39,6 +40,12 @@ extension MacWorkspace {
         navigation.requestID = request
         navigation.isNavigating = true
         defer { if navigation.requestID == request { navigation.isNavigating = false } }
+        if ProjectShell.isShellKey(key), shells.shell(for: key) != nil {
+            state.history.move(to: index)
+            open(key, sessions: feed.listStore.windowSessions, takeKeys: true)
+            await restoreReadingPosition(for: key, state: state)
+            return
+        }
         do {
             guard let session = try await resolveNavigationSession(key), navigation.host === state,
                   navigation.requestID == request, state.history == history else { return }
@@ -61,10 +68,11 @@ extension MacWorkspace {
             guard !Task.isCancelled, navigation.host === state, focusedKey == key else { return }
             if let entry = paneSurfaces.existingEntry(for: key), entry.lifetime.isPresented {
                 switch position {
-                case let .terminal(fraction):
+                case let .terminal(row, followsLatest):
                     if let terminal = descendant(StreamTerminalView.self, in: entry.view),
-                       terminal.bounds.height > 0 {
-                        terminal.scroll(toPosition: fraction)
+                       terminal.bounds.height > 0, followsLatest || terminal.canScroll {
+                        if followsLatest { terminal.scroll(toPosition: 1) }
+                        else { terminal.scrollTo(row: row) }
                         return
                     }
                 case let .chat(id, offset, followsLatest, generation):

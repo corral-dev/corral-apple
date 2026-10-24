@@ -109,6 +109,10 @@ struct MacRootView: View {
             }
             if arguments.contains("-CorralInspectPairing") { showPairing = true }
             Task {
+                await MacSearchNavigationInspection.runIfRequested(workspace: workspace, model: appModel,
+                    presentSearch: { showSearch = true }, dismissSearch: { showSearch = false })
+            }
+            Task {
                 await MacTitleMenuInspection.run(appModel: appModel, workspace: workspace) {
                     workspace.focusedKey.flatMap { feed?.listStore.session(for: $0) }
                 }

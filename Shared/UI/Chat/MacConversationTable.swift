@@ -92,11 +92,11 @@ struct MacConversationTable: NSViewRepresentable {
         table.intercellSpacing = .zero
         table.backgroundColor = .clear
         table.usesAutomaticRowHeights = false
-        // The coordinator keeps the single column exactly as wide as the table,
-        // the width every row is measured at.
-        table.columnAutoresizingStyle = .noColumnAutoresizing
+        // AppKit includes style-dependent margins outside the column. Let its
+        // native fitting API own that space so the document never overflows.
+        table.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("conversation"))
-        column.resizingMask = []
+        column.resizingMask = .autoresizingMask
         table.addTableColumn(column)
         scroll.documentView = table
         coordinator.attach(scroll: scroll, table: table)
@@ -379,7 +379,7 @@ struct MacConversationTable: NSViewRepresentable {
         /// The single column spans the clip view; rows are measured and laid
         /// out at exactly this width.
         private var rowWidth: CGFloat {
-            scroll?.contentView.bounds.width ?? 0
+            table?.tableColumns.first?.width ?? 0
         }
 
         func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
@@ -415,10 +415,12 @@ struct MacConversationTable: NSViewRepresentable {
         }
 
         func tableWillLayout() {
-            guard let table, canMeasure, let column = table.tableColumns.first else { return }
+            guard let table, canMeasure, let scroll else { return }
             defer { scheduleHistoryCheck() }
+            if abs(table.frame.width - scroll.contentView.bounds.width) > 0.25 {
+                table.sizeLastColumnToFit()
+            }
             let width = rowWidth
-            if abs(column.width - width) > 0.25 { column.width = width }
             guard needsRemeasure || abs(width - measuredWidth) > 0.25 else { return }
             needsRemeasure = false
             measuredWidth = width

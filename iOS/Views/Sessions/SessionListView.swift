@@ -49,6 +49,9 @@ struct SessionListView: View {
     /// set this — only the `session.get` lookup may.
     @State private var missingNotificationKey: String?
     @State private var inspectedSessionRoute: SessionRoute?
+    #if DEBUG
+    @State private var navigationInspectionStarted = false
+    #endif
     /// Date disclosures survive navigation and updates for this host page.
     @State private var sectionExpansion: [String: Bool] = [:]
     @State private var filteredSectionExpansion: [String: Bool] = [:]
@@ -312,6 +315,10 @@ struct SessionListView: View {
             guard isActiveList else { return }
             await bootstrap()
             #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("-CorralInspectSearchNavigation"), !navigationInspectionStarted {
+                navigationInspectionStarted = true
+                Task { await inspectSearchNavigation() }
+            }
             if ProcessInfo.processInfo.arguments.contains("-CorralInspectBottomBarSearch") {
                 isSearchPresented = true
                 if let query = ProcessInfo.processInfo.environment["CORRAL_INSPECTION_SEARCH"] {
@@ -371,6 +378,33 @@ struct SessionListView: View {
             )
         }
     }
+
+    #if DEBUG
+    /// Drive the actual detail route without injecting input or editing history.
+    @MainActor private func inspectSearchNavigation() async {
+        guard let client = appModel.client else { return }
+        let search = FulltextSearchStore()
+        await search.search("透明", client: client) { appModel.client === $0 }
+        let previous = Set(listStore.windowSessions.map(\.key))
+        guard let match = search.result?.matches.first(where: { !previous.contains($0.key) }),
+              let session = match.session else { return }
+        retainSearchResult(session)
+        inspectedSessionRoute = SessionRoute(key: session.key)
+        try? await Task.sleep(for: .seconds(3))
+        let retained = listStore.windowSessions.contains { $0.key == session.key }
+        let report: [String: Any] = ["outsideWindow": true, "detailOpened": inspectedSessionRoute?.key == session.key,
+            "retainedAfterOpen": retained, "key": session.key]
+        let folder = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted])
+            .write(to: folder.appendingPathComponent("navigation-inspection.json"), options: .atomic)
+        try? await Task.sleep(for: .seconds(12))
+        inspectedSessionRoute = nil
+        listStore.searchQuery = ""
+        for section in listStore.sections where section.sessions.contains(where: { $0.key == session.key }) {
+            sectionExpansion[section.id] = true
+        }
+    }
+    #endif
 
     // MARK: - Full-text search
 
