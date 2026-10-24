@@ -327,7 +327,26 @@ pixels show the native terminal with no Connecting overlay. Control and data wer
 the task-created Debug process was then stopped. This proves the normal live path, while
 the deliberate missing-frame path is established by the production-component fixture.
 the paired iPhone is unavailable, so no physical-phone terminal/reconnect interaction is claimed.
-Installation and publication are recorded separately after delivery.
+Delivery: source `55368a2` produced Mac 0.3.146 (150) and iPhone 1.0.194 (204).
+The universal Mac is installed at `/Applications/Corral.app`; its executable matches the
+signed export and its stapled ticket validates. Active diagnostics show local ready/data
+attached. Native sidebar selection acknowledged the reported Pi row with its PID unchanged;
+the owner selected another conversation before capture, so that installed capture proves a
+live Pi terminal, not the original session's appearance. The exact original-session window
+check above remains same-source Debug evidence; no pointer or Press action was sent.
+
+The [Mac release](https://github.com/corral-dev/corral-apple/releases/tag/mac-v0.3.146)
+is Latest with DMG/ZIP downloads verified against their SHA-256 digests, a signed update feed
+and matching Homebrew Cask. A transient timeout while waiting for the DMG notarization was
+resolved by resuming the same prepared receipt/submission; both notarizations are Accepted.
+The signed phone IPA is on the maintainer's private installation shelf, release 330, with
+complete English/Chinese notes and a matching downloaded package digest. Direct installation
+returned device unavailable; MDM returned already-installed without an exact-version inventory
+readback, so neither the current phone version nor its terminal appearance is claimed.
+
+Follow-up: correlate terminal attach acknowledgement and initial-snapshot receive timing in
+bounded diagnostics without recording payloads, so a future transport incident can be
+attributed without inferring loss from a spinner.
 
 ### Adaptive agent-terminal margins (owner decision, 2026-10-15)
 
