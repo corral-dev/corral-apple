@@ -289,6 +289,46 @@ Authority for TUI behavior: [Terminal UI knowledge base](../https://github.com/c
 - Opening the terminal view of a session that is not running resumes it natively (`session.resume`) without a prompt; see [Terminal view starts ended sessions](#terminal-view-starts-ended-sessions-owner-request-2026-10-11). Sessions running in another terminal window remain chat-only, as in the TUI.
 - The phone's terminal gate (`ProductFeatures.terminalPaneEnabled`) stays off for iPhone. The Mac terminal view is not behind that gate or any other flag: the pane view hosts `MacTerminalPane` directly.
 
+#### Terminal first-frame recovery (owner report, 2026-10-24)
+
+An acknowledged `terminal.attach` is not evidence that a terminal snapshot was received.
+The shared stream must recover a missing first snapshot through bounded `terminal.resync`
+requests, then use the existing load-failure/Retry state if no frame arrives. Snapshot,
+ended, stop and connection-generation changes cancel that wait; an obsolete request must
+not change a newer stream. Recovery never resumes/restarts the agent or replays input.
+This applies to Mac and iPhone raw terminals, including project shells. The TUI reads tmux
+directly and does not use this client stream.
+
+The owner's capture showed Mac connected locally while Pi's terminal remained blank at
+Connecting. Subsequent evidence found the same Pi PID alive since 14:36 and its native
+screen rendering normally, with a separate provider quota error. Client diagnostics retain
+7.5–11.6-second RPC waits near the capture but no method/first-frame correlation; they
+cannot prove which event delayed or lost that original snapshot. The confirmed client gap
+is that successful attach without a snapshot leaves `connecting` indefinitely, and early
+output is discarded while unsynchronized. Keep the original transport cause unconfirmed.
+
+Reference: reuse `RemoteTerminalStream`'s existing generation guards, `terminal.resync`
+and the shells' native load-failure/Retry presentation; no new UI construction. The public
+[Task.sleep API](https://developer.apple.com/documentation/swift/task/sleep(for:tolerance:clock:))
+suspends without blocking and throws on cancellation; verify cancellation again after any
+in-flight RPC. The installed Swift 6.4 SDK compiles this API for both deployment targets.
+
+Validation: the production lifecycle probe fails on the original stream when an acknowledged
+attach loses its snapshot, and passes after the fix. It also verifies two bounded resyncs,
+the failure/Retry path, stopped/reopened generation safety, and ended cleanup with no input
+or resume calls. Each recovery wait is three seconds; a pending RPC retains its existing
+bounded request timeout. All 421 portable tests, 558 localization usages and five diagnostic
+tool tests pass. Complete native Mac Debug clean build/static analysis and generic-device
+iOS Release logs retain only the individually assessed native Markdown, serial camera and
+App Intents diagnostics in the [performance KB](../PERFORMANCE_KNOWLEDGE_BASE.md#compiler-diagnostics-2026-10-07).
+
+A fresh, host-backed Debug Mac window opened the exact reported Pi session and its actual
+pixels show the native terminal with no Connecting overlay. Control and data were ready;
+the task-created Debug process was then stopped. This proves the normal live path, while
+the deliberate missing-frame path is established by the production-component fixture.
+the paired iPhone is unavailable, so no physical-phone terminal/reconnect interaction is claimed.
+Installation and publication are recorded separately after delivery.
+
 ### Adaptive agent-terminal margins (owner decision, 2026-10-15)
 
 The Mac agent TUI uses a centered readable column like Chat. Its horizontal margins depend on the individual pane width, not the whole window or the number of splits: a wide pane leaves more space on both sides; narrowing it continuously reclaims that space until only the existing minimum terminal inset remains. Use the Chat readable-width token and interface scale. Do not add a mode, preference, border or background card. Vertical spacing stays unchanged. Project shells keep their full-width terminal layout; this decision is about the agent TUI that switches with Chat.
@@ -1016,7 +1056,9 @@ The Mac window provides native Back/Forward controls and Command-[ / Command-] m
 
 Reopening Command-F restores the host's query, results, highlighted hit and result-list position for the current app run. Dismissing cancels obsolete work without deleting accepted results; reconnects/client changes invalidate obsolete transport results. Switching hosts never displays another host's search state.
 
-Inspected component references: Corral's `MacSidebar` native `List(selection:)`/date disclosures, `MacFulltextSearch` result `ScrollViewReader`, `MacWorkspace.open`, `MacPaneSurfaceCache`, and `MacConversationTable` row/offset anchors; TUI `_reveal_session` clears conflicting filters and reveals the selected result. External interaction references: [VS Code's selectResource](https://github.com/microsoft/vscode/blob/main/src/vs/workbench/contrib/files/browser/views/explorerView.ts#L841), [Obsidian auto-reveal](https://obsidian.md/help/plugins/file-explorer), [Slack navigation](https://slack.com/blog/productivity/how-to-get-your-work-back-on-track-in-slack), and [Teams history](https://support.microsoft.com/en-us/teams/notifications-settings/use-history-to-return-to-recent-places-in-microsoft-teams). Reuse their reveal/visit separation, not their editor tabs or a replacement navigation container. Public APIs: SwiftUI `ScrollViewReader`/`ScrollViewProxy.scrollTo`, `List(selection:)`, `ToolbarItem(placement: .navigation)`, `ControlGroup` with `.navigation` style, and native `Button`/`Menu`/keyboard shortcuts; AppKit clip-view scrolling retains the existing table's anchor semantics. Declarations are present in the installed Xcode 27.2 macOS SDK; `.navigation` control-group style supports macOS 12+ and fits this client's macOS 26 baseline. Use system chevron symbols.
+Delivery and verification (2026-10-24): Mac 0.3.144 (148), source `bb5457a` and public tag `mac-v0.3.144`, includes this search-navigation work in the complete workspace. A host-backed Debug inspection from the same production sources (test-harness follow-up `1b55f37`) passed out-of-window search opening, sidebar membership/selection/row visibility, Back/Forward with reading position (`tools-387` at -11 on return), retained query/results, result-list first visible row restored after reopening (row 3), and zero horizontal overflow at 1436/900/1180-point window widths. Held sheet captures show the scrolled results before and after reopening; the back capture shows the opened historical row selected in the sidebar. Release builds cannot run the DEBUG inspection, and physical trackpad/pointer gestures remain owner checks.
+
+Inspected component references: Corral's `MacSidebar` native `List(selection:)`/date disclosures, `MacFulltextSearch` result `ScrollViewReader`, `MacWorkspace.open`, `MacPaneSurfaceCache`, and `MacConversationTable` row/offset anchors; TUI `_reveal_session` clears conflicting filters and reveals the selected result. External interaction references: [VS Code's selectResource](https://github.com/microsoft/vscode/blob/main/src/vs/workbench/contrib/files/browser/views/explorerView.ts#L841), [Obsidian auto-reveal](https://obsidian.md/help/plugins/file-explorer), [Slack navigation](https://slack.com/blog/productivity/how-to-get-your-work-back-on-track-in-slack), and [Teams history](https://support.microsoft.com/en-us/teams/notifications-settings/use-history-to-return-to-recent-places-in-microsoft-teams). Reuse their reveal/visit separation, not their editor tabs or a replacement navigation container. Public APIs: SwiftUI `ScrollViewReader`/`ScrollViewProxy.scrollTo`, `List(selection:)`, `ToolbarItem(placement: .navigation)`, `ControlGroup` with `.navigation` style, and native `Button`/`Menu`/keyboard shortcuts; AppKit observation records the results list's first visible row and the native `ScrollViewReader` restores it. Declarations are present in the installed Xcode 27.2 macOS SDK; `.navigation` control-group style supports macOS 12+ and fits this client's macOS 26 baseline. Use system chevron symbols.
 
 Cross-client scope: iPhone search already occupies its native list and returns through the native navigation stack. Explicitly opening its historical result must also retain ordinary-list membership after search is cleared; merely rendering result rows retains metadata only. Mac history controls/search-sheet restoration are Mac-specific. TUI already reveals a confirmed search hit through `_reveal_session`; verify its same-scenario behavior rather than adding Mac controls. Acceptance covers out-of-window history, collapsed dates, conflicting filters, refresh/reconnect, aliases/deletion, host isolation, Back/Forward branching, reading-position return and repeated search dismissal/reopening. Source/unit checks are separate from installed-window/device evidence.
 

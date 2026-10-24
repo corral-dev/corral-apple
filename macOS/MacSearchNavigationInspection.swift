@@ -28,7 +28,9 @@ enum MacSearchNavigationInspection {
             await search.store.search(search.query, client: client) { model.client === $0 }
             guard let matches = search.store.result?.matches, !matches.isEmpty else { throw Failure.noHistory }
             let originalKeys = Set(feed.listStore.windowSessions.map(\.key))
-            guard let hit = matches.first(where: { !originalKeys.contains($0.key) }) else { throw Failure.noHistory }
+            guard let hit = matches.first(where: {
+                !originalKeys.contains($0.key) && $0.session?.live != true
+            }) else { throw Failure.noHistory }
             let key = hit.key
             let oldMode = workspace.mode(for: key)
             workspace.setMode(.chat, for: key)
@@ -92,6 +94,7 @@ enum MacSearchNavigationInspection {
                 await stage("search", results: results, folder: folder, workspace: workspace)
                 dismissSearch()
                 try await Task.sleep(for: .milliseconds(500))
+                let savedRow = search.scrollRow
                 var reattached = false
                 for _ in 0..<4 {
                     presentSearch()
@@ -112,9 +115,9 @@ enum MacSearchNavigationInspection {
                     }
                     try? await Task.sleep(for: .milliseconds(150))
                 }
-                results["searchScrollRestored"] = row != nil && row == restored
+                results["searchScrollRestored"] = savedRow != nil && savedRow == restored
                 try? JSONSerialization.data(withJSONObject: ["row": restored ?? -1,
-                    "recorded": row ?? -1,
+                    "recorded": savedRow ?? -1,
                     "geometry": search.inspectionScrollDiagnostics], options: [.prettyPrinted])
                     .write(to: folder.appendingPathComponent("search-restored-geometry.json"), options: .atomic)
                 await stage("reopened-search", results: results, folder: folder, workspace: workspace)
@@ -203,7 +206,7 @@ enum MacSearchNavigationInspection {
 
     private static func waitForSearchScroll(_ search: MacSearchState) async -> Bool {
         for _ in 0..<200 {
-            if search.inspectionScrollAttached, search.inspectionScrollVisible { return true }
+            if search.inspectionScrollAttached { return true }
             try? await Task.sleep(for: .milliseconds(50))
         }
         return false

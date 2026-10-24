@@ -672,6 +672,57 @@ final class SessionListStoreTests: XCTestCase {
         XCTAssertFalse(store.markReadLocally(key: "claude:missing"))
     }
 
+    /// A retained creation key must follow the host's alias even when the window
+    /// itself is unchanged (the detail feed was inactive during promotion).
+    func testHostAliasesRetireRetainedCreationKey() throws {
+        let provisional = try session(key: "opencode:72e038c8", title: "OpenCode · 新会话", runtime: "opencode")
+        let canonical = try session(key: "opencode:ses_new", title: "真正的会话", runtime: "opencode")
+        let store = SessionListStore()
+        store.loadPersisted(hostID: "alias-host")
+        store.updateSessions([provisional])
+        store.revealSession(provisional)
+        XCTAssertTrue(store.windowSessions.contains { $0.key == provisional.key })
+
+        // Host promotes while this client was not watching the list.
+        store.applyListResponse(SessionsListResponse(
+            sessions: [canonical],
+            version: "v2",
+            unchanged: false,
+            aliases: ["opencode:72e038c8": "opencode:ses_new"]
+        ))
+        XCTAssertEqual(store.windowSessions.map(\.key), [canonical.key])
+        XCTAssertEqual(store.session(for: provisional.key)?.key, canonical.key)
+
+        // A relaunch restores the stale visit; an unchanged reply still repairs it.
+        let reopened = SessionListStore()
+        reopened.loadPersisted(hostID: "alias-host")
+        reopened.updateSessions([provisional])
+        reopened.revealSession(provisional)
+        reopened.applyListResponse(SessionsListResponse(
+            sessions: [],
+            version: "v3",
+            unchanged: true,
+            aliases: ["opencode:72e038c8": "opencode:ses_new"]
+        ))
+        XCTAssertFalse(reopened.windowSessions.contains { $0.key == provisional.key })
+        XCTAssertEqual(reopened.session(for: provisional.key)?.key, canonical.key)
+    }
+
+    /// The host repeats aliases on `unchanged`; the wire decoder must keep them.
+    func testUnchangedListResponseDecodesAliases() throws {
+        let response = try RemoteJSONDecoder.decode(
+            SessionsListResponse.self,
+            from: [
+                "unchanged": true,
+                "version": "v9",
+                "aliases": ["opencode:72e038c8": "opencode:ses_new"],
+            ]
+        )
+        XCTAssertTrue(response.unchanged)
+        XCTAssertEqual(response.aliases?["opencode:72e038c8"], "opencode:ses_new")
+        XCTAssertTrue(response.sessions.isEmpty)
+    }
+
     func testOpeningLeavesWaitingAndWorkingDots() {
         let store = SessionListStore()
         store.updateSessions([

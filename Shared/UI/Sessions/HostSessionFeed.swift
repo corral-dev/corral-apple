@@ -324,6 +324,7 @@ final class HostSessionFeed {
             guard listStore.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines) == query else {
                 return
             }
+            listStore.applyAliases(response.aliases)
             listStore.applySearchHits(response.sessions, query: query)
         } catch {
             // 本地窗口过滤已经在画，开发机搜索失败时保留它。

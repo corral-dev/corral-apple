@@ -92,4 +92,14 @@ Complete clean generic-device iOS Release compilation, all 406 portable Core tes
 
 The inspected installed-phone capture shows a connected session list, not Terminal or the expanded prompt sheet. Those two physical interactions therefore remain unverified; no pointer automation was used. Mac window capture failed in both the agent runner and Terminal helper, so no new Mac visual pass is claimed. Mac 0.3.118 (122) remains installed with its independent, unchanged startup/header code. TUI has no phone mode/menu transition and no code changed there; the real-pane host recovery test covers the common launch service. Public UI/resources match the committed private snapshot byte-for-byte.
 
+## First terminal frame recovery (2026-10-24)
+
+The shared raw stream now recovers an acknowledged attach that never delivers its initial
+snapshot, then exposes the existing failure/Retry state after bounded attempts. It never
+replays input or resumes an agent. The same code serves Mac, iPhone agent terminals and
+project shells; the contract, incident attribution limits and validation are recorded in
+[Mac terminal first-frame recovery](MACOS_CLIENT_DESIGN.md#terminal-first-frame-recovery-owner-report-2026-10-24).
+Physical iPhone acceptance remains unavailable while the paired iPhone is unreachable; delivery
+still includes the signed phone build and install-shelf publication.
+
 <!-- 该文档整理/压缩于 2026-10-20 -->

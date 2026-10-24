@@ -395,6 +395,95 @@ struct LifecycleProbe {
         fitted.stop(); await settle()
         print("PASS terminal: reattach/snapshot, close during attach, replacement ordering, resize retry")
     }
+    @MainActor static func terminalFirstFrameRegressions() async {
+        let client = RemoteClient()
+        let stream = RemoteTerminalStream(sessionKey: "lost-first-frame", client: client)
+        let sink = Sink()
+        stream.sink = sink
+        client.handler = { method, _ in
+            if method == WireProtocol.mTerminalResync {
+                client.emit(["kind": "snapshot", "seq": 2, "cols": 80, "rows": 24,
+                             "data": Data("recovered first frame".utf8).base64EncodedString()],
+                            channel: "term:lost-first-frame")
+            }
+            return [:] as [String: Any]
+        }
+        stream.start()
+        stream.updateFit(TerminalGrid(cols: 80, rows: 24))
+        // The attach reply succeeds, but its first snapshot never arrives.
+        // Unsynchronized output must not masquerade as a complete screen.
+        client.emit(["kind": "output", "seq": 1, "data": Data("partial".utf8).base64EncodedString()],
+                    channel: "term:lost-first-frame")
+        let deadline = ContinuousClock.now + .seconds(8)
+        while stream.phase == .connecting, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        check(stream.phase == .live && sink.resets == 1,
+              "successful attach without a first snapshot stayed Connecting instead of resyncing")
+        check(client.calls.filter { $0.0 == WireProtocol.mTerminalAttach }.count == 1,
+              "first-frame recovery reattached or started the agent")
+        check(client.calls.filter { $0.0 == WireProtocol.mTerminalResync }.count == 1,
+              "first-frame recovery did not request exactly one fresh snapshot")
+        stream.stop(); await settle()
+
+        let silent = RemoteClient(), missing = RemoteTerminalStream(sessionKey: "silent", client: silent)
+        missing.start(); missing.updateFit(TerminalGrid(cols: 80, rows: 24))
+        let failureDeadline = ContinuousClock.now + .seconds(12)
+        while missing.phase == .connecting, ContinuousClock.now < failureDeadline {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        if case .failed = missing.phase {} else {
+            check(false, "terminal with no snapshots never reached its bounded failure state")
+        }
+        check(silent.calls.filter { $0.0 == WireProtocol.mTerminalResync }.count == 2,
+              "missing-frame recovery was not bounded to two resyncs")
+        silent.handler = { method, _ in
+            if method == WireProtocol.mTerminalAttach {
+                silent.emit(["kind": "snapshot", "seq": 3, "cols": 80, "rows": 24,
+                             "data": Data("retry frame".utf8).base64EncodedString()], channel: "term:silent")
+            }
+            return [:] as [String: Any]
+        }
+        missing.retry(); await settle()
+        check(missing.phase == .live, "Retry did not recover the timed-out terminal")
+        missing.stop(); await settle()
+
+        let delayed = RemoteClient(), resyncGate = Gate()
+        let stopped = RemoteTerminalStream(sessionKey: "late-frame", client: delayed)
+        delayed.handler = { method, _ in
+            if method == WireProtocol.mTerminalResync { return try await resyncGate.wait() }
+            return [:] as [String: Any]
+        }
+        stopped.start(); stopped.updateFit(TerminalGrid(cols: 80, rows: 24))
+        let resyncDeadline = ContinuousClock.now + .seconds(6)
+        while resyncGate.continuation == nil, ContinuousClock.now < resyncDeadline {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        check(resyncGate.continuation != nil, "missing first frame never requested resync")
+        stopped.stop(); await settle()
+        delayed.handler = { method, _ in
+            if method == WireProtocol.mTerminalAttach {
+                delayed.emit(["kind": "snapshot", "seq": 4, "cols": 80, "rows": 24,
+                              "data": Data("new generation".utf8).base64EncodedString()],
+                             channel: "term:late-frame")
+            }
+            return [:] as [String: Any]
+        }
+        stopped.start(); await settle()
+        check(stopped.phase == .live, "reopened terminal did not receive its new frame")
+        resyncGate.fail(); await settle()
+        check(stopped.phase == .live, "retired resync failure replaced a new live terminal")
+        delayed.emit(["kind": "ended", "seq": 5], channel: "term:late-frame"); await settle()
+        try? await Task.sleep(for: .milliseconds(3200))
+        check(stopped.phase == .ended && delayed.calls.filter { $0.0 == WireProtocol.mTerminalResync }.count == 1,
+              "a live or ended terminal retained first-frame recovery")
+        check(delayed.calls.allSatisfy { [WireProtocol.mTerminalAttach, WireProtocol.mTerminalDetach,
+                                          WireProtocol.mTerminalResync].contains($0.0) },
+              "frame recovery sent input or restarted an agent")
+        stopped.stop(); await settle()
+        print("PASS terminal first frame: lost frame, bounded failure, retry, retired RPC and ended cleanup")
+    }
+
     @MainActor static func promptNavigationRegressions() async {
         let client = RemoteClient(), stream = RemoteTerminalStream(sessionKey: "prompt", client: client), sink = Sink()
         stream.sink = sink; stream.start(); stream.updateFit(TerminalGrid(cols: 80, rows: 24)); await settle()
@@ -680,6 +769,7 @@ struct LifecycleProbe {
         try await resumeRegressions()
         try await workspaceRegressions()
         try await terminalRegressions()
+        await terminalFirstFrameRegressions()
         await promptNavigationRegressions()
     }
 }

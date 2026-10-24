@@ -10,12 +10,17 @@ nonisolated struct SessionsListResponse: Codable, Sendable {
     let total: Int?
     /// Monotonic host metadata revision when supported by newer hosts.
     let revision: UInt64?
+    /// Host-authoritative provisional → canonical keys, repeated on every list
+    /// reply (including `unchanged`) so a visit key retained without the list
+    /// feed can still follow the promoted session.
+    let aliases: [String: String]?
 
     enum CodingKeys: String, CodingKey {
         case sessions, version, unchanged
         case hasMore = "has_more"
         case total
         case revision, epoch
+        case aliases
     }
 
     init(
@@ -24,7 +29,8 @@ nonisolated struct SessionsListResponse: Codable, Sendable {
         unchanged: Bool = false,
         hasMore: Bool? = nil,
         total: Int? = nil,
-        revision: UInt64? = nil
+        revision: UInt64? = nil,
+        aliases: [String: String]? = nil
     ) {
         self.sessions = sessions
         self.version = version
@@ -32,6 +38,7 @@ nonisolated struct SessionsListResponse: Codable, Sendable {
         self.hasMore = hasMore
         self.total = total
         self.revision = revision
+        self.aliases = aliases
     }
 
     init(from decoder: Decoder) throws {
@@ -51,6 +58,8 @@ nonisolated struct SessionsListResponse: Codable, Sendable {
         } else {
             revision = nil
         }
+        // Hosts repeat aliases on every reply, including `unchanged`.
+        aliases = (try? container.decodeIfPresent([String: String].self, forKey: .aliases)) ?? nil
         if unchanged {
             sessions = []
             return
@@ -74,6 +83,7 @@ nonisolated struct SessionsListResponse: Codable, Sendable {
         try container.encodeIfPresent(hasMore, forKey: .hasMore)
         try container.encodeIfPresent(total, forKey: .total)
         try container.encodeIfPresent(revision, forKey: .revision)
+        try container.encodeIfPresent(aliases, forKey: .aliases)
     }
 }
 

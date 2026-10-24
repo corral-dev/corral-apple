@@ -75,6 +75,7 @@ final class RemoteTerminalStream {
     @ObservationIgnored private var sentGrid: TerminalGrid?
     @ObservationIgnored private var resizeTask: Task<Void, Never>?
     @ObservationIgnored private var resizeGeneration = UUID()
+    @ObservationIgnored private var snapshotRecovery: Task<Void, Never>?
     /// Whether the hosting window is in front (Mac: key window of the active
     /// app). Platforms without background windows keep the default.
     @ObservationIgnored var isInFront: @MainActor () -> Bool = { true }
@@ -115,6 +116,7 @@ final class RemoteTerminalStream {
     func stop() {
         let wasRunning = events != nil
         generation = UUID()
+        cancelSnapshotRecovery()
         events?.cancel()
         events = nil
         resizeTask?.cancel()
@@ -311,6 +313,7 @@ final class RemoteTerminalStream {
     private func recover() {
         guard events != nil else { return }
         generation = UUID()
+        cancelSnapshotRecovery()
         resizeTask?.cancel()
         resizeTask = nil
         attachGeneration = nil
@@ -348,6 +351,7 @@ final class RemoteTerminalStream {
                 guard isCurrent(mine) else { return }
                 attached = true
                 sentGrid = grid
+                recoverMissingSnapshot()
                 debugTrace("terminal attached with theme \(attachTheme?.background ?? "none")")
                 if theme != attachTheme { sendTheme() }
                 if let latest = wanted, latest != grid { scheduleResize() }
@@ -377,6 +381,42 @@ final class RemoteTerminalStream {
             await operation.value
             if self.resizeGeneration == resize { self.resizeTask = nil }
         }
+    }
+
+    /// Attach acknowledges the subscription, not the first screen. A lost
+    /// snapshot must not leave an otherwise connected terminal spinning forever.
+    private func recoverMissingSnapshot() {
+        guard !synced, phase == .connecting, snapshotRecovery == nil, let client else { return }
+        let mine = generation, key = sessionKey
+        snapshotRecovery = Task { [weak self] in
+            for attempt in 0...2 {
+                do { try await Task.sleep(for: .seconds(3)) }
+                catch { return }
+                guard let self, !Task.isCancelled, self.isCurrent(mine),
+                      !self.synced, self.phase == .connecting else { return }
+                if attempt == 2 {
+                    self.snapshotRecovery = nil
+                    self.phase = .failed(String(localized: String.LocalizationValue("error.host_timeout")))
+                    return
+                }
+                do {
+                    _ = try await client.call(WireProtocol.mTerminalResync, params: ["key": key])
+                } catch {
+                    // A snapshot/reconnect/stop can win while this RPC is in
+                    // flight, including transports that ignore cancellation.
+                    guard !Task.isCancelled, self.isCurrent(mine),
+                          !self.synced, self.phase == .connecting else { return }
+                    self.snapshotRecovery = nil
+                    self.phase = .failed(error.localizedDescription)
+                    return
+                }
+            }
+        }
+    }
+
+    private func cancelSnapshotRecovery() {
+        snapshotRecovery?.cancel()
+        snapshotRecovery = nil
     }
 
     private func resize(_ grid: TerminalGrid, generation mine: UUID, request resize: UUID) async {
@@ -428,6 +468,7 @@ final class RemoteTerminalStream {
         case "snapshot":
             guard let cols = payload["cols"] as? Int, let rows = payload["rows"] as? Int,
                   let data = decode(payload["data"]) else { return }
+            cancelSnapshotRecovery()
             lastSeq = seq
             snapshotRevision += 1
             synced = true
@@ -452,6 +493,7 @@ final class RemoteTerminalStream {
                 backlog?.data.append(data)
             }
         case "ended":
+            cancelSnapshotRecovery()
             lastSeq = seq
             phase = .ended
         default:

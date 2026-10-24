@@ -140,6 +140,10 @@ final class SessionListStore {
 
     func applyListResponse(_ response: SessionsListResponse, persist: Bool = true) {
         refreshCalendar()
+        // Aliases are idempotent and must run even for `unchanged`: a visit key
+        // retained while the detail was open follows the host's promotion, and
+        // the window version does not change when only that key was retired.
+        applyAliases(response.aliases)
         if response.unchanged {
             if let next = response.version, !next.isEmpty {
                 version = next
@@ -147,6 +151,23 @@ final class SessionListStore {
             return
         }
         replaceWindow(response.sessions, version: response.version, revision: response.revision, persist: persist)
+    }
+
+    /// Follow host-authoritative provisional → canonical keys.
+    func applyAliases(_ aliases: [String: String]?) {
+        guard let aliases, !aliases.isEmpty else { return }
+        for (old, new) in aliases.sorted(by: { $0.key < $1.key }) {
+            guard !old.isEmpty, !new.isEmpty, old != new else { continue }
+            // Cheap guard: hosts repeat every live pane alias, but only keys this
+            // client actually holds can change a row or a detail route.
+            let held = recordsByKey[old] != nil
+                || listKeys.contains(old)
+                || revealedKeys.contains(old)
+                || openedKeys.contains(old)
+                || deletedKeys.contains(old)
+            guard held, aliasByKey[old] != new else { continue }
+            migrateSession(from: old, to: new)
+        }
     }
 
     func updateSessions(_ sessions: [SessionSummary]) {
