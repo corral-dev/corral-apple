@@ -21,6 +21,8 @@ struct MacSidebar: View {
     @State private var orderBox = OrderBox()
     @State private var selectedKeys: Set<String> = []
     @State private var pendingRevealSerial: Int?
+    @State private var acknowledgedRevealSerial = 0
+    @State private var revealGuardUntil: Date?
     @State private var deleteTargets: [SessionSummary] = []
     @State private var batch = MacSessionBatch()
     @State private var batchError: String?
@@ -341,13 +343,16 @@ struct MacSidebar: View {
         }
         }
         .onChange(of: workspace.navigation.host.revealSerial, initial: true) { _, _ in
+            let serial = workspace.navigation.host.revealSerial
+            acknowledgedRevealSerial = serial
+            revealGuardUntil = Date().addingTimeInterval(0.6)
             #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("-CorralInspectSearchNavigation") {
                 workspace.navigation.host.inspectionEvents.append("reveal observer: \(workspace.navigation.host.revealKey ?? "nil")")
             }
             #endif
             guard workspace.navigation.host.revealKey != nil else { return }
-            pendingRevealSerial = workspace.navigation.host.revealSerial
+            pendingRevealSerial = serial
             guard let key = revealNavigationTarget() else { pendingRevealSerial = nil; return }
             selectedKeys = [key]
         }
