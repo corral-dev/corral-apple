@@ -14,6 +14,8 @@ SOURCES = [
     'Shared/Core/Models/DesktopLayoutModels.swift',
     'Shared/Core/Store/SessionRestartTracker.swift',
     'Shared/UI/Sessions/FulltextSearchStore.swift',
+    'Shared/Core/Presentation/SessionNavigationHistory.swift',
+    'macOS/Workspace/MacNavigationState.swift',
     'Shared/UI/Chat/ChatScrollRequest.swift',
     'macOS/Workspace/MacWorkspace.swift',
     'macOS/Sidebar/MacSessionBatch.swift',

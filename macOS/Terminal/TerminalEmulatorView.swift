@@ -420,6 +420,7 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
 
     private func placeTerminal() {
         let cell = cell
+        terminal.contextMenuCellSize = cell
         let size: CGSize
         if let grid {
             // Half a point of slack so SwiftTerm's floor() lands on the grid exactly.

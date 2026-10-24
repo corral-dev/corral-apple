@@ -79,6 +79,8 @@ struct RuntimeEntry: Decodable { var id: String; var isActive: Bool { true } }
     func patchSession(_ session: SessionSummary) { sessions[session.key] = session }
     func applySessionEvent(_ session: SessionSummary) { sessions[session.key] = session }
     func rememberOpened(_ session: SessionSummary) { opened.insert(session.key) }
+    func revealSession(_ session: SessionSummary) { rememberOpened(session); patchSession(session) }
+    func isDeleted(_ key: String) -> Bool { false }
     func session(for key: String) -> SessionSummary? { sessions[key] }
     func resolvedKey(_ key: String) -> String { key }
     func removeSession(key: String) { sessions[key] = nil }
@@ -88,6 +90,10 @@ struct RuntimeEntry: Decodable { var id: String; var isActive: Bool { true } }
     func reset() {}
     func evict(_ key: String) {}
 }
+
+// This transport-only harness has no mounted views. Native reading restoration
+// is verified by the real app/table scenario instead.
+extension MacWorkspace { func rememberReadingPosition() {} }
 
 // The standalone lifecycle probe does not link the SwiftTerm view. Its
 // workspace fixtures have no laid-out terminal body; fitting is an Xcode/runtime check.

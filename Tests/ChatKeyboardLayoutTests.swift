@@ -11,6 +11,66 @@ import XCTest
 final class ChatKeyboardLayoutTests: XCTestCase {
     private let keyboard = TestKeyboardObserver()
 
+    func testSendKeepsNativeEditorAndKeyboardContinuous() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previousWindow = scene.windows.first(where: \.isKeyWindow)
+        let fixture = KeyboardFixture()
+        fixture.isRunning = true
+        let host = UIHostingController(rootView: KeyboardFixtureView(fixture: fixture))
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.endEditing(true)
+            window.isHidden = true
+            window.rootViewController = nil
+            previousWindow?.makeKeyAndVisible()
+        }
+        try await waitUntil { self.editableInput(in: window) != nil }
+        let editor = try XCTUnwrap(editableInput(in: window) as? UITextView)
+        XCTAssertTrue(editor.becomeFirstResponder())
+        try await settle()
+        let keyboardHides = keyboard.hideCount
+        for mode in ["ordinary", "marked", "confirmed"] {
+            let prefix = "帮我把我的 iphone 接入 "
+            editor.insertText(prefix)
+            if mode == "ordinary" {
+                editor.insertText("zerotier planet批准一下可以吗")
+            } else {
+                editor.setMarkedText("zerotier planet", selectedRange: NSRange(location: 15, length: 0))
+                if mode == "confirmed" { editor.unmarkText() }
+            }
+            // Binding sync from the native editor is asynchronous; poll like the
+            // previous retirement test instead of asserting after a fixed pause.
+            try await waitUntil { fixture.text == (editor.text ?? "") }
+            let payload = editor.text ?? ""
+            XCTAssertEqual(fixture.text, payload)
+            fixture.submitRequest += 1
+            try await waitUntil { fixture.store.messages.last?.text == payload && fixture.text.isEmpty }
+            try await settle()
+            let active = try XCTUnwrap(editableInput(in: window) as? UITextView)
+            print("COMPOSER_SEND mode=\(mode) sameEditor=\(active === editor) firstResponder=\(editor.isFirstResponder) hides=\(keyboard.hideCount - keyboardHides)")
+            XCTAssertTrue(active === editor, "Send must retain the native input view")
+            XCTAssertTrue(editor.isFirstResponder, "Send must retain the native first responder")
+            XCTAssertEqual(active.text, "")
+            XCTAssertEqual(keyboard.hideCount, keyboardHides, "Send must not hide and reopen the keyboard")
+            capture(window, name: "composer-continuous-\(mode)")
+        }
+        editor.insertText("Next draft stays")
+        try await waitUntil { fixture.text == "Next draft stays" }
+        await fixture.store.handle(RemoteEvent(channel: "session:keyboard-test", data: [
+            "message": ["seq": 50, "role": "assistant", "text": "Reply arriving after send."]
+        ]))
+        try await settle()
+        XCTAssertEqual(fixture.text, "Next draft stays")
+        XCTAssertEqual(editor.text, "Next draft stays")
+        XCTAssertTrue(editor.isFirstResponder)
+        XCTAssertEqual(keyboard.hideCount, keyboardHides)
+        XCTAssertFalse(NativeComposerEditing.clearSubmittedText("unrelated text"))
+        XCTAssertEqual(editor.text, "Next draft stays", "An unrelated responder/draft must be untouched")
+        capture(window, name: "composer-continuous-next-draft")
+    }
+
     func testKeyboardCycleTypingMultilineAndHistoryNavigation() async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let previousWindow = scene.windows.first(where: \.isKeyWindow)
@@ -390,6 +450,7 @@ final class ChatKeyboardLayoutTests: XCTestCase {
 @MainActor
 private final class TestKeyboardObserver: NSObject {
     var frame = CGRect.zero
+    var hideCount = 0
 
     override init() {
         super.init()
@@ -397,7 +458,11 @@ private final class TestKeyboardObserver: NSObject {
             name: UIResponder.keyboardDidChangeFrameNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(changed(_:)),
             name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(hidden(_:)),
+            name: UIResponder.keyboardWillHideNotification, object: nil)
     }
+
+    @objc private func hidden(_ notification: Notification) { hideCount += 1 }
 
     @objc private func changed(_ notification: Notification) {
         if let value = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue {
@@ -412,6 +477,8 @@ private final class KeyboardFixture {
     var text = ""
     var attachments: [DraftImageAttachment] = []
     var targetID: String?
+    var submitRequest = 0
+    var isRunning = false
     var scrollToLatestRequest = 0
     var marker: SessionPresentation.StatusMarker?
 
@@ -433,7 +500,7 @@ private struct KeyboardFixtureView: View {
                 // requests latest.
                 ComposerBar(text: $fixture.text, attachments: $fixture.attachments, onFocusChange: { focused in
                     if focused { fixture.scrollToLatestRequest += 1 }
-                }) { text, _ in
+                }, onStop: fixture.isRunning ? {} : nil, inspectionSubmitRequest: fixture.submitRequest) { text, _ in
                     fixture.send(text)
                 }
             }

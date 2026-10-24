@@ -41,30 +41,39 @@ struct NewSessionSheet: View {
     #if os(iOS)
     private var mobileContent: some View {
         NavigationStack(path: $navigationPath) {
-            Form {
-                if !recentCombos.isEmpty {
-                    Section("session.new.recent") {
-                        ForEach(recentCombos) { combo in
-                            recentRow(combo)
+            ScrollView {
+                VStack(alignment: .leading, spacing: Space.lg) {
+                    mobileChoosers
+                    if options.isLoading {
+                        ProgressView("session.new.loading")
+                    }
+                    if let errorMessage = errorMessage ?? options.errorMessage {
+                        VStack(alignment: .leading, spacing: Space.sm) {
+                            Text(errorMessage).foregroundStyle(Palette.danger)
+                            creationRecovery
+                            if options.errorMessage != nil {
+                                Button("action.retry") { Task { await loadOptions() } }
+                                    .disabled(options.isLoading || isCreating)
+                            }
+                        }
+                    }
+                    if !recentCombos.isEmpty {
+                        Divider()
+                        VStack(alignment: .leading, spacing: Space.sm) {
+                            mobileFieldLabel("session.new.quick")
+                            NewSessionChoiceFlow {
+                                ForEach(recentCombos) { mobileQuickStart($0) }
+                            }
                         }
                     }
                 }
-                choosers
-                if options.isLoading {
-                    Section { ProgressView("session.new.loading") }
-                }
-                if let errorMessage = errorMessage ?? options.errorMessage {
-                    Section {
-                        Text(errorMessage).foregroundStyle(Palette.danger)
-                        creationRecovery
-                        if options.errorMessage != nil {
-                            Button("action.retry") { Task { await loadOptions() } }
-                                .disabled(options.isLoading || isCreating)
-                        }
-                    }
-                }
+                .padding(Space.base)
+                .frame(maxWidth: 600, alignment: .leading)
+                .frame(maxWidth: .infinity)
             }
+            .background(Color(uiColor: .systemGroupedBackground))
             .navigationTitle("session.new.title")
+            .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: NewSessionRoute.self) { _ in
                 NewSessionProjectList(projects: options.projects, selection: $options.selectedProject)
             }
@@ -76,8 +85,10 @@ struct NewSessionSheet: View {
                     Button {
                         Task { await create() }
                     } label: {
-                        Text("session.new.start")
+                        if isCreating { ProgressView() }
+                        else { Text("session.new.start") }
                     }
+                    .accessibilityLabel(Text("session.new.start"))
                     .tint(Palette.accent)
                     .disabled(!canStart || isCreating)
                 }
@@ -268,78 +279,114 @@ struct NewSessionSheet: View {
         .interfacePadding(.vertical, Space.base)
     }
     #else
-    /// Two rows in one group, so recents, both choices and Start all fit on
-    /// one screen: the assistant opens a menu of logos and names, the project
-    /// a searchable list instead of one long menu.
-    @ViewBuilder
-    private var choosers: some View {
-        Section("session.new.choose") {
-            Picker(selection: $options.selectedRuntime) {
-                ForEach(usableRuntimes) { runtime in
-                    Label {
-                        Text(verbatim: runtime.name ?? runtime.id)
-                    } icon: {
-                        RuntimeMenuIcon(runtimeID: runtime.id)
+    /// The Mac's visible choices, wrapped and sized for touch. Quick Start is
+    /// a separate action group below, so history never displaces the choices.
+    private var mobileChoosers: some View {
+        VStack(alignment: .leading, spacing: Space.lg) {
+            VStack(alignment: .leading, spacing: Space.sm) {
+                mobileFieldLabel("session.new.runtime")
+                NewSessionChoiceFlow {
+                    ForEach(usableRuntimes) { runtime in
+                        NewSessionChoiceButton(selected: runtime.id == options.selectedRuntime) {
+                            mobileRuntimeLogo(runtime.id)
+                            Text(verbatim: runtime.name ?? runtime.id)
+                        } action: {
+                            options.selectedRuntime = runtime.id
+                            HapticFeedback.shared.emit(.selection)
+                        }
                     }
-                    .tag(runtime.id)
                 }
-            } label: {
-                Text("session.new.runtime")
             }
-            .pickerStyle(.menu)
-            .disabled(options.isLoading || isCreating)
-            NavigationLink(value: NewSessionRoute.projects) {
-                LabeledContent {
-                    Text(verbatim: options.projects.first { $0.path == options.selectedProject }?.displayName ?? "")
+            VStack(alignment: .leading, spacing: Space.sm) {
+                mobileFieldLabel("session.new.project")
+                NewSessionChoiceFlow {
+                    ForEach(mobileQuickProjects) { project in
+                        NewSessionChoiceButton(selected: project.path == options.selectedProject) {
+                            Text(verbatim: project.displayName)
+                        } action: {
+                            options.selectedProject = project.path
+                            HapticFeedback.shared.emit(.selection)
+                        }
+                    }
+                    NewSessionChoiceButton {
+                        Text("sessions.filter.more")
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .accessibilityHidden(true)
+                    } action: {
+                        navigationPath.append(.projects)
+                    }
+                    .disabled(options.projects.isEmpty)
+                }
+                if !options.selectedProject.isEmpty {
+                    Text(verbatim: (options.selectedProject as NSString).abbreviatingWithTildeInPath)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
-                } label: {
-                    Text("session.new.project")
+                        .truncationMode(.middle)
                 }
             }
-            .disabled(options.isLoading || isCreating || options.projects.isEmpty)
+        }
+        .disabled(options.isLoading || isCreating)
+    }
+
+    private var mobileQuickProjects: [ProjectEntry] {
+        var projects = Array(options.projects.filter { !$0.path.isEmpty }.prefix(3))
+        if !projects.contains(where: { $0.path == options.selectedProject }),
+           let selected = options.projects.first(where: { $0.path == options.selectedProject }) {
+            if projects.count == 3 { projects.removeLast() }
+            projects.append(selected)
+        }
+        return projects
+    }
+
+    private func mobileFieldLabel(_ key: LocalizedStringKey) -> some View {
+        Text(key)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    @ViewBuilder
+    private func mobileRuntimeLogo(_ runtimeID: String) -> some View {
+        if let logo = Palette.runtimeLogoName(runtimeID) {
+            Image(logo)
+                .resizable()
+                .renderingMode(.original)
+                .scaledToFit()
+                .frame(width: 20, height: 20)
+                .accessibilityHidden(true)
         }
     }
     #endif
 
     #if os(iOS)
-    /// One-step start from a remembered combo. The trailing "Start" says the
-    /// row acts immediately; a chevron would promise another page.
-    private func recentRow(_ combo: RecentSessionCombo) -> some View {
-        Button {
-            Task { await createFromCombo(combo) }
-        } label: {
-            HStack(spacing: Space.sm * interfaceScale) {
-                RuntimeBadge(runtimeID: combo.runtimeID, size: 28)
-                VStack(alignment: .leading, spacing: 2 * interfaceScale) {
-                    Text(combo.title)
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                    if needsPath(combo) {
-                        Text(combo.projectPath)
-                            .interfaceFont(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                }
-                Spacer(minLength: Space.sm * interfaceScale)
-                if creatingComboID == combo.id {
-                    ProgressView()
-                        .interfaceControlSize(.small)
+    /// Same immediate action as the Mac's Quick Start, with no selected state.
+    private func mobileQuickStart(_ combo: RecentSessionCombo) -> some View {
+        NewSessionChoiceButton {
+            if creatingComboID == combo.id {
+                ProgressView().controlSize(.small)
+                    .frame(width: 20, height: 20)
+            } else {
+                mobileRuntimeLogo(combo.runtimeID)
+            }
+            VStack(alignment: .leading, spacing: 2 * interfaceScale) {
+                Text(verbatim: combo.projectLabel)
+                if needsPath(combo) {
+                    Text(verbatim: (combo.projectPath as NSString).abbreviatingWithTildeInPath)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .truncationMode(.middle)
                 }
             }
-            .contentShape(Rectangle())
+        } action: {
+            Task { await createFromCombo(combo) }
         }
-        .buttonStyle(.plain)
         .disabled(isCreating)
         .accessibilityLabel(Text(combo.title))
         .accessibilityHint(Text("session.new.recent.hint"))
-        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-            Button(role: .destructive) {
-                deleteCombo(combo)
-            } label: {
-                Label("action.delete", systemImage: "trash")
-            }
+        .contextMenu {
+            Button("session.new.quick.remove", role: .destructive) { deleteCombo(combo) }
         }
     }
 
@@ -359,8 +406,7 @@ struct NewSessionSheet: View {
             }
             return try await client.call(method)
         }
-        #if os(macOS)
-        // The usual combination is preselected, so Return starts it at once.
+        // Both clients start from the most recent still-usable combination.
         if let combo = recentCombos.first(where: { combo in
             options.runtimes.contains { $0.id == combo.runtimeID && $0.isUsable }
                 && options.projects.contains { $0.path == combo.projectPath }
@@ -368,7 +414,6 @@ struct NewSessionSheet: View {
             options.selectedRuntime = combo.runtimeID
             options.selectedProject = combo.projectPath
         }
-        #endif
         if !preferredProject.isEmpty, options.projects.contains(where: { $0.path == preferredProject }) {
             options.selectedProject = preferredProject
         }
@@ -489,7 +534,7 @@ struct NewSessionSheet: View {
         }
     }
 
-    /// Removes one remembered combo (iPhone left swipe, Mac context menu).
+    /// Removes one remembered combo through its native context menu.
     /// State updates immediately so it vanishes without reopening the sheet;
     /// the store write follows.
     private func deleteCombo(_ combo: RecentSessionCombo) {

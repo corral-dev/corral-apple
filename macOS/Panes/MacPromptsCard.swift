@@ -1,9 +1,12 @@
+import AppKit
 import SwiftUI
 
 /// The pane's Your prompts card (design: Prompts card). It floats at the
 /// pane's top trailing corner: beside the conversation when the pane has
 /// room (the pane shifts the conversation aside by `reserve`), over it in
 /// narrow panes, where it starts collapsed into the pane header's button.
+/// Over content it behaves like a transient popover: a mouse click outside
+/// it closes it, and the click still reaches its target.
 struct MacPromptsCard: View {
     @Environment(\.interfaceScale) private var interfaceScale
     let prompts: [RichMessage]
@@ -35,6 +38,8 @@ struct MacPromptsCard: View {
     @State private var listHeight: CGFloat = 0
     @State private var hoveredID: RichMessage.ID?
     @State private var currentID: RichMessage.ID?
+    @State private var clickMonitor: Any?
+    @State private var cardAnchor = PromptsCardClickAnchor()
 
     var body: some View {
         // Collapsed, the card is controlled from the pane's session menu, so
@@ -45,6 +50,46 @@ struct MacPromptsCard: View {
                     .transition(.scale(scale: 0.96, anchor: .topTrailing).combined(with: .opacity))
             }
         }
+        .onAppear { updateClickMonitor() }
+        .onChange(of: isOpen) { _, _ in updateClickMonitor() }
+        .onChange(of: overContent) { _, _ in updateClickMonitor() }
+        .onDisappear { removeClickMonitor() }
+    }
+
+    // MARK: - Outside dismissal (design: Prompts card, rule 5)
+
+    /// A card floating over content closes on a mouse click outside it,
+    /// like a transient popover; the click still reaches its target, so no
+    /// second click is needed. A card docked beside the conversation is not
+    /// a popup and never closes this way.
+    private func updateClickMonitor() {
+        guard overContent && isOpen else {
+            removeClickMonitor()
+            return
+        }
+        guard clickMonitor == nil else { return }
+        let anchor = cardAnchor
+        let presentation = $isOpen
+        let motion = reduceMotion
+        clickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { event in
+            guard let view = anchor.view, let window = view.window else { return event }
+            // A click into another window of this app closes a transient
+            // popup too.
+            guard event.window === window else {
+                withAnimation(MacMotion.disclosure(reduceMotion: motion)) { presentation.wrappedValue = false }
+                return event
+            }
+            let cardRect = view.convert(view.bounds, to: nil)
+            if !cardRect.contains(event.locationInWindow) {
+                withAnimation(MacMotion.disclosure(reduceMotion: motion)) { presentation.wrappedValue = false }
+            }
+            return event
+        }
+    }
+
+    private func removeClickMonitor() {
+        if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
+        clickMonitor = nil
     }
 
     // MARK: - Open
@@ -77,6 +122,14 @@ struct MacPromptsCard: View {
             let shape = RoundedRectangle(cornerRadius: Self.cornerRadius * interfaceScale, style: .continuous)
             shape.fill(onTerminal ? Color(nsColor: TerminalAppearance.background) : Color(.systemGroupedBackground))
             shape.fill(Color.primary.opacity(colorScheme == .dark ? 0.075 : 0.045))
+        }
+        // Live window rect for the outside-click monitor. It fills the card
+        // but never takes part in hit testing, so clicks inside the card
+        // keep reaching the card's own controls.
+        .background {
+            PromptsCardAnchorView(anchor: cardAnchor)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
         }
         .overlay {
             RoundedRectangle(cornerRadius: Self.cornerRadius * interfaceScale, style: .continuous)
@@ -229,5 +282,28 @@ struct MacPromptsCard: View {
         formatter.locale = .autoupdatingCurrent
         formatter.dateFormat = format
         return formatter
+    }
+}
+
+/// Holds the floating card's AppKit view so the outside-click monitor can
+/// test a mouse-down against the card's live window rect instead of a stale
+/// snapshot. The reference is weak; the monitor is removed with the view.
+private final class PromptsCardClickAnchor: NSObject {
+    weak var view: NSView?
+}
+
+/// Fills the card's bounds as a background. Hit testing stays disabled, so
+/// this view never becomes a click target; only its window rect is read.
+private struct PromptsCardAnchorView: NSViewRepresentable {
+    let anchor: PromptsCardClickAnchor
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        anchor.view = view
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        anchor.view = view
     }
 }

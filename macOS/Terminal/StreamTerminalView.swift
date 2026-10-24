@@ -7,7 +7,39 @@ import SwiftTerm
 /// window, and paste goes to the host paste path.
 final class StreamTerminalView: SwiftTerm.TerminalView {
     var onPaste: ((String) -> Void)?
+    var contextMenuCellSize: CGSize = .zero
     private var feedingHost = false
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard isText(at: convert(event.locationInWindow, from: nil)) else {
+            return paneSessionContextMenu()
+        }
+        let menu = NSMenu()
+        for (title, action) in [
+            (String(localized: "action.copy"), #selector(copy(_:))),
+            (String(localized: "composer.key.paste"), #selector(paste(_:))),
+            (String(localized: "action.select_all"), #selector(selectAll(_:)))
+        ] {
+            let item = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
+            item.target = self
+        }
+        return menu
+    }
+
+    func isText(at point: NSPoint) -> Bool {
+        guard bounds.contains(point), contextMenuCellSize.width > 0, contextMenuCellSize.height > 0 else {
+            return false
+        }
+        let col = Int(point.x / contextMenuCellSize.width)
+        let row = Int((bounds.height - point.y) / contextMenuCellSize.height)
+        let terminal = getTerminal()
+        guard let cell = terminal.getCharData(col: col, row: row) else { return false }
+        // A wide character's trailing cell has no code of its own.
+        let content = cell.width == 0 && col > 0 ? terminal.getCharData(col: col - 1, row: row) : cell
+        guard let content else { return false }
+        let character = terminal.getCharacter(for: content)
+        return character != "\0" && !character.isWhitespace
+    }
 
     func feedFromHost(_ data: Data) {
         feedingHost = true

@@ -172,8 +172,15 @@ final class MacPaneSurfaceCache {
 /// A dormant pane keeps its hosting root for an instant return, but laying
 /// out what nobody can see cost about a third of each warm switch (measured
 /// 2026-10-11). Layout is deferred while hidden and runs once on reveal.
-class MacPaneHostingView: NSHostingView<AnyView> {
+class MacPaneHostingView: NSHostingView<AnyView>, MacSessionContextMenuProviding {
     private var deferredLayout = false
+    var sessionContextMenu: (() -> NSMenu?)?
+
+    func makeSessionContextMenu() -> NSMenu? { sessionContextMenu?() }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        paneSessionContextMenu() ?? super.menu(for: event)
+    }
 
     override func layout() {
         if isHidden {
@@ -353,6 +360,24 @@ struct MacPaneSurface: NSViewRepresentable {
             font: font, controlSize: controlSize, dynamicTypeSize: dynamicTypeSize, reduceMotion: reduceMotion)
         guard entry.configuration != configuration else { return }
         entry.configuration = configuration
+        let menuSession = session
+        let menuLocale = locale
+        entry.view.sessionContextMenu = { [weak appModel, weak workspace] in
+            guard let appModel, let workspace else { return nil }
+            let mode = Binding(
+                get: { workspace.mode(for: menuSession.key) },
+                set: {
+                    workspace.setMode($0, for: menuSession.key)
+                    workspace.focus(menuSession.key)
+                    workspace.requestKeyFocus(menuSession.key)
+                })
+            return NSHostingMenu(rootView: MacSessionMenuItems(
+                session: menuSession, runtimes: workspace.runtimes, mode: mode,
+                onClose: { workspace.requestClose(menuSession.key) })
+                .environment(appModel)
+                .environment(workspace)
+                .environment(\.locale, menuLocale))
+        }
         entry.view.rootView = AnyView(MacPaneView(session: session, metadataStore: metadataStore,
                     allowsClose: allowsClose, autoFocusComposer: autoFocusComposer,
                     retainedStore: entry.store?.clientIdentity == appModel.clientIdentity ? entry.store : nil,

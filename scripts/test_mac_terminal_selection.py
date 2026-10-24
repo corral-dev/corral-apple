@@ -22,10 +22,18 @@ if not module.is_dir() or not library.is_file():
 
 with tempfile.TemporaryDirectory(prefix="corral-mac-terminal-selection-") as directory:
     executable = str(Path(directory) / "probe")
+    # Compile the production outcome enum without the unrelated network owner.
+    stream_source = (ROOT / "Shared/Core/Terminal/RemoteTerminalStream.swift").read_text()
+    outcome = Path(directory) / "TerminalPromptOutcome.swift"
+    begin = stream_source.index("enum TerminalPromptOutcome:")
+    end = stream_source.index("\n}", begin) + 2
+    outcome.write_text("import Foundation\n" + stream_source[begin:end] + "\n")
     subprocess.run([
         "swiftc", "-swift-version", "6", "-default-isolation", "MainActor",
         "-parse-as-library", "-I", str(products),
+        str(ROOT / "Shared/UI/Platform/MacSessionContextMenu.swift"),
         str(ROOT / "Shared/UI/Terminal/TerminalHostFeed.swift"),
+        str(outcome),
         str(ROOT / "Shared/UI/Terminal/TerminalPromptNavigation.swift"),
         str(ROOT / "macOS/Terminal/StreamTerminalView.swift"),
         str(ROOT / "scripts/mac-terminal-selection/Probe.swift"),

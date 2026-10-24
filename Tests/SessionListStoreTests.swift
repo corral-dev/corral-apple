@@ -6,6 +6,34 @@ import XCTest
 final class SessionListStoreTests: XCTestCase {
     private var scratch: URL!
 
+    func testExplicitHistoryVisitSurvivesRefreshReloadAndCanonicalMigration() throws {
+        let old = try session(key: "claude:old", title: "Old history")
+        let fresh = try session(key: "claude:fresh", title: "Today")
+        let store = SessionListStore()
+        store.loadPersisted(hostID: "navigation-host")
+        store.updateSessions([fresh])
+        store.rememberOpened(old)
+        store.applySessionEvent(old)
+        XCTAssertEqual(store.windowSessions.map(\.key), [fresh.key])
+        store.revealSession(old)
+        store.updateSessions([fresh])
+        XCTAssertEqual(Set(store.windowSessions.map(\.key)), [fresh.key, old.key])
+        XCTAssertEqual(store.session(for: old.key)?.mtime, old.mtime)
+        SessionListCache.flushPendingWrites()
+        let reopened = SessionListStore()
+        reopened.loadPersisted(hostID: "navigation-host")
+        reopened.updateSessions([fresh])
+        XCTAssertEqual(Set(reopened.windowSessions.map(\.key)), [fresh.key, old.key])
+        reopened.migrateSession(from: old.key, to: "claude:canonical")
+        reopened.updateSessions([fresh])
+        XCTAssertEqual(Set(reopened.windowSessions.map(\.key)), [fresh.key, "claude:canonical"])
+        reopened.removeSession(key: "claude:canonical")
+        reopened.revealSession(old)
+        XCTAssertEqual(reopened.windowSessions.map(\.key), [fresh.key])
+        reopened.loadPersisted(hostID: "another-host")
+        XCTAssertTrue(reopened.windowSessions.isEmpty)
+    }
+
     override func setUp() async throws {
         try await super.setUp()
         scratch = FileManager.default.temporaryDirectory

@@ -37,6 +37,23 @@ enum MacChatScrollGeometryProbe {
 /// scrollers for content that never scrolls itself. Wheel events forward to
 /// the conversation scroll view, matching the wrapper's non-scrolling path.
 final class MacDirectMessageTextView: NSTextView {
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard isText(at: event) else { return paneSessionContextMenu() }
+        return super.menu(for: event)
+    }
+
+    /// TextKit returns the nearest glyph even in empty line/padding space;
+    /// require an actual glyph in this message's own text container.
+    func isText(at event: NSEvent) -> Bool {
+        guard let layout = layoutManager, let container = textContainer else { return false }
+        let location = convert(event.locationInWindow, from: nil)
+        let point = NSPoint(x: location.x - textContainerOrigin.x, y: location.y - textContainerOrigin.y)
+        let glyph = layout.glyphIndex(for: point, in: container)
+        guard NSLocationInRange(glyph, layout.glyphRange(for: container)),
+              !layout.propertyForGlyph(at: glyph).contains(.controlCharacter) else { return false }
+        return layout.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: container).contains(point)
+    }
+
     override func scrollWheel(with event: NSEvent) {
         nextResponder?.scrollWheel(with: event)
     }

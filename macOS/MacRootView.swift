@@ -189,6 +189,12 @@ struct MacRootView: View {
         }
         .onChange(of: commands.newSessionRequest) { _, _ in startNewSession() }
         .onChange(of: commands.searchRequest) { _, _ in showSearch = true }
+          .onChange(of: commands.backRequest) { _, _ in Task { await workspace.navigateHistory(by: -1) } }
+          .onChange(of: commands.forwardRequest) { _, _ in Task { await workspace.navigateHistory(by: 1) } }
+          .onChange(of: workspace.navigation.host.history, initial: true) { _, history in
+              commands.canGoBack = history.canGoBack
+              commands.canGoForward = history.canGoForward
+          }
         .onChange(of: commands.closePaneRequest) { _, _ in
             if let key = workspace.focusedKey { workspace.requestClose(key) }
         }
@@ -236,9 +242,9 @@ struct MacRootView: View {
             }
         }
         .sheet(isPresented: $showSearch) {
-            MacFulltextSearch { key in
+            MacFulltextSearch(onOpen: { key in
                 try await workspace.openSearchResult(key)
-            }
+            }, state: workspace.navigation.host.search)
             .modifier(MacZoomContent())
         }
     }
@@ -272,6 +278,9 @@ struct MacRootView: View {
 
     @ToolbarContentBuilder
     private var detailToolbar: some ToolbarContent {
+        ToolbarItem(placement: .navigation) {
+            MacHistoryControls()
+        }
         ToolbarItemGroup(placement: .primaryAction) {
             Menu {
                 ForEach(runtimeChoices, id: \.id) { runtime in

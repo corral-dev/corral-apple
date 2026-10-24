@@ -54,6 +54,9 @@ final class SessionListStore {
     private var searchKeys: [String]?
     private var lastServerQuery: String = ""
     private var openedKeys: Set<String> = []
+    /// Explicit visits outlive replacement host windows; search previews do not.
+    private var revealedKeys: [String] = []
+    static let maxRevealedSessions = 100
     /// Provisional → canonical redirects so an open detail keeps resolving after migrate.
     private var aliasByKey: [String: String] = [:]
     private var revisionByKey: [String: UInt64] = [:]
@@ -103,6 +106,7 @@ final class SessionListStore {
             searchKeys = nil
             lastServerQuery = ""
             openedKeys.removeAll()
+            revealedKeys.removeAll()
             aliasByKey.removeAll()
             revisionByKey.removeAll()
             acceptedRevision = 0
@@ -119,6 +123,7 @@ final class SessionListStore {
         }
         version = cached.version
         listKeys = Self.uniqueKeys(cached.sessions.map(\.key))
+        revealedKeys = Array(Self.uniqueKeys(cached.revealedKeys ?? []).suffix(Self.maxRevealedSessions))
         for session in cached.sessions where ActiveRuntimeVisibility.isListVisible(session) {
             recordsByKey[session.key] = session
         }
@@ -190,6 +195,7 @@ final class SessionListStore {
         searchKeys?.removeAll { $0 == key || $0 == resolved }
         openedKeys.remove(key)
         openedKeys.remove(resolved)
+        revealedKeys.removeAll { $0 == key || $0 == resolved }
         recordsByKey[key] = nil
         recordsByKey[resolved] = nil
         revisionByKey[key] = nil
@@ -234,6 +240,23 @@ final class SessionListStore {
     func rememberOpened(_ session: SessionSummary) {
         openedKeys.insert(session.key)
         openedKeys.insert(resolvedKey(session.key))
+    }
+
+    /// A deliberate open joins ordinary navigation without modifying activity.
+    /// Keep preview retention separate: rendering a search row is not a visit.
+    func revealSession(_ session: SessionSummary) {
+        guard !isDeleted(session.key), ActiveRuntimeVisibility.isListVisible(session) else { return }
+        let key = resolvedKey(session.key)
+        revealedKeys.removeAll { $0 == key }
+        revealedKeys.append(key)
+        if revealedKeys.count > Self.maxRevealedSessions {
+            revealedKeys.removeFirst(revealedKeys.count - Self.maxRevealedSessions)
+        }
+        merge(session.key == key ? session : session.replacingKey(key))
+        rememberOpened(session)
+        pruneUnownedRecords()
+        persistIfNeeded()
+        rebuildSections()
     }
 
     func forgetOpened(key: String) {
@@ -290,17 +313,19 @@ final class SessionListStore {
     /// filters and search apply on top of it, so choices stay available while
     /// search narrows the displayed rows.
     var windowSessions: [SessionSummary] {
-        listKeys.compactMap { recordsByKey[$0] }.filter {
+        browsableKeys.compactMap { recordsByKey[$0] }.filter {
             ActiveRuntimeVisibility.isListVisible($0)
         }
     }
 
+    private var browsableKeys: [String] { Self.uniqueKeys(listKeys + revealedKeys) }
+
     var filteredSessions: [SessionSummary] {
         let needle = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         let sourceKeys: [String]
-        if needle.isEmpty { sourceKeys = listKeys }
+        if needle.isEmpty { sourceKeys = browsableKeys }
         else if lastServerQuery == searchQuery, let hits = searchKeys { sourceKeys = hits }
-        else { sourceKeys = listKeys }
+        else { sourceKeys = browsableKeys }
         return sourceKeys.compactMap { recordsByKey[$0] }.filter { session in
             ActiveRuntimeVisibility.isListVisible(session)
                 && (needle.isEmpty || session.matches(query: searchQuery))
@@ -308,7 +333,7 @@ final class SessionListStore {
     }
 
     var waitingCount: Int {
-        listKeys.compactMap { recordsByKey[$0] }.filter {
+        browsableKeys.compactMap { recordsByKey[$0] }.filter {
             ActiveRuntimeVisibility.isListVisible($0)
                 && SessionPresentation.activityMarker(for: $0) == .waiting
         }.count
@@ -334,7 +359,7 @@ final class SessionListStore {
 
     /// Current surfaces own metadata; historical searches are not a second archive.
     private func pruneUnownedRecords() {
-        let retained = Set(listKeys + (searchKeys ?? [])).union(openedKeys.map { resolvedKey($0) })
+        let retained = Set(browsableKeys + (searchKeys ?? [])).union(openedKeys.map { resolvedKey($0) })
         for key in recordsByKey.keys where !retained.contains(key) {
             recordsByKey[key] = nil
             revisionByKey[key] = nil
@@ -351,7 +376,8 @@ final class SessionListStore {
             hostID: hostID,
             snapshot: SessionListSnapshot(
                 version: version,
-                sessions: listKeys.compactMap { recordsByKey[$0] }
+                sessions: browsableKeys.compactMap { recordsByKey[$0] },
+                revealedKeys: revealedKeys
             )
         )
     }
@@ -414,6 +440,7 @@ final class SessionListStore {
             recordsByKey[newKey] = nil
             revisionByKey[newKey] = nil
             listKeys.removeAll { $0 == oldKey || $0 == newKey }
+            revealedKeys.removeAll { $0 == oldKey || $0 == newKey }
             searchKeys?.removeAll { $0 == oldKey || $0 == newKey }
             metadataEpoch &+= 1
             persistIfNeeded()
@@ -424,6 +451,7 @@ final class SessionListStore {
         revisionByKey[newKey] = max(revisionByKey[newKey] ?? 0, revisionByKey[oldKey] ?? 0)
         revisionByKey[oldKey] = nil
         listKeys = Self.uniqueKeys(listKeys.map { $0 == oldKey ? newKey : $0 })
+        revealedKeys = Self.uniqueKeys(revealedKeys.map { $0 == oldKey ? newKey : $0 })
         searchKeys = searchKeys.map { Self.uniqueKeys($0.map { $0 == oldKey ? newKey : $0 }) }
         if openedKeys.remove(oldKey) != nil { openedKeys.insert(newKey) }
         metadataEpoch &+= 1

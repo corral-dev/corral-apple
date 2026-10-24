@@ -8,13 +8,20 @@ struct MacFulltextSearch: View {
     @Environment(AppModel.self) private var appModel
     @Environment(\.dismiss) private var dismiss
     var onOpen: (String) async throws -> Bool
+    var state: MacSearchState
 
-    @State private var query = ""
+    private var query: String {
+        get { state.query }
+        nonmutating set { state.query = newValue }
+    }
     @State private var retrySerial = 0
-    @State private var searchStore = FulltextSearchStore()
+    private var searchStore: FulltextSearchStore { state.store }
     /// Highlighted hit: first by default, moved by ↑/↓ in the field, opened
     /// by Return. A click selects and opens a hit directly.
-    @State private var selection: String?
+    private var selection: String? {
+        get { state.selection }
+        nonmutating set { state.selection = newValue }
+    }
     @State private var openingKey: String?
     @State private var openingGeneration = UUID()
     @State private var openingTask: Task<Void, Never>?
@@ -87,7 +94,7 @@ struct MacFulltextSearch: View {
         }
         .onChange(of: appModel.clientIdentity) { _, _ in cancelOpening(); searchStore.invalidate(); searchStore.prepare(query, client: appModel.client) }
         .onChange(of: appModel.connectionState) { _, _ in cancelOpening(); searchStore.invalidate(); searchStore.prepare(query, client: appModel.client) }
-        .onDisappear { cancelOpening(); searchStore.invalidate() }
+        .onDisappear { cancelOpening(); searchStore.cancelPending() }
         .onExitCommand { dismissSearch() }
         #if DEBUG
         .onChange(of: searchStore.result?.matches.map(\.key)) { _, keys in
@@ -126,7 +133,7 @@ struct MacFulltextSearch: View {
                     .transition(.opacity)
             } else {
                 ScrollViewReader { proxy in
-                List(selection: $selection) {
+                List(selection: Binding(get: { selection }, set: { selection = $0 })) {
                     ForEach(result.matches) { match in
                         Button { openMatch(match.key) } label: { matchRow(match) }
                             .buttonStyle(.plain)
@@ -144,6 +151,10 @@ struct MacFulltextSearch: View {
                 .focusEffectDisabled()
                 .onChange(of: selection) { _, key in
                     if let key { proxy.scrollTo(key) }
+                }
+                .onAppear {
+                    highlightFirst(of: result)
+                    if let selection { proxy.scrollTo(selection) }
                 }
                 }
                 .onAppear { highlightFirst(of: result) }
@@ -274,7 +285,7 @@ struct MacFulltextSearch: View {
 
     private func dismissSearch() {
         cancelOpening()
-        searchStore.invalidate()
+        searchStore.cancelPending()
         dismiss()
     }
 
@@ -295,7 +306,7 @@ struct MacFulltextSearch: View {
         guard openingKey == nil else { return }
         // Opening wins over a running search: cancel the search first so
         // Return never looks dead while results stream in.
-        if searchStore.isSearching { searchStore.invalidate() }
+        if searchStore.isSearching { searchStore.cancelPending() }
         openingKey = key
         openingError = nil
         let mine = UUID()
@@ -344,6 +355,7 @@ struct MacFulltextSearch: View {
     }
 
     private func highlightFirst(of result: FulltextSearchResponse) {
+        if let selection, result.matches.contains(where: { $0.key == selection }) { return }
         guard let first = result.matches.first?.key, selection != first else { return }
         selection = first
     }

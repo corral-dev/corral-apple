@@ -9,6 +9,7 @@ with tempfile.TemporaryDirectory(prefix="corral-mac-text-selection-") as directo
     executable = str(Path(directory) / "probe")
     subprocess.run([
         "swiftc", "-swift-version", "6", "-default-isolation", "MainActor", "-parse-as-library",
+        str(ROOT / "Shared/UI/Platform/MacSessionContextMenu.swift"),
         str(ROOT / "Shared/UI/Chat/MacConversationTextDocument.swift"),
         str(ROOT / "scripts/mac-lifecycle/TextSelectionProbe.swift"), "-o", executable,
     ], check=True)

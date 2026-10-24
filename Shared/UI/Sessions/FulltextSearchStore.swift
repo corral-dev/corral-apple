@@ -38,6 +38,12 @@ final class FulltextSearchStore {
         resultQuery = ""
     }
 
+    /// Closing a search surface cancels work, not the accepted search context.
+    func cancelPending() {
+        generation = UUID()
+        isSearching = false
+    }
+
     func search(_ text: String, client: RemoteClient?, isCurrentClient: (RemoteClient) -> Bool) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed == resultQuery, resultClient === client, result != nil, !Task.isCancelled { return }

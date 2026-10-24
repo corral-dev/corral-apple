@@ -363,7 +363,7 @@ struct SessionListView: View {
                 }
             )
                 .id(route.key)
-                .onAppear { listStore.rememberOpened(session) }
+                .onAppear { listStore.revealSession(session) }
         } else {
             ContentUnavailableView(
                 "sessions.empty.title",

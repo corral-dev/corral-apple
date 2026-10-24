@@ -117,6 +117,8 @@ struct MacConversationTable: NSViewRepresentable {
     final class ConversationScrollView: NSScrollView {
         weak var coordinator: Coordinator?
 
+        override func menu(for event: NSEvent) -> NSMenu? { paneSessionContextMenu() }
+
         /// Wheel and trackpad scrolling belong to the reader. Discrete mouse
         /// wheels have no phase, so each event counts as one reading step.
         override func scrollWheel(with event: NSEvent) {
@@ -131,6 +133,8 @@ struct MacConversationTable: NSViewRepresentable {
 
     final class ConversationTableView: NSTableView {
         weak var coordinator: Coordinator?
+
+        override func menu(for event: NSEvent) -> NSMenu? { paneSessionContextMenu() }
 
         /// Width or style changes re-measure before the rows are tiled, so a
         /// row is never drawn at a height measured for another geometry.
@@ -175,6 +179,8 @@ struct MacConversationTable: NSViewRepresentable {
     /// Rows contain no scrollable SwiftUI content: wheel and trackpad
     /// scrolling over a row always belongs to the conversation.
     final class RowHostingView: NSHostingView<AnyView> {
+        override func menu(for event: NSEvent) -> NSMenu? { paneSessionContextMenu() }
+
         override func scrollWheel(with event: NSEvent) {
             if let scroll = enclosingScrollView {
                 scroll.scrollWheel(with: event)
@@ -511,6 +517,21 @@ struct MacConversationTable: NSViewRepresentable {
         }
 
         // MARK: Position
+
+        var navigationPosition: (id: String?, offset: CGFloat, followsLatest: Bool) {
+            let anchor = currentAnchor()
+            return (anchor?.id, anchor?.offset ?? 0, followsLatest)
+        }
+
+        /// Reuse row/offset anchoring after a browser return, including reflow.
+        @discardableResult
+        func restoreNavigationPosition(id: String?, offset: CGFloat, followsLatest: Bool) -> Bool {
+            guard !rows.isEmpty, followsLatest || id.map({ indexByID[$0] != nil }) == true else { return false }
+            setFollowsLatest(followsLatest)
+            userHasScrolled = !followsLatest
+            restore(id.map { Anchor(id: $0, offset: offset) })
+            return true
+        }
 
         private var visibleRect: NSRect {
             scroll?.contentView.documentVisibleRect ?? .zero

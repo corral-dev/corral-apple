@@ -11,7 +11,8 @@ import SwiftUI
 @MainActor
 enum MacTitleMenuInspection {
     static func run(appModel: AppModel, workspace: MacWorkspace, session: @escaping () -> SessionSummary?) async {
-        guard ProcessInfo.processInfo.arguments.contains("-CorralInspectTitleMenu") else { return }
+        let inspectContext = ProcessInfo.processInfo.arguments.contains("-CorralInspectPaneContextMenu")
+        guard inspectContext || ProcessInfo.processInfo.arguments.contains("-CorralInspectTitleMenu") else { return }
         try? await Task.sleep(for: .seconds(8))
         guard let window = NSApp.windows.first(where: { $0.isVisible && $0.toolbar != nil }),
               let frameView = window.contentView?.superview else { return }
@@ -26,6 +27,23 @@ enum MacTitleMenuInspection {
         ]
         if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: URL(fileURLWithPath: "/tmp/corral-title-menu.json"), options: .atomic)
+        }
+        if inspectContext, let session = session(),
+           let pane = workspace.paneSurfaces.existingEntry(for: session.key)?.view,
+           let event = NSEvent.mouseEvent(with: .rightMouseDown, location: pane.convert(NSPoint(x: 80, y: 120), to: nil),
+               modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+               context: nil, eventNumber: 0, clickCount: 1, pressure: 0),
+           let menu = pane.menu(for: event) {
+            // Query and present the production native menu directly. No
+            // pointer event is posted and no session action is invoked.
+            menu.update()
+            let items = menu.items.map { ["title": $0.title, "enabled": $0.isEnabled,
+                                         "separator": $0.isSeparatorItem] as [String: Any] }
+            if let data = try? JSONSerialization.data(withJSONObject: items, options: [.prettyPrinted, .sortedKeys]) {
+                try? data.write(to: URL(fileURLWithPath: "/tmp/corral-pane-context-menu.json"), options: .atomic)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 15) { menu.cancelTracking() }
+            menu.popUp(positioning: nil, at: NSPoint(x: 80, y: 120), in: pane)
         }
     }
 

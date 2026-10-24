@@ -23,7 +23,15 @@ final class MacWorkspace {
     @ObservationIgnored private var layoutGeneration = UUID()
 
     private(set) var paneKeys: [String] = []
-    var focusedKey: String?
+    var focusedKey: String? {
+        willSet {
+            if newValue != focusedKey { rememberReadingPosition() }
+        }
+        didSet {
+            if focusedKey != oldValue { navigation.visit(focusedKey) }
+        }
+    }
+    let navigation = MacNavigationState()
     /// Explicit pane activation also reconciles sidebar selection when the
     /// pane was already focused (for example after a native batch selection).
     private(set) var paneFocusSerial = 0
@@ -89,12 +97,14 @@ final class MacWorkspace {
     /// Reset host-owned state before showing another machine's cached list.
     func selectHost(_ id: String?) {
         guard hostID != id else { return }
+        rememberReadingPosition()
         stopLayoutWatch()
         paneSurfaces.reset()
         hostID = id
         layout = .empty
         paneKeys = []
         focusedKey = nil
+        navigation.selectHost(id)
         runtimes = []
         promptsOpen = [:]
         pendingEntrances = []
@@ -219,26 +229,41 @@ final class MacWorkspace {
     /// Search can find history outside the current list window. Resolve and
     /// retain its summary before the split area attempts to render the pane.
     func openSearchResult(_ key: String) async throws -> Bool {
-        guard let feed, let client = appModel?.client else {
+        let request = UUID()
+        navigation.requestID = request
+        guard let session = try await resolveNavigationSession(key), let feed,
+              navigation.requestID == request else { return false }
+        feed.listStore.revealSession(session)
+        open(session.key, sessions: feed.listStore.windowSessions, takeKeys: true)
+        navigation.reveal(session.key)
+        return true
+    }
+
+    /// Cached history remains navigable while disconnected. An obsolete lookup
+    /// must not change another host's list, selection or history cursor.
+    func resolveNavigationSession(_ key: String) async throws -> SessionSummary? {
+        guard let feed, !feed.listStore.isDeleted(key) else {
             throw NSError(domain: "Corral", code: 1, userInfo: [NSLocalizedDescriptionKey:
-                String(localized: "error.not_connected")])
+                String(localized: "notification.unavailable")])
         }
         let host = hostID
+        let client = appModel?.client
         let session: SessionSummary
         if let cached = feed.listStore.session(for: key) {
             session = cached
         } else {
+            guard let client else {
+                throw NSError(domain: "Corral", code: 1, userInfo: [NSLocalizedDescriptionKey:
+                    String(localized: "error.not_connected")])
+            }
             session = try await client.call(WireProtocol.mSessionGet, params: ["key": key], as: SessionSummary.self)
         }
-        guard !Task.isCancelled, hostID == host, self.feed === feed, appModel?.client === client else { return false }
-        guard ActiveRuntimeVisibility.isListVisible(session) else {
+        guard !Task.isCancelled, hostID == host, self.feed === feed, appModel?.client === client else { return nil }
+        guard !feed.listStore.isDeleted(session.key), ActiveRuntimeVisibility.isListVisible(session) else {
             throw NSError(domain: "Corral", code: 2, userInfo: [NSLocalizedDescriptionKey:
                 String(localized: "notification.unavailable")])
         }
-        feed.listStore.rememberOpened(session)
-        feed.listStore.applySessionEvent(session)
-        open(session.key, sessions: feed.listStore.windowSessions, takeKeys: true)
-        return true
+        return session
     }
 
     func openGroup(_ group: DesktopGroup, sessions: [SessionSummary]) {
@@ -667,6 +692,8 @@ final class MacWorkspace {
             throw MacSessionBatch.Failure(message: failure ?? String(localized: "error.not_connected"))
         }
         if action == .delete {
+            navigation.host.history.remove(key)
+            navigation.host.reading[key] = nil
             feed?.listStore.removeSession(key: key)
             closePane(key)
         }

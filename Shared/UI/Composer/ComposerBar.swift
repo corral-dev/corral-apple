@@ -33,6 +33,10 @@ struct ComposerBar: View {
     var onStop: (() -> Void)? = nil
     /// The interrupt is in flight: stop stays, quiet and disabled.
     var isStopping = false
+    #if DEBUG
+    /// Isolated native-editing regression trigger; never exposed by production UI.
+    var inspectionSubmitRequest = 0
+    #endif
     var onSend: (_ text: String, _ images: [DraftImageAttachment]) -> Void
 
     @FocusState private var focused: Bool
@@ -115,6 +119,9 @@ struct ComposerBar: View {
                 quickLookURL = nil
             }
             #if DEBUG
+            .onChange(of: inspectionSubmitRequest) { _, request in
+                if request > 0 { sendDraft() }
+            }
             #if os(macOS)
             .task { await replayInspectionKeys() }
             #endif
@@ -377,6 +384,11 @@ struct ComposerBar: View {
         ) else { return }
         let images = attachments
         let payload = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        #if os(iOS)
+        // Clear through the active native input transaction while retaining
+        // the field and its keyboard, including confirmed IME composition.
+        NativeComposerEditing.clearSubmittedText(text)
+        #endif
         text = ""
         attachments = []
         recall.reset()

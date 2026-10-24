@@ -4,6 +4,8 @@ import Foundation
 nonisolated struct SessionListSnapshot: Codable, Sendable, Equatable {
     var version: String
     var sessions: [SessionSummary]
+    /// Optional for snapshots written before explicit history navigation.
+    var revealedKeys: [String]? = nil
 }
 
 enum SessionListCache {

@@ -259,7 +259,9 @@ struct MacSidebar: View {
 
     private var list: some View {
         let sections = sidebarSections
-        return List(selection: selectionBinding) {
+        return ScrollViewReader { proxy in
+        VStack(spacing: 0) {
+        List(selection: selectionBinding) {
             ForEach(sections) { section in
                 Section {
                     if expansion(for: section).wrappedValue {
@@ -317,6 +319,37 @@ struct MacSidebar: View {
         // Streaming metadata must keep the existing list lifetime.
         .id(listStructure(sections))
         .focusEffectDisabled()
+        }
+        .onChange(of: workspace.navigation.host.revealSerial, initial: true) { _, _ in
+            guard let key = revealNavigationTarget() else { return }
+            Task { @MainActor in
+                // Native row identity exists after the filter/disclosure update.
+                await Task.yield()
+                guard workspace.navigation.host.revealKey == key else { return }
+                selectedKeys = [key]
+                proxy.scrollTo("session:\(key)", anchor: .center)
+            }
+        }
+        }
+    }
+
+    private func revealNavigationTarget() -> String? {
+        guard let key = workspace.navigation.host.revealKey,
+              let session = feed.listStore.session(for: key) else { return nil }
+        if !DesktopSidebarProjection.matches(session, filter: filter) { filter = "" }
+        if SessionListFiltering.apply(sessions: [session], runtimes: runtimeFilter,
+                                      projects: [], activeOnly: false).isEmpty { runtimeFilter = [] }
+        if SessionListFiltering.apply(sessions: [session], runtimes: [],
+                                      projects: projectFilter, activeOnly: false).isEmpty { projectFilter = [] }
+        if SessionListFiltering.apply(sessions: [session], runtimes: [],
+                                      projects: [], activeOnly: activeOnly).isEmpty { activeOnly = false }
+        guard let section = sidebarSections.first(where: { $0.items.contains { $0.session.key == key } }) else { return nil }
+        if hasActiveScope { filteredSectionExpansion[section.id] = true }
+        else {
+            sectionExpansion[section.id] = true
+            filteredSectionExpansion[section.id] = nil
+        }
+        return key
     }
 
     /// Titles, previews, timestamps and attention update in place. Selection

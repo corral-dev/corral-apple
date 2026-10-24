@@ -143,6 +143,10 @@ final class MacCommandCenter {
     var canCreateSession = false
     var hasFocusedPane = false
     var focusedSessionPinned = false
+    var backRequest = 0
+    var forwardRequest = 0
+    var canGoBack = false
+    var canGoForward = false
 }
 
 /// Command-key shortcuts (owner decision 2026-10-04): every Control
@@ -192,6 +196,13 @@ struct MacCommands: Commands {
                 .keyboardShortcut(.upArrow, modifiers: [.command, .option])
         }
         CommandGroup(after: .toolbar) {
+            Button("mac.navigation.back") { center.backRequest += 1 }
+                .keyboardShortcut("[", modifiers: .command)
+                .disabled(!center.canGoBack)
+            Button("mac.navigation.forward") { center.forwardRequest += 1 }
+                .keyboardShortcut("]", modifiers: .command)
+                .disabled(!center.canGoForward)
+            Divider()
             // ⌥F12 as in the IntelliJ terminal tool window (owner reference).
             Button("terminal.panel.toggle") { center.toggleTerminalRequest += 1 }
                 .keyboardShortcut(KeyEquivalent(Character(UnicodeScalar(NSF12FunctionKey)!)), modifiers: .option)
