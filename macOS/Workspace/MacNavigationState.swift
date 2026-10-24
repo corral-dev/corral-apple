@@ -11,8 +11,8 @@ final class MacSearchState {
     @ObservationIgnored private var scrollObserver: NSObjectProtocol?
     @ObservationIgnored private var restoringScroll = false
     #if DEBUG
-    var inspectionScrollAttached = false
-    var inspectionScrollRestoreApplied: Double?
+    @ObservationIgnored var inspectionScrollAttached = false
+    @ObservationIgnored var inspectionScrollRestoreApplied: Double?
     #endif
     let store = FulltextSearchStore()
 

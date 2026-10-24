@@ -27,10 +27,12 @@ struct MacSplitArea: View {
         .preference(key: WindowMinimumWidthKey.self, value: Self.requiredWidth(panes: keys.count, sidebar: sidebarInset))
     }
 
-    nonisolated static let paneMinimum: CGFloat = 220
+    nonisolated static let paneMinimum: CGFloat = MacSidebarSizing.paneMinimum
 
-    /// The window must hold the sidebar plus every pane at its minimum; a
-    /// narrower window would push the split out of both window edges.
+    /// The window must hold the sidebar plus every pane at its minimum while
+    /// the sidebar is shown; a narrower window would push the split out of both
+    /// window edges. Once the sidebar auto-collapses its inset becomes zero and
+    /// the minimum follows the panes alone.
     static func requiredWidth(panes: Int, sidebar: CGFloat) -> CGFloat {
         guard panes > 0 else { return 0 }
         return sidebar + CGFloat(panes) * paneMinimum + CGFloat(panes - 1)

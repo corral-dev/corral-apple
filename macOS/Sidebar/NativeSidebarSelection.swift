@@ -6,7 +6,7 @@ struct NativeSidebarSelection: NSViewRepresentable {
     var revealSerial: Int? = nil
     var onReveal: () -> Void = {}
     /// Set only by the debug acceptance harness; unavailable in release UI.
-    var debugKey: String?
+    var debugKey: String? = nil
 
     func makeNSView(context: Context) -> SelectionAppearanceView {
         SelectionAppearanceView()

@@ -17,7 +17,9 @@ struct CorralMacApp: App {
     @State private var zoom = MacInterfaceZoom()
     @State private var minimumWidth: CGFloat = Self.baseMinimumWidth
 
-    private static let baseMinimumWidth: CGFloat = 760
+    /// One-pane floor once the sidebar has stepped aside; additional panes
+    /// raise it through the split's `WindowMinimumWidthKey`.
+    private static let baseMinimumWidth: CGFloat = MacSidebarSizing.baseWindowMinimum
 
     /// Debug inspection captures keep precedence; otherwise the Settings choice
     /// applies (nil follows the system appearance).
@@ -92,7 +94,8 @@ struct CorralMacApp: App {
                 #endif
         }
         .defaultSize(width: 1180, height: 760)
-        // The window's minimum follows the content: sidebar plus every pane.
+        // The minimum follows the visible content: the split raises it by pane
+        // count, and the sidebar adds width only while it is shown.
         .windowResizability(.contentMinSize)
         // The main window always opens at launch, even if it was closed when the
         // app last quit (a restored-closed state otherwise leaves no window).

@@ -89,8 +89,8 @@ enum MacSearchNavigationInspection {
             try JSONSerialization.data(withJSONObject: ["checks": results,
                 "passed": results.values.allSatisfy { $0 }, "sidebar": state.inspectionSidebar,
                 "search": ["attached": search.inspectionScrollAttached,
-                    "offset": search.inspectionScrollOffset as Any,
-                    "restored": search.inspectionScrollRestoreApplied as Any,
+                    "offset": search.inspectionScrollOffset ?? -1,
+                    "restored": search.inspectionScrollRestoreApplied ?? -1,
                     "clipHeight": search.inspectionScrollClipHeight,
                     "documentHeight": search.inspectionScrollDocumentHeight],
                 "events": state.inspectionEvents], options: [.prettyPrinted, .sortedKeys])

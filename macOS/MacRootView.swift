@@ -26,6 +26,14 @@ struct MacRootView: View {
     @State private var pairingError: String?
     @State private var clickMonitor: Any?
     @SceneStorage("corral.mac.panesByHost") private var restoredPanesByHost = ""
+    /// A manual sidebar choice survives relaunches. Automatic collapse is kept
+    /// separately so a narrow relaunch stays collapsed without turning into a
+    /// manual hide that would never reopen.
+    @SceneStorage("corral.mac.sidebarHidden") private var sidebarHidden = false
+    @SceneStorage("corral.mac.sidebarAutoCollapsed") private var sidebarAutoCollapsed = false
+    @State private var windowContentWidth: CGFloat = 0
+    @State private var lastAutomationWidth: CGFloat?
+    @State private var measuredSidebarWidth: CGFloat = 0
     /// The host runs project shells and this pairing may use them (terminal panes).
     @State private var shellSupported = false
     @State private var restoringHostID: String?
@@ -126,13 +134,21 @@ struct MacRootView: View {
     }
 
     private var splitView: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: sidebarVisibility) {
             if let feed {
                 MacSidebar(
                     feed: feed,
                     onNewSession: startNewSession,
                     onPair: { showPairing = true }
                 )
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+                    guard width > 0 else { return }
+                    let firstMeasurement = measuredSidebarWidth == 0
+                    measuredSidebarWidth = width
+                    // The first real width is more accurate than the ideal
+                    // fallback; re-apply the fit rule once it is known.
+                    if firstMeasurement { reevaluateSidebarFit() }
+                }
                 .navigationSplitViewColumnWidth(min: 260 * interfaceScale, ideal: 310 * interfaceScale, max: 440 * interfaceScale)
             } else {
                 ProgressView()
@@ -153,6 +169,12 @@ struct MacRootView: View {
             .toolbar { detailToolbar }
         }
         .navigationSplitViewStyle(.balanced)
+        .background(MacWindowWidthReader { width in
+            windowContentWidth = width
+            updateSidebarAutomation(width: width)
+        })
+        .onChange(of: paneCount) { _, _ in reevaluateSidebarFit() }
+        .onChange(of: interfaceScale) { _, _ in reevaluateSidebarFit() }
         .task(id: FeedConnectionKey(hostID: appModel.selectedHost?.hostID, epoch: feedConnectionEpoch)) {
             await runFeed(for: appModel.selectedHost)
         }
@@ -277,6 +299,79 @@ struct MacRootView: View {
     }
 
     private var paneCount: Int { max(workspace.paneKeys.count, 1) }
+
+    // MARK: - Sidebar fit (owner decision 2026-10-24)
+
+    private var sidebarIsCollapsed: Bool { sidebarHidden || sidebarAutoCollapsed }
+
+    /// The mounted sidebar width, or its ideal width before the first
+    /// measurement and while it is collapsed.
+    private var sidebarFitWidth: CGFloat {
+        measuredSidebarWidth > 0
+            ? measuredSidebarWidth
+            : MacSidebarSizing.fallbackSidebarWidth * interfaceScale
+    }
+
+    private var sidebarCollapseWidth: CGFloat {
+        MacSidebarSizing.collapseWidth(panes: paneCount, sidebarWidth: sidebarFitWidth)
+    }
+
+    private var sidebarExpandWidth: CGFloat {
+        MacSidebarSizing.expandWidth(panes: paneCount, sidebarWidth: sidebarFitWidth)
+    }
+
+    /// The setter sees only user sidebar commands (toolbar, ⌃⌘S); automatic
+    /// changes write the stored flags instead.
+    private var sidebarVisibility: Binding<NavigationSplitViewVisibility> {
+        Binding(
+            get: { sidebarIsCollapsed ? .detailOnly : .all },
+            set: { visibility in
+                // AppKit/SwiftUI writes the applied value back after an
+                // automatic collapse. Only a real change is a user command.
+                let current: NavigationSplitViewVisibility = sidebarIsCollapsed ? .detailOnly : .all
+                guard visibility != current else { return }
+                sidebarHidden = visibility == .detailOnly
+                sidebarAutoCollapsed = false
+            }
+        )
+    }
+
+    private func updateSidebarAutomation(width: CGFloat) {
+        let previous = lastAutomationWidth
+        lastAutomationWidth = width
+        let collapsed = MacSidebarSizing.nextAutoCollapse(
+            currentlyCollapsed: sidebarAutoCollapsed,
+            manuallyHidden: sidebarHidden,
+            width: width,
+            previousWidth: previous,
+            collapseAt: sidebarCollapseWidth,
+            expandAt: sidebarExpandWidth
+        )
+        guard collapsed != sidebarAutoCollapsed else { return }
+        sidebarAutoCollapsed = collapsed
+        #if DEBUG
+        debugTrace("sidebar fit width=\(Int(width)) collapse=\(Int(sidebarCollapseWidth)) expand=\(Int(sidebarExpandWidth)) auto=\(collapsed) manualHidden=\(sidebarHidden)")
+        #endif
+    }
+
+    /// Pane count and interface scale move the thresholds without a width
+    /// change; a manually hidden sidebar still keeps its choice.
+    private func reevaluateSidebarFit() {
+        guard windowContentWidth > 0 else { return }
+        let collapsed = MacSidebarSizing.fitAfterLayoutChange(
+            currentlyCollapsed: sidebarAutoCollapsed,
+            manuallyHidden: sidebarHidden,
+            width: windowContentWidth,
+            collapseAt: sidebarCollapseWidth,
+            expandAt: sidebarExpandWidth
+        )
+        lastAutomationWidth = windowContentWidth
+        guard collapsed != sidebarAutoCollapsed else { return }
+        sidebarAutoCollapsed = collapsed
+        #if DEBUG
+        debugTrace("sidebar fit after layout width=\(Int(windowContentWidth)) collapse=\(Int(sidebarCollapseWidth)) expand=\(Int(sidebarExpandWidth)) auto=\(collapsed) manualHidden=\(sidebarHidden)")
+        #endif
+    }
 
     // MARK: - Window top bar (design: Window top bar)
 
