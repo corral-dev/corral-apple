@@ -6,16 +6,17 @@ import Observation
 final class MacSearchState {
     var query = ""
     var selection: String?
-    @ObservationIgnored var scrollOffset: Double?
+    /// First visible result row, owned outside the sheet's view lifetime.
+    @ObservationIgnored var scrollRow: Int?
     @ObservationIgnored private weak var nativeScroll: NSScrollView?
     @ObservationIgnored private var scrollObserver: NSObjectProtocol?
-    @ObservationIgnored private var restoringScroll = false
     #if DEBUG
     @ObservationIgnored var inspectionScrollAttached = false
-    @ObservationIgnored var inspectionScrollRestoreApplied: Double?
     #endif
     let store = FulltextSearchStore()
 
+    /// Observe the mounted native results list. A control-free background view
+    /// supplies the scroll view; AppKit still owns scrolling and clipping.
     func attachScroll(_ scroll: NSScrollView) {
         guard nativeScroll !== scroll else { return }
         detachScroll()
@@ -23,64 +24,73 @@ final class MacSearchState {
         #if DEBUG
         inspectionScrollAttached = true
         #endif
-        restoringScroll = true
         scroll.contentView.postsBoundsChangedNotifications = true
         scrollObserver = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification,
             object: scroll.contentView, queue: .main) { [weak self, weak scroll] _ in
                 MainActor.assumeIsolated {
-                    guard let self, let scroll, !self.restoringScroll else { return }
-                    self.scrollOffset = scroll.contentView.bounds.minY
+                    guard let self, let scroll else { return }
+                    self.recordScrollRow(scroll)
                 }
             }
-        DispatchQueue.main.async { [weak self, weak scroll] in
-            guard let self, let scroll, self.nativeScroll === scroll else { return }
-            if let offset = self.scrollOffset {
-                var rect = scroll.contentView.bounds
-                rect.origin.y = offset
-                scroll.contentView.scroll(to: scroll.contentView.constrainBoundsRect(rect).origin)
-                scroll.reflectScrolledClipView(scroll.contentView)
-                #if DEBUG
-                self.inspectionScrollRestoreApplied = scroll.contentView.bounds.minY
-                #endif
-            }
-            self.restoringScroll = false
-        }
+    }
+
+    private func firstVisibleRow(in table: NSTableView, scroll: NSScrollView) -> Int? {
+        let clip = scroll.contentView
+        let converted = table.convert(clip.bounds, from: clip)
+        let range = table.rows(in: converted)
+        if range.location != NSNotFound, range.length > 0 { return range.location }
+        let anchor = table.row(at: NSPoint(x: 0, y: converted.minY + 1))
+        return anchor >= 0 ? anchor : nil
+    }
+
+    private func recordScrollRow(_ scroll: NSScrollView) {
+        guard let table = scroll.documentView as? NSTableView,
+              let row = firstVisibleRow(in: table, scroll: scroll) else { return }
+        scrollRow = row
     }
 
     func detachScroll() {
-        if let nativeScroll, !restoringScroll { scrollOffset = nativeScroll.contentView.bounds.minY }
+        if let nativeScroll { recordScrollRow(nativeScroll) }
         if let scrollObserver { NotificationCenter.default.removeObserver(scrollObserver) }
         scrollObserver = nil
         nativeScroll = nil
-        restoringScroll = false
         #if DEBUG
         inspectionScrollAttached = false
-        inspectionScrollRestoreApplied = nil
         #endif
     }
 
     func resetScroll() {
         detachScroll()
-        scrollOffset = nil
+        scrollRow = nil
     }
 
     #if DEBUG
-    func inspectScroll(to offset: Double? = nil) {
-        guard let nativeScroll else { return }
+    var inspectionScrollVisible: Bool { nativeScroll?.window?.isVisible == true }
+
+    @discardableResult
+    func inspectScroll(toRow row: Int? = nil) -> Int? {
+        guard let nativeScroll, let table = nativeScroll.documentView as? NSTableView else { return nil }
         inspectionScrollAttached = true
-        if let offset {
-            var rect = nativeScroll.contentView.bounds
-            rect.origin.y = offset
-            nativeScroll.contentView.scroll(to: nativeScroll.contentView.constrainBoundsRect(rect).origin)
-            nativeScroll.reflectScrolledClipView(nativeScroll.contentView)
+        if let row {
+            table.scrollRowToVisible(row)
+            recordScrollRow(nativeScroll)
         }
-        inspectionScrollOffset = Double(nativeScroll.contentView.bounds.minY)
+        inspectionScrollRow = firstVisibleRow(in: table, scroll: nativeScroll)
+        let converted = table.convert(nativeScroll.contentView.bounds, from: nativeScroll.contentView)
+        inspectionScrollDiagnostics = [
+            "visibleRect": NSStringFromRect(table.visibleRect),
+            "rowRange": NSStringFromRange(table.rows(in: table.visibleRect)),
+            "clipBounds": NSStringFromRect(nativeScroll.contentView.bounds),
+            "converted": NSStringFromRect(converted),
+        ]
         inspectionScrollClipHeight = nativeScroll.contentView.bounds.height
         inspectionScrollDocumentHeight = Double(nativeScroll.documentView?.frame.height ?? 0)
+        return inspectionScrollRow
     }
-    var inspectionScrollOffset: Double?
+    var inspectionScrollRow: Int?
     var inspectionScrollClipHeight: Double = 0
     var inspectionScrollDocumentHeight: Double = 0
+    var inspectionScrollDiagnostics: [String: String] = [:]
     #endif
 }
 

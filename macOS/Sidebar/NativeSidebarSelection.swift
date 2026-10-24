@@ -5,6 +5,12 @@ import SwiftUI
 struct NativeSidebarSelection: NSViewRepresentable {
     var revealSerial: Int? = nil
     var onReveal: () -> Void = {}
+    /// nil means this marker no longer belongs to the current list structure.
+    var selectedState: (() -> Bool?)? = nil
+
+    /// Native repairs must not be interpreted as user navigation or batch edits.
+    static var isReconcilingSelection = false
+
     /// Set only by the debug acceptance harness; unavailable in release UI.
     var debugKey: String? = nil
 
@@ -15,15 +21,18 @@ struct NativeSidebarSelection: NSViewRepresentable {
     func updateNSView(_ nsView: SelectionAppearanceView, context: Context) {
         nsView.setRevealSerial(revealSerial)
         nsView.onReveal = onReveal
+        nsView.selectedState = selectedState
         #if DEBUG
         nsView.debugKey = debugKey
         #endif
         nsView.bindRow()
         nsView.revealIfNeeded()
+        nsView.reconcileSelection()
     }
 
     static func dismantleNSView(_ nsView: SelectionAppearanceView, coordinator: ()) {
         nsView.unbindRow()
+        nsView.selectedState = nil
     }
 
     final class SelectionAppearanceView: NSView {
@@ -32,6 +41,9 @@ struct NativeSidebarSelection: NSViewRepresentable {
         var revealSerial: Int?
         var onReveal: () -> Void = {}
         private var completedReveal: Int?
+        private weak var selectionTable: NSTableView?
+        private var selectionRepairPending = false
+        var selectedState: (() -> Bool?)?
         #if DEBUG
         var debugKey: String?
         #endif
@@ -42,12 +54,14 @@ struct NativeSidebarSelection: NSViewRepresentable {
             super.viewDidMoveToSuperview()
             bindRow()
             revealIfNeeded()
+            reconcileSelection()
         }
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             bindRow()
             revealIfNeeded()
+            reconcileSelection()
         }
 
         func bindRow() {
@@ -70,9 +84,47 @@ struct NativeSidebarSelection: NSViewRepresentable {
         }
 
         func unbindRow() {
+            NotificationCenter.default.removeObserver(self)
+            selectionTable = nil
             observation?.invalidate()
             observation = nil
             row = nil
+        }
+
+        @objc private func nativeSelectionChanged(_ notification: Notification) {
+            reconcileSelection()
+        }
+
+        /// SwiftUI can preserve a Set binding while its mounted outline loses
+        /// selection. Reconcile after its transaction, reading live model state
+        /// rather than the value captured before a native selection gesture.
+        func reconcileSelection() {
+            guard selectedState != nil, !selectionRepairPending else { return }
+            selectionRepairPending = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.selectionRepairPending = false
+                guard self.window != nil, let row = self.row,
+                      let table = self.enclosingScrollView?.documentView as? NSTableView,
+                      let selected = self.selectedState?() else { return }
+                if self.selectionTable !== table {
+                    NotificationCenter.default.removeObserver(self)
+                    self.selectionTable = table
+                    let notification = table is NSOutlineView
+                        ? NSOutlineView.selectionDidChangeNotification : NSTableView.selectionDidChangeNotification
+                    NotificationCenter.default.addObserver(self, selector: #selector(self.nativeSelectionChanged(_:)),
+                                                           name: notification, object: table)
+                }
+                let index = table.row(for: row)
+                guard index >= 0, table.selectedRowIndexes.contains(index) != selected else { return }
+                NativeSidebarSelection.isReconcilingSelection = true
+                defer { NativeSidebarSelection.isReconcilingSelection = false }
+                if selected {
+                    table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: true)
+                } else {
+                    table.deselectRow(index)
+                }
+            }
         }
 
         func setRevealSerial(_ serial: Int?) {

@@ -17,7 +17,12 @@ struct MacSearchScrollBookmark: NSViewRepresentable {
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
         override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); attach() }
         override func viewDidMoveToSuperview() { super.viewDidMoveToSuperview(); attach() }
+        override func layout() { super.layout(); attach() }
         func attach() {
+            if let scroll = enclosingScrollView {
+                state?.attachScroll(scroll)
+                return
+            }
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.window != nil, let scroll = self.enclosingScrollView else { return }
                 self.state?.attachScroll(scroll)

@@ -87,6 +87,11 @@ struct MacRootView: View {
             if let feed { await notifications.resolvePending(feed: feed, workspace: workspace) }
         }
         .onReceive(NotificationCenter.default.publisher(for: .corralPendingNotificationOpen)) { _ in
+            #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("-CorralInspectSearchNavigation") {
+                workspace.navigation.host.inspectionEvents.append("notification open")
+            }
+            #endif
             openWindow(id: "main")
             showNewSession = false
             showPairing = false
@@ -118,7 +123,21 @@ struct MacRootView: View {
             if arguments.contains("-CorralInspectPairing") { showPairing = true }
             Task {
                 await MacSearchNavigationInspection.runIfRequested(workspace: workspace, model: appModel,
-                    presentSearch: { showSearch = true }, dismissSearch: { showSearch = false })
+                    presentSearch: {
+                        #if DEBUG
+                        if ProcessInfo.processInfo.arguments.contains("-CorralInspectSearchNavigation") {
+                            workspace.navigation.host.inspectionEvents.append("search presented")
+                        }
+                        #endif
+                        showSearch = true
+                    }, dismissSearch: {
+                        #if DEBUG
+                        if ProcessInfo.processInfo.arguments.contains("-CorralInspectSearchNavigation") {
+                            workspace.navigation.host.inspectionEvents.append("search dismissed")
+                        }
+                        #endif
+                        showSearch = false
+                    })
             }
             Task {
                 await MacTitleMenuInspection.run(appModel: appModel, workspace: workspace) {

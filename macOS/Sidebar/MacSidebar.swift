@@ -132,10 +132,8 @@ struct MacSidebar: View {
             .onChange(of: workspace.paneFocusSerial) { _, _ in
                 selectedKeys = workspace.focusedKey.map { visibleKeys.contains($0) ? [$0] : [] } ?? []
             }
-            .onChange(of: visibleKeys) { previous, visible in
-                selectedKeys.formIntersection(visible)
-                if selectedKeys.isEmpty, let key = workspace.focusedKey,
-                   !previous.contains(key), visible.contains(key) { selectedKeys = [key] }
+            .onChange(of: visibleKeys) { _, _ in
+                selectedKeys = keepingCurrentSession(selectedKeys)
             }
             .confirmationDialog(
                 deleteTitle,
@@ -190,7 +188,7 @@ struct MacSidebar: View {
                             .fixedSize()
                             .accessibilityIdentifier("corral.session.selection-actions")
                             .disabled(batch.isRunning)
-                            Button { selectedKeys.removeAll() } label: {
+                            Button { clearBatchSelection() } label: {
                                 Label("mac.sessions.clear_selection", systemImage: "xmark")
                             }
                             .labelStyle(.iconOnly)
@@ -434,7 +432,12 @@ struct MacSidebar: View {
                     selectedKeys = [session.key]
                     pendingRevealSerial = nil
                 },
+                selectedState: {
+                    guard visibleKeys.contains(session.key) else { return nil }
+                    return selectedKeys.contains(session.key)
+                },
                 debugKey: ProcessInfo.processInfo.arguments.contains("-CorralInspectSearchNavigation")
+                    || ProcessInfo.processInfo.arguments.contains("-CorralInspectPaneSelection")
                     ? session.key : nil))
             .tag(session.key)
             .onAppear { feed.listStore.rememberOpened(session) }
@@ -592,6 +595,17 @@ struct MacSidebar: View {
         sidebarSections.flatMap(\.items).map(\.session).filter { keys.contains($0.key) }
     }
 
+    private func keepingCurrentSession(_ keys: Set<String>) -> Set<String> {
+        let visible = visibleKeys
+        let surviving = keys.intersection(visible)
+        guard surviving.isEmpty, let key = workspace.focusedKey, visible.contains(key) else { return surviving }
+        return [key]
+    }
+
+    private func clearBatchSelection() {
+        selectedKeys = keepingCurrentSession([])
+    }
+
     private func selectionBinding(for sections: [DesktopSidebarProjection.Section]) -> Binding<Set<String>> {
         let structure = listStructure(sections)
         return Binding(
@@ -605,9 +619,16 @@ struct MacSidebar: View {
                 #endif
                 // A retired native outline can report its previous row index
                 // after a structural update. That is reconciliation, not input.
-                guard structure == listStructure(sidebarSections) else { return }
+                guard !NativeSidebarSelection.isReconcilingSelection,
+                      structure == listStructure(sidebarSections) else { return }
                 if pendingRevealSerial != nil, keys != Set(workspace.navigation.host.revealKey.map { [$0] } ?? []) { return }
-                selectedKeys = keys.intersection(visibleKeys)
+                let requested = keys.intersection(visibleKeys)
+                guard !requested.isEmpty else {
+                    clearBatchSelection()
+                    return
+                }
+                guard requested != selectedKeys else { return }
+                selectedKeys = requested
                 // Native selection owns Command/Shift/range gestures. Extending
                 // or reducing a batch never navigates away from the open pane.
                 guard selectedKeys.count == 1, let key = selectedKeys.first,
@@ -676,16 +697,16 @@ struct MacSidebar: View {
         // Local restoration avoids any layout write or new assistant launch.
         workspace.restorePanes([key])
         try? await Task.sleep(for: .milliseconds(350))
-        func nativeKeys() -> Set<String> {
-            var rows: [Int: String] = [:]
-            var index = 0
-            for section in sidebarSections {
-                index += 1
-                if expansion(for: section).wrappedValue {
-                    for item in section.items { rows[index] = item.session.key; index += 1 }
+        func mountedRows() -> [(key: String, row: Int, selected: Bool)] {
+            NSApp.windows.compactMap(\.contentView).flatMap(descendants)
+                .compactMap { $0 as? NativeSidebarSelection.SelectionAppearanceView }
+                .compactMap { marker in
+                    guard let key = marker.debugKey, let state = marker.debugRowState() else { return nil }
+                    return (key, state.row, state.selected)
                 }
-            }
-            return Set((mountedOutline()?.selectedRowIndexes ?? []).compactMap { rows[$0] })
+        }
+        func nativeKeys() -> Set<String> {
+            Set(mountedRows().filter(\.selected).map(\.key))
         }
         func settleSelection() async {
             for _ in 0..<50 {
@@ -693,14 +714,7 @@ struct MacSidebar: View {
                 try? await Task.sleep(for: .milliseconds(100))
             }
         }
-        var availableRows: [(key: String, row: Int)] = []
-        var rowIndex = 0
-        for section in sidebarSections {
-            rowIndex += 1
-            if expansion(for: section).wrappedValue {
-                for item in section.items { availableRows.append((item.session.key, rowIndex)); rowIndex += 1 }
-            }
-        }
+        let availableRows = mountedRows()
         let pair = Set([key, availableRows.first(where: { $0.key != key })?.key].compactMap { $0 })
         let rowIndexes = IndexSet(availableRows.filter { pair.contains($0.key) }.map(\.row))
         mountedOutline()?.selectRowIndexes(rowIndexes, byExtendingSelection: false)
@@ -714,7 +728,12 @@ struct MacSidebar: View {
                                           "focused": workspace.focusedKey ?? "", "serial": workspace.paneFocusSerial]
         mountedOutline()?.deselectAll(nil)
         try? await Task.sleep(for: .milliseconds(350))
-        checks["nativeClear"] = selectedKeys.isEmpty
+        checks["nativeClearKeepsCurrent"] = selectedKeys == [key] && nativeKeys() == [key]
+        mountedOutline()?.selectRowIndexes(rowIndexes, byExtendingSelection: false)
+        try? await Task.sleep(for: .milliseconds(350))
+        clearBatchSelection()
+        await settleSelection()
+        checks["clearBatchKeepsCurrent"] = selectedKeys == [key] && nativeKeys() == [key]
         workspace.focus(key)
         await settleSelection()
         checks["reactivationRestoresClearedRow"] = selectedKeys == [key] && nativeKeys() == [key]
@@ -733,12 +752,18 @@ struct MacSidebar: View {
         let output = ProcessInfo.processInfo.environment["CORRAL_INSPECTION_PANE_SELECTION_OUTPUT"]
             ?? "/tmp/corral-pane-selection.json"
         let evidence: [String: Any] = ["checks": checks, "selected": selectedKeys.sorted(),
+                                      "focused": workspace.focusedKey ?? "", "expected": key,
+                                      "visible": visibleKeys.sorted(),
+                                      "mounted": mountedRows().map { ["key": $0.key, "row": $0.row, "selected": $0.selected] as [String: Any] },
                                       "selectAllActionAvailable": selectAllAvailable,
                                       "batchResult": batchResult,
                                       "nativeSelected": nativeKeys().sorted(),
                                       "physicalInput": "not exercised; native List selection and production workspace focus"]
         if let data = try? JSONSerialization.data(withJSONObject: evidence, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: URL(fileURLWithPath: output), options: .atomic)
+        }
+        if ProcessInfo.processInfo.arguments.contains("-CorralInspectPaneSelectionHold") {
+            try? await Task.sleep(for: .seconds(8))
         }
         selectedKeys = original.intersection(visibleKeys)
         if originalPanes.isEmpty { workspace.closePane(key) }

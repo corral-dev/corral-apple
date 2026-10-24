@@ -55,6 +55,15 @@ enum MacSearchNavigationInspection {
             let returned = conversationScroll(key: key, workspace: workspace)?.coordinator?.navigationPosition
             results["readingPosition"] = reading != nil && reading?.id == returned?.id
                 && abs((reading?.offset ?? 0) - (returned?.offset ?? 100)) < 1
+            let readingInfo: [String: Any] = reading.map {
+                ["id": $0.id ?? "", "offset": $0.offset, "followsLatest": $0.followsLatest]
+            } ?? [:]
+            let returnedInfo: [String: Any] = returned.map {
+                ["id": $0.id ?? "", "offset": $0.offset, "followsLatest": $0.followsLatest]
+            } ?? [:]
+            try? JSONSerialization.data(withJSONObject: ["prepared": readingInfo, "returned": returnedInfo],
+                options: [.prettyPrinted, .sortedKeys])
+                .write(to: folder.appendingPathComponent("reading.json"), options: .atomic)
             await stage("back", results: results, folder: folder, workspace: workspace)
             await workspace.navigateHistory(by: 1)
             results["forward"] = workspace.focusedKey == other.key
@@ -66,22 +75,48 @@ enum MacSearchNavigationInspection {
                 && search.store.result?.matches.map(\.key) == callsResult
             results["noRunningWork"] = !search.store.isSearching
             if matches.count > 6 {
-                presentSearch()
-                try await Task.sleep(for: .seconds(1))
-                results["searchScrollAttached"] = search.inspectionScrollAttached
-                search.inspectScroll(to: 600)
-                let offset = search.inspectionScrollOffset
-                results["searchScrollRecorded"] = (offset ?? 0) > 100
+                var attached = false
+                for _ in 0..<4 {
+                    presentSearch()
+                    if await waitForSearchScroll(search) { attached = true; break }
+                    dismissSearch()
+                    try? await Task.sleep(for: .milliseconds(500))
+                }
+                results["searchScrollAttached"] = attached
+                let row = search.inspectScroll(toRow: 6)
+                try? await Task.sleep(for: .milliseconds(900))
+                results["searchScrollRecorded"] = (row ?? 0) > 0
+                try? JSONSerialization.data(withJSONObject: ["row": row ?? -1,
+                    "geometry": search.inspectionScrollDiagnostics], options: [.prettyPrinted])
+                    .write(to: folder.appendingPathComponent("search-first-geometry.json"), options: .atomic)
                 await stage("search", results: results, folder: folder, workspace: workspace)
                 dismissSearch()
                 try await Task.sleep(for: .milliseconds(500))
-                search.inspectionScrollOffset = nil
-                presentSearch()
-                try await Task.sleep(for: .seconds(1))
-                results["searchScrollReattached"] = search.inspectionScrollAttached
-                search.inspectScroll()
-                results["searchScrollRestored"] = offset != nil
-                    && abs((offset ?? 0) - (search.inspectionScrollOffset ?? -100)) < 1
+                var reattached = false
+                for _ in 0..<4 {
+                    presentSearch()
+                    if await waitForSearchScroll(search) { reattached = true; break }
+                    dismissSearch()
+                    try? await Task.sleep(for: .milliseconds(500))
+                }
+                results["searchScrollReattached"] = reattached
+                try? await Task.sleep(for: .milliseconds(900))
+                var restored: Int?
+                for _ in 0..<10 {
+                    if let value = search.inspectScroll(toRow: nil) { restored = value; break }
+                    if !search.inspectionScrollVisible {
+                        dismissSearch()
+                        try? await Task.sleep(for: .milliseconds(300))
+                        presentSearch()
+                        _ = await waitForSearchScroll(search)
+                    }
+                    try? await Task.sleep(for: .milliseconds(150))
+                }
+                results["searchScrollRestored"] = row != nil && row == restored
+                try? JSONSerialization.data(withJSONObject: ["row": restored ?? -1,
+                    "recorded": row ?? -1,
+                    "geometry": search.inspectionScrollDiagnostics], options: [.prettyPrinted])
+                    .write(to: folder.appendingPathComponent("search-restored-geometry.json"), options: .atomic)
                 await stage("reopened-search", results: results, folder: folder, workspace: workspace)
                 dismissSearch()
             }
@@ -89,10 +124,10 @@ enum MacSearchNavigationInspection {
             try JSONSerialization.data(withJSONObject: ["checks": results,
                 "passed": results.values.allSatisfy { $0 }, "sidebar": state.inspectionSidebar,
                 "search": ["attached": search.inspectionScrollAttached,
-                    "offset": search.inspectionScrollOffset ?? -1,
-                    "restored": search.inspectionScrollRestoreApplied ?? -1,
+                    "row": search.inspectionScrollRow ?? -1,
                     "clipHeight": search.inspectionScrollClipHeight,
-                    "documentHeight": search.inspectionScrollDocumentHeight],
+                    "documentHeight": search.inspectionScrollDocumentHeight,
+                    "geometry": search.inspectionScrollDiagnostics],
                 "events": state.inspectionEvents], options: [.prettyPrinted, .sortedKeys])
                 .write(to: folder.appendingPathComponent("result.json"), options: .atomic)
         } catch {
@@ -126,12 +161,14 @@ enum MacSearchNavigationInspection {
         let original = window.frame
         defer { window.setFrame(original, display: true) }
         var samples: [[String: Double]] = []
+        var skipped: [Double] = []
         for width in [1436.0, 900.0, 1180.0] {
             var frame = original
             frame.size.width = width
             window.setFrame(frame, display: true)
             try? await Task.sleep(for: .milliseconds(400))
-            guard let scroll = conversationScroll(key: key, workspace: workspace), let document = scroll.documentView else { continue }
+            guard let scroll = await waitForConversationScroll(key: key, workspace: workspace),
+                  let document = scroll.documentView else { skipped.append(width); continue }
             let clip = scroll.contentView
             let y = clip.bounds.minY
             let proposed = NSRect(x: 60, y: y, width: clip.bounds.width, height: clip.bounds.height)
@@ -142,9 +179,17 @@ enum MacSearchNavigationInspection {
             clip.scroll(to: NSPoint(x: 0, y: y))
             scroll.reflectScrolledClipView(clip)
         }
-        try? JSONSerialization.data(withJSONObject: samples, options: [.prettyPrinted])
+        try? JSONSerialization.data(withJSONObject: ["samples": samples, "skipped": skipped], options: [.prettyPrinted])
             .write(to: folder.appendingPathComponent("horizontal-geometry.json"))
         return samples.count == 3 && samples.allSatisfy { ($0["documentWidth"] ?? 1) <= ($0["clipWidth"] ?? 0) + 0.5 && abs($0["x"] ?? 1) < 0.5 }
+    }
+
+    private static func waitForConversationScroll(key: String, workspace: MacWorkspace) async -> MacConversationTable.ConversationScrollView? {
+        for _ in 0..<50 {
+            if let scroll = conversationScroll(key: key, workspace: workspace), scroll.documentView != nil { return scroll }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        return nil
     }
 
     private static func waitForSidebar(_ key: String, state: MacNavigationState.HostState) async -> Bool {
@@ -152,6 +197,14 @@ enum MacSearchNavigationInspection {
             if state.inspectionSidebarKey == key, state.inspectionSidebar.values.allSatisfy({ $0 }),
                !state.inspectionSidebar.isEmpty { return true }
             try? await Task.sleep(for: .milliseconds(100))
+        }
+        return false
+    }
+
+    private static func waitForSearchScroll(_ search: MacSearchState) async -> Bool {
+        for _ in 0..<200 {
+            if search.inspectionScrollAttached, search.inspectionScrollVisible { return true }
+            try? await Task.sleep(for: .milliseconds(50))
         }
         return false
     }

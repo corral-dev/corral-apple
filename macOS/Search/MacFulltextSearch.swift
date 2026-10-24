@@ -153,9 +153,11 @@ struct MacFulltextSearch: View {
                 .onChange(of: selection) { _, key in
                     if let key { proxy.scrollTo(key) }
                 }
-                .onAppear { highlightFirst(of: result) }
+                .onAppear {
+                    highlightFirst(of: result)
+                    restoreScroll(proxy, matches: result.matches)
                 }
-                .onAppear { highlightFirst(of: result) }
+                }
                 .onChange(of: result.matches.map(\.key)) { _, _ in highlightFirst(of: result) }
                 .transition(.opacity)
             }
@@ -357,6 +359,17 @@ struct MacFulltextSearch: View {
         if let selection, result.matches.contains(where: { $0.key == selection }) { return }
         guard let first = result.matches.first?.key, selection != first else { return }
         selection = first
+    }
+
+    /// Restore the user's results position without moving the highlighted hit.
+    /// The native list owns layout; ScrollViewReader is its public scroll API.
+    private func restoreScroll(_ proxy: ScrollViewProxy, matches: [FulltextMatch]) {
+        guard let row = state.scrollRow, matches.indices.contains(row) else { return }
+        let key = matches[row].key
+        Task { @MainActor in
+            await Task.yield()
+            proxy.scrollTo(key, anchor: .top)
+        }
     }
 
     /// ↑/↓ while typing. An input method composing text keeps the arrow keys
