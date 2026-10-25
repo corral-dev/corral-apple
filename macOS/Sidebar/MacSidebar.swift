@@ -839,8 +839,16 @@ struct MacSidebar: View {
             menuRows.append(rows[2])
         }
         switch ProcessInfo.processInfo.environment["CORRAL_INSPECTION_PIN_MENU"] {
-        case "split":
-            if let split = rows.first(where: { workspace.layout.group(containing: $0.key) != nil }) {
+        case "split", "split-pinned":
+            if let split = rows.first(where: {
+                workspace.layout.group(containing: $0.key) != nil && workspace.layout.isPinned($0.key)
+            }) ?? rows.first(where: { workspace.layout.group(containing: $0.key) != nil }) {
+                menuRows = [split]
+            }
+        case "split-unpinned":
+            if let split = rows.first(where: {
+                workspace.layout.group(containing: $0.key) != nil && !workspace.layout.isPinned($0.key)
+            }) {
                 menuRows = [split]
             }
         case "session":
