@@ -100,6 +100,7 @@ private struct MacNotificationSettings: View {
                     Toggle("settings.notifications.waiting", isOn: $notifications.waiting)
                     Toggle("settings.notifications.completed", isOn: $notifications.completed)
                     Toggle("settings.notifications.aborted", isOn: $notifications.aborted)
+                    Toggle("settings.notifications.transient", isOn: $notifications.transient)
                     NotificationSoundPicker()
                         .pickerStyle(.radioGroup)
                     if notifications.authorization == .denied {

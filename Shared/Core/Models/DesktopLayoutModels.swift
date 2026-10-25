@@ -32,6 +32,14 @@ nonisolated struct DesktopLayout: Decodable, Sendable, Equatable {
     func group(containing key: String) -> DesktopGroup? {
         groups.first { $0.members.contains(key) }
     }
+
+    /// TUI pin semantics: a visible split member is pinned with the whole
+    /// split. Reading only `pinnedSessions` would report a group-pinned member
+    /// as unpinned because the host promotes the member pin to the group.
+    func isPinned(_ key: String) -> Bool {
+        if let group = group(containing: key) { return group.pinned }
+        return pinnedSessions[key] != nil
+    }
 }
 
 nonisolated struct DesktopGroup: Decodable, Sendable, Equatable, Identifiable {

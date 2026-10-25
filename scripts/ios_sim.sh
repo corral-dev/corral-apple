@@ -10,13 +10,13 @@ SIM_NAME="${SIM_NAME:-iPhone 17}"
 DEVICE_NAME="${DEVICE_NAME:-}"
 DEVICE_ID="${DEVICE_ID:-}"
 DERIVED_DATA="${DERIVED_DATA:-.derivedData}"
-BUNDLE_ID="${BUNDLE_ID:-com.example.corral}"
+BUNDLE_ID="${BUNDLE_ID:-com.x0c.corral}"
 CONFIGURATION="${CONFIGURATION:-Debug}"
 
 # App Store Connect Team Key：真机自动签名需要（含推送能力的描述文件）。
-ASC_KEY_PATH="${ASC_KEY_PATH:?set ASC_KEY_PATH to an App Store Connect .p8 key}"
-ASC_KEY_ID="${ASC_KEY_ID:?set ASC_KEY_ID}"
-ASC_ISSUER_ID="${ASC_ISSUER_ID:?set ASC_ISSUER_ID}"
+ASC_KEY_PATH="${ASC_KEY_PATH:-$HOME/Documents/P8 密钥/发布公证密钥/AuthKey_D7YQ9HD7D6_Notarize.p8}"
+ASC_KEY_ID="${ASC_KEY_ID:-D7YQ9HD7D6}"
+ASC_ISSUER_ID="${ASC_ISSUER_ID:-c98fe4b8-d1bf-4b4a-b998-9eb8f3be9fe4}"
 
 if [[ -n "${DESTINATION:-}" ]]; then
   DESTINATION="${DESTINATION}"
@@ -38,7 +38,7 @@ Usage:
 
 Environment overrides:
   SIM_NAME / DEVICE_NAME / DEVICE_ID / DESTINATION / DERIVED_DATA
-  真机默认装到名为 the paired iPhone 的已配对设备（可用 DEVICE_NAME / DEVICE_ID 覆盖）
+  真机默认装到名为 iPhone Max 的已配对设备（可用 DEVICE_NAME / DEVICE_ID 覆盖）
 EOF
 }
 
@@ -143,7 +143,7 @@ run_app() {
   fi
   local device_ref
   if is_generic_ios_destination; then
-    device_ref="${DEVICE_ID:-${DEVICE_NAME:?set DEVICE_NAME to the paired iPhone name, or DEVICE_ID}}"
+    device_ref="${DEVICE_ID:-${DEVICE_NAME:-iPhone Max}}"
   else
     device_ref="$(destination_value id || destination_value name)"
   fi

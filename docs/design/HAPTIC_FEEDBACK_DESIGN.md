@@ -8,7 +8,7 @@ Implementation contract: use one main-actor UIKit feedback service for stable sy
 
 Design Corral iOS haptics around meaningful actions and confirmed outcomes. Feedback should be brief, restrained and consistent across pairing, session actions, conversation input and native questions. Reading and streaming remain quiet. Every outcome remains understandable when system settings or hardware suppress haptics.
 
-This document owns the Corral event mapping. Shared semantics and platform guidance remain in the iOS haptic design guide (maintainer reference, not distributed); existing visual and interaction contracts remain in [the UI knowledge base](../UI_DESIGN_KNOWLEDGE_BASE.md).
+This document owns the Corral event mapping. Shared semantics and platform guidance remain in [the iOS haptic design guide](~/Codes/_standards/workspace-docs/swift-docs/ios-haptic-design-guide.md); existing visual and interaction contracts remain in [the UI knowledge base](../UI_DESIGN_KNOWLEDGE_BASE.md).
 
 ## Feedback vocabulary
 
@@ -54,7 +54,7 @@ Always quiet: launch, opening/returning between pages, ordinary scrolling, searc
 4. When one operation produces a start and outcome in the same UI update, play its outcome only. During an asynchronous send, a later warning/error is useful because it changes the visible pending state. Never play a backlog after the page disappears or the app becomes active again.
 5. A starting tuning budget for incidental selection/threshold taps is at most one per 150 ms; suppress extras instead of queuing them. This is a Corral comfort budget, not an Apple requirement. It must not suppress a distinct explicit failure or change the task's visible state.
 6. App-authored feedback requires an active foreground scene. Unsolicited question/turn feedback additionally requires the matching host and session detail to be visible, reading position following the latest content, and no active typing or text selection. In history-reading mode, show the existing new-content cue without vibrating. Suppressed feedback is consumed, not deferred until return.
-7. Other sessions and hosts remain silent inside the app. Lock-screen/background alerts remain owned by the existing system-notification path and its preferences. A turn/request handled by that path must not also produce an app pulse for the same event; returning from a notification never replays it. See [completion notification design](../https://github.com/corral-dev/corral/blob/main/docs/design/AGENT_COMPLETION_NOTIFICATIONS_DESIGN.md) for terminal evidence and notification deduplication ownership.
+7. Other sessions and hosts remain silent inside the app. Lock-screen/background alerts remain owned by the existing system-notification path and its preferences. A turn/request handled by that path must not also produce an app pulse for the same event; returning from a notification never replays it. See [completion notification design](../../../cli/docs/design/AGENT_COMPLETION_NOTIFICATIONS_DESIGN.md) for terminal evidence and notification deduplication ownership.
 8. For unsolicited events that coincide, an interruption takes priority over completion, which takes priority over a question-card arrival tap. Do not stack several notification rhythms for one state change.
 
 ## Default behavior and accessibility
@@ -89,7 +89,7 @@ There is no app-specific haptic setting or stored enablement value. User-action 
 
 - 2026-10-01: after removing the app setting, the coordinator reran the full current portable suite: 272 tests, zero failures, including five haptic policy tests. The policy checks background/visibility suppression without replay, per-attempt phase deduplication, selection throttling, abandoned-surface invalidation and truthful error classification.
 - The signed generic-device Release build for 1.0.91 (101) passed. All 224 localization key usages have English and Simplified Chinese entries. The former setting section, extra Machines toolbar entry, enablement storage and unused setting translations are absent from the current source.
-- Source commit `134ba46` is published as v1.0.91. Concurrent delivery job `3b3242bb9351ae640028926d` independently verified installation and launch on the paired physical iPhone and a matching internal install-shelf package (shelf release 155). A separate live app query read back 1.0.91 (101).
+- Source commit `134ba46` is published as [v1.0.91](https://forgejo.caozc.top/Max/corral-ios/releases/tag/v1.0.91). Concurrent delivery job `3b3242bb9351ae640028926d` independently verified installation and launch on the paired physical iPhone and a matching [AppShelf package](https://apps.caozc.com/a/corral) (shelf release 155). A separate live app query read back 1.0.91 (101).
 - After a fresh ordinary Release launch, the coordinator inspected the phone screenshot: Machines has its existing pairing control and no extra Settings entry. The host-settings section removal is source/build verified; that sheet was not photographed. The first capture was black; the post-launch recheck showed the real Machines surface. No physical tap counts or tactile feel acceptance are claimed.
 
 ## Physical-device acceptance

@@ -31,12 +31,29 @@ extension LifecycleProbe {
         model.client = client
         workspace.attach(appModel: model); workspace.selectHost("batch"); workspace.feed = feed
         var pins: [String: Double] = [:]
+        var groupPinned = false
         var revision = 0
+        func layoutPayload() -> [String: Any] {
+            [
+                "revision": revision,
+                "groups": [[
+                    "id": "g", "name": "", "project": "/p",
+                    "members": ["g1", "g2"], "focus": "g1", "collapsed": false,
+                    "pinned": groupPinned, "pinned_at": groupPinned ? 1.0 : 0, "updated_at": 0,
+                ]],
+                "pinned_sessions": pins,
+            ]
+        }
         client.handler = { method, params in
             if method == WireProtocol.mLayoutPin, let key = params["key"] as? String {
                 pins[key] = pins[key] == nil ? 1 : nil
                 revision += 1
-                return ["revision": revision, "groups": [], "pinned_sessions": pins] as [String: Any]
+                return layoutPayload()
+            }
+            if method == WireProtocol.mLayoutPinGroup, params["group_id"] as? String == "g" {
+                groupPinned.toggle()
+                revision += 1
+                return layoutPayload()
             }
             if method == WireProtocol.mSessionDelete, params["key"] as? String == "keep" {
                 throw MacSessionBatch.Failure(message: "host refused deletion")
@@ -44,6 +61,21 @@ extension LifecycleProbe {
             return [:] as [String: Any]
         }
         do {
+            workspace.startLayoutWatch()
+            client.emit(layoutPayload(), channel: WireProtocol.chLayout)
+            await settle()
+            check(workspace.layout.groups.count == 1, "layout watch did not deliver the split")
+            // TUI semantics: a member pins its whole split, and a repeated
+            // member in one batch must not toggle the split back off.
+            try await workspace.applySessionAction(.pin, key: "g1")
+            check(workspace.layout.isPinned("g1") && workspace.layout.isPinned("g2") && groupPinned,
+                  "split member pin did not include the whole split")
+            try await workspace.applySessionAction(.pin, key: "g2")
+            check(groupPinned && client.calls.filter { $0.0 == WireProtocol.mLayoutPinGroup }.count == 1,
+                  "repeated split member inverted the split pin")
+            try await workspace.applySessionAction(.unpin, key: "g2")
+            check(!workspace.layout.isPinned("g1") && !groupPinned,
+                  "split member unpin did not clear the whole split")
             try await workspace.applySessionAction(.pin, key: "a")
             try await workspace.applySessionAction(.pin, key: "a")
             try await workspace.applySessionAction(.unpin, key: "a")
@@ -62,6 +94,6 @@ extension LifecycleProbe {
                   "deletion closed an unconfirmed pane")
             check(workspace.actionError == nil, "batch emitted a second per-item alert")
         } catch { preconditionFailure("batch fixture failed: \(error)") }
-        print("PASS session batches: serialized snapshots, duplicate exclusion, partial failure, host retirement, desired pins, confirmed deletion")
+        print("PASS session batches: serialized snapshots, duplicate exclusion, partial failure, host retirement, split/session desired pins, confirmed deletion")
     }
 }

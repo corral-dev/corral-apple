@@ -161,6 +161,31 @@ final class DesktopSidebarProjectionTests: XCTestCase {
         XCTAssertEqual(result.first?.items.map(\.id), ["session:b", "session:a", "session:c"])
     }
 
+    /// TUI pin semantics: a split member's effective pin is the split's pin,
+    /// not a stale independent entry. This drives the menu labels and batch
+    /// desired state, so testing `pinnedSessions` alone would report a pinned
+    /// member as unpinned and turn Pin into an unpin action.
+    func testSplitPinIsTheEffectivePinForEveryMember() {
+        let pinned = DesktopLayout(
+            revision: 1,
+            groups: [DesktopGroup(id: "g", name: "", members: ["a", "b"], pinned: true, pinnedAt: 20)],
+            pinnedSessions: ["c": 10]
+        )
+        XCTAssertTrue(pinned.isPinned("a"))
+        XCTAssertTrue(pinned.isPinned("b"))
+        XCTAssertTrue(pinned.isPinned("c"))
+        XCTAssertFalse(pinned.isPinned("d"))
+
+        let unpinned = DesktopLayout(
+            revision: 2,
+            groups: [DesktopGroup(id: "g", name: "", members: ["a", "b"])],
+            pinnedSessions: ["a": 10, "c": 10]
+        )
+        XCTAssertFalse(unpinned.isPinned("a"), "a visible split has no independent member pin")
+        XCTAssertFalse(unpinned.isPinned("b"))
+        XCTAssertTrue(unpinned.isPinned("c"))
+    }
+
     func testJoiningLeavingAndCollapsingSplitNeverMovesRows() {
         let sessions = [session("a", hoursAgo: 1), session("c", hoursAgo: 2), session("b", hoursAgo: 3)]
         var order = DesktopSidebarProjection.StableOrder()

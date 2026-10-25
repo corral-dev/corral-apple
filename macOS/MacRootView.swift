@@ -234,6 +234,17 @@ struct MacRootView: View {
         }
         .onChange(of: commands.newSessionRequest) { _, _ in startNewSession() }
         .onChange(of: commands.searchRequest) { _, _ in showSearch = true }
+        .onChange(of: commands.openInSplitRequest) { _, _ in openSelectionInSplit() }
+        .onChange(of: commands.restartRequest) { _, _ in restartFocusedSession() }
+        .onChange(of: workspace.paneKeys, initial: true) { _, keys in
+            commands.paneCount = keys.count
+        }
+        .onChange(of: openInSplitAvailable, initial: true) { _, available in
+            commands.canOpenInSplit = available
+        }
+        .onChange(of: restartAvailable, initial: true) { _, available in
+            commands.canRestartSession = available
+        }
           .onChange(of: commands.backRequest) { _, _ in Task { await workspace.navigateHistory(by: -1) } }
           .onChange(of: commands.forwardRequest) { _, _ in Task { await workspace.navigateHistory(by: 1) } }
           .onChange(of: workspace.navigation.host.history, initial: true) { _, history in
@@ -314,7 +325,7 @@ struct MacRootView: View {
 
     private var focusedSessionIsPinned: Bool {
         guard let key = workspace.focusedKey else { return false }
-        return workspace.layout.pinnedSessions[key] != nil
+        return workspace.layout.isPinned(key)
     }
 
     private var paneCount: Int { max(workspace.paneKeys.count, 1) }
@@ -454,6 +465,19 @@ struct MacRootView: View {
             && !SessionActionsMenu.isReadonly(access: appModel.connectedAccess)
     }
 
+    /// Session ▸ Open in Split acts on the sidebar's single selection.
+    private var openInSplitAvailable: Bool {
+        guard canCreateSession, let key = commands.sidebarSelection,
+              let session = feed?.listStore.session(for: key) else { return false }
+        return !workspace.paneKeys.isEmpty && workspace.canAddSessionToSplit(session)
+    }
+
+    /// Session ▸ Restart Session acts on the focused pane and the host capability.
+    private var restartAvailable: Bool {
+        guard let key = workspace.focusedKey, !ProjectShell.isShellKey(key), canCreateSession else { return false }
+        return appModel.client?.hostCapabilities.sessionRestart == true
+    }
+
     // MARK: - Actions
 
     /// ⌥F12 / toolbar: the focused project's terminal as a split pane.
@@ -465,6 +489,19 @@ struct MacRootView: View {
     private func startNewSession() {
         guard canCreateSession else { return }
         showNewSession = true
+    }
+
+    /// ⌘D: the sidebar selection joins the split, like the row's Open in Split.
+    private func openSelectionInSplit() {
+        guard let key = commands.sidebarSelection,
+              let session = feed?.listStore.session(for: key) else { return }
+        workspace.addPane(session.key, project: session.cwd)
+    }
+
+    /// ⌘R: restart the focused pane's session, the pane menu's Restart.
+    private func restartFocusedSession() {
+        guard restartAvailable, let key = workspace.focusedKey else { return }
+        Task { await workspace.restart(key) }
     }
 
     /// One feed per selected machine; switching machines tears the old one down

@@ -10,6 +10,8 @@ final class MacNotifications: NSObject, UNUserNotificationCenterDelegate {
     var waiting = true { didSet { savePreferences() } }
     var completed = true { didSet { savePreferences() } }
     var aborted = true { didSet { savePreferences() } }
+    /// Retryable failures: off by default, matching the phone's opt-in.
+    var transient = false { didSet { savePreferences() } }
     private(set) var authorization: UNAuthorizationStatus = .notDetermined
     var failure: String?
     private(set) var pendingOpen = PendingNotificationOpen()
@@ -32,6 +34,7 @@ final class MacNotifications: NSObject, UNUserNotificationCenterDelegate {
             waiting = values["waiting"] ?? true
             completed = values["completed"] ?? true
             aborted = values["aborted"] ?? true
+            transient = values["transient"] ?? false
         }
         if let data = try? Data(contentsOf: ledgerURL),
            let saved = try? JSONDecoder().decode(NotificationLedger.self, from: data) { ledger = saved }
@@ -131,7 +134,8 @@ final class MacNotifications: NSObject, UNUserNotificationCenterDelegate {
     func deliver(_ session: SessionSummary, kind rawKind: String, hostID: String) async {
         guard enabled, let kind = SessionNotificationKind(rawValue: rawKind),
               (kind != .waiting || waiting), (kind != .completed || completed),
-              (kind != .aborted || aborted), model?.hosts.contains(where: { $0.hostID == hostID }) == true,
+              (kind != .aborted || aborted), (kind != .transient || transient),
+              model?.hosts.contains(where: { $0.hostID == hostID }) == true,
               let id = kind.identity(hostID: hostID, session: session),
               !ledger.contains(id), inFlight.insert(id).inserted else { return }
         defer { inFlight.remove(id) }
@@ -183,7 +187,10 @@ final class MacNotifications: NSObject, UNUserNotificationCenterDelegate {
 
     private func savePreferences() {
         do {
-            let values = ["enabled": enabled, "waiting": waiting, "completed": completed, "aborted": aborted]
+            let values = [
+                "enabled": enabled, "waiting": waiting, "completed": completed,
+                "aborted": aborted, "transient": transient,
+            ]
             let data = try JSONEncoder().encode(values)
             let url = preferencesURL
             Task.detached(priority: .utility) {

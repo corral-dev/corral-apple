@@ -18,7 +18,7 @@ The proposed reading order is title → assistant/state → conversation content
 
 ## 2. Composition
 
-**Project in the header (owner report 2026-10-20):** the header must identify the project, not only the assistant. A freshly created session showed `Claude · 新会话` over `Claude`, so the page named no project. The iPhone secondary row reads `● Assistant · Project ⌄`, where Project is `SessionPresentation.projectName(from:)` (the same leaf name the session list shows) and is omitted when empty. The project text truncates before the assistant name; the disclosure stays visible. The VoiceOver heading includes the project. The Mac pane header shows the same project name as secondary text after the title; truncation shortens the project text before the title. The TUI pane title reads `Assistant · Project · Title` ([Terminal UI knowledge base](../https://github.com/corral-dev/corral/blob/main/docs/TERMINAL_UI_KNOWLEDGE_BASE.md)). Do not substitute a full path.
+**Project in the header (owner report 2026-10-20):** the header must identify the project, not only the assistant. A freshly created session showed `Claude · 新会话` over `Claude`, so the page named no project. The iPhone secondary row reads `● Assistant · Project ⌄`, where Project is `SessionPresentation.projectName(from:)` (the same leaf name the session list shows) and is omitted when empty. The project text truncates before the assistant name; the disclosure stays visible. The VoiceOver heading includes the project. The Mac pane header shows the same project name as secondary text after the title; truncation shortens the project text before the title. The TUI pane title reads `Assistant · Project · Title` ([Terminal UI knowledge base](../../../cli/docs/TERMINAL_UI_KNOWLEDGE_BASE.md)). Do not substitute a full path.
 
 **More action icon (2026-10-01):** the conversation's top-right More menu uses the plain horizontal `ellipsis` system symbol, without a ring around the dots. Retain the existing native toolbar button surface, minimum 44-point target, accessibility label and menu actions.
 
@@ -26,11 +26,11 @@ The proposed reading order is title → assistant/state → conversation content
 
 **Display mode (owner correction 2026-10-14):** Chat / Terminal belongs inside this existing More menu, with native selection marks, rather than a standalone segmented row under the navigation bar. The [iPhone agent terminal contract](IPHONE_AGENT_TERMINAL_DESIGN.md) owns capability, local display and remote-action access boundaries.
 
-Delivery evidence: Release 1.0.76 (86) built successfully, was installed on the paired iPhone with matching device version readback, and was uploaded to AppShelf. On-device visual acceptance remains unverified: launch was denied because the phone was locked, and the captured screenshot was black.
+Delivery evidence: Release 1.0.76 (86) built successfully, was installed on iPhone Max with matching device version readback, and was uploaded to AppShelf. On-device visual acceptance remains unverified: launch was denied because the phone was locked, and the captured screenshot was black.
 
-**Session fork naming:** the existing same-assistant action follows the shared [Fork Session terminology contract](../https://github.com/corral-dev/corral/blob/main/docs/CROSS_RUNTIME_HANDOFF_KNOWLEDGE_BASE.md#session-fork-naming-2026-10-01), including menu and accessibility wording. The wire method remains `session.copy`.
+**Session fork naming:** the existing same-assistant action follows the shared [Fork Session terminology contract](../../../cli/docs/CROSS_RUNTIME_HANDOFF_KNOWLEDGE_BASE.md#session-fork-naming-2026-10-01), including menu and accessibility wording. The wire method remains `session.copy`.
 
-Fork naming delivery: 1.0.77 (87) was installed on the paired iPhone with matching version readback and uploaded to AppShelf. The later launch command succeeded, but both captured phone images were black; the menu's physical visual acceptance remains unverified. The signed build and localization checks passed.
+Fork naming delivery: 1.0.77 (87) was installed on iPhone Max with matching version readback and uploaded to AppShelf. The later launch command succeeded, but both captured phone images were black; the menu's physical visual acceptance remains unverified. The signed build and localization checks passed.
 
 ```text
 System status bar — managed by iOS

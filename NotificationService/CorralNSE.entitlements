@@ -4,7 +4,7 @@
 <dict>
 	<key>keychain-access-groups</key>
 	<array>
-		<string>$(AppIdentifierPrefix)$(CORRAL_KEYCHAIN_GROUP)</string>
+		<string>$(AppIdentifierPrefix)com.x0c.corral</string>
 	</array>
 </dict>
 </plist>

@@ -43,6 +43,7 @@ struct HostSettingsView: View {
                 notificationSettingsRow
                 Toggle("settings.notifications.completed", isOn: $notificationPreferences.completed)
                 Toggle("settings.notifications.aborted", isOn: $notificationPreferences.aborted)
+                Toggle("settings.notifications.transient", isOn: $notificationPreferences.transient)
                 if let error = notificationPreferences.registrationError {
                     Text(verbatim: error).foregroundStyle(.red)
                     Button("action.retry") { Task { await syncNotificationPreferences() } }
@@ -107,6 +108,9 @@ struct HostSettingsView: View {
             Task { await syncNotificationPreferences() }
         }
         .onChange(of: notificationPreferences.aborted) { _, _ in
+            Task { await syncNotificationPreferences() }
+        }
+        .onChange(of: notificationPreferences.transient) { _, _ in
             Task { await syncNotificationPreferences() }
         }
         .onChange(of: scenePhase) { _, phase in

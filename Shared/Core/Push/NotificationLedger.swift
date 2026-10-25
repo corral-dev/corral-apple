@@ -3,7 +3,7 @@ import CryptoKit
 
 /// Stable local request identities; APNs and desktop delivery have separate ledgers.
 nonisolated enum SessionNotificationKind: String, Codable, Sendable {
-    case waiting, completed, aborted
+    case waiting, completed, aborted, transient
 
     @MainActor func identity(hostID: String, session: SessionSummary) -> String? {
         guard ActiveRuntimeVisibility.isListVisible(session) else { return nil }

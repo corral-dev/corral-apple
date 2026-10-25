@@ -9,6 +9,7 @@ import XCTest
         XCTAssertNotEqual(id, SessionNotificationKind.completed.identity(hostID: "a", session: second))
         XCTAssertNotEqual(id, SessionNotificationKind.completed.identity(hostID: "b", session: first))
         XCTAssertNotEqual(id, SessionNotificationKind.aborted.identity(hostID: "a", session: first))
+        XCTAssertNotEqual(id, SessionNotificationKind.transient.identity(hostID: "a", session: first))
         var ledger = NotificationLedger()
         XCTAssertFalse(ledger.contains(id))
         ledger.record(id)
@@ -49,9 +50,12 @@ import XCTest
         let preferences = CompletionNotificationPreferences(defaults: defaults)
         XCTAssertTrue(preferences.completed)
         XCTAssertTrue(preferences.aborted)
+        XCTAssertFalse(preferences.transient)
         preferences.completed = false
+        preferences.transient = true
         let restored = CompletionNotificationPreferences(defaults: defaults)
         XCTAssertFalse(restored.completed)
         XCTAssertTrue(restored.aborted)
+        XCTAssertTrue(restored.transient)
     }
 }

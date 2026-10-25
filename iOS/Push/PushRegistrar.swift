@@ -96,6 +96,7 @@ final class PushRegistrar: NSObject, UNUserNotificationCenterDelegate {
                 "env": environment.rawValue,
                 "notify_completed": preferences.completed,
                 "notify_aborted": preferences.aborted,
+                "notify_transient": preferences.transient,
             ])
             preferences.registrationError = nil
             #if DEBUG
@@ -104,6 +105,7 @@ final class PushRegistrar: NSObject, UNUserNotificationCenterDelegate {
                 let received = await UNUserNotificationCenter.current().deliveredNotifications()
                 var report: [String: Any] = ["registered": true, "environment": environment.rawValue,
                     "completed": preferences.completed, "aborted": preferences.aborted,
+                    "transient": preferences.transient,
                     "authorization": status.authorizationStatus.rawValue, "delivered": received.count]
                 let arguments = ProcessInfo.processInfo.arguments
                 if let index = arguments.firstIndex(of: "-CorralNotificationExpectedSessionKey"),

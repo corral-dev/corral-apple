@@ -673,25 +673,50 @@ final class MacWorkspace {
     // MARK: - Session actions (pane header, sidebar menu and menu bar share these)
 
     func togglePin(_ key: String) async {
-        await call(WireProtocol.mLayoutPin, ["key": key])
+        do {
+            try await setPinned(!layout.isPinned(key), key: key)
+        } catch {
+            actionError = error.localizedDescription
+        }
     }
 
-    /// Independent pins are separate from a split's shared pin. Recheck each
-    /// desired state so refreshes or repeated keys cannot invert a batch.
+    /// TUI pin semantics: a member pins or unpins its whole visible split;
+    /// a standalone session pins only itself. Already-desired targets are
+    /// skipped so repeated members in one batch cannot toggle the split back.
+    private func setPinned(_ pinned: Bool, key: String) async throws {
+        let method: String
+        let params: [String: Any]
+        if let group = layout.group(containing: key) {
+            guard group.pinned != pinned else { return }
+            method = WireProtocol.mLayoutPinGroup
+            params = ["group_id": group.id]
+        } else {
+            guard (layout.pinnedSessions[key] != nil) != pinned else { return }
+            method = WireProtocol.mLayoutPin
+            params = ["key": key]
+        }
+        var failure: String?
+        guard await call(method, params, onFailure: { failure = $0 }) != nil else {
+            throw MacSessionBatch.Failure(message: failure ?? String(localized: "error.not_connected"))
+        }
+    }
+
     func applySessionAction(_ action: MacSessionBatch.Action, key: String) async throws {
+        if action == .pin || action == .unpin {
+            try await setPinned(action == .pin, key: key)
+            return
+        }
         let method: String
         var params: [String: Any] = ["key": key]
         switch action {
-        case .pin, .unpin:
-            guard (layout.pinnedSessions[key] != nil) != (action == .pin) else { return }
-            method = WireProtocol.mLayoutPin
         case .stop:
             method = WireProtocol.mSessionStop
-            params["confirm"] = true
         case .delete:
             method = WireProtocol.mSessionDelete
-            params["confirm"] = true
+        case .pin, .unpin:
+            return
         }
+        params["confirm"] = true
         var failure: String?
         guard await call(method, params, onFailure: { failure = $0 }) != nil else {
             throw MacSessionBatch.Failure(message: failure ?? String(localized: "error.not_connected"))
@@ -702,10 +727,6 @@ final class MacWorkspace {
             feed?.listStore.removeSession(key: key)
             closePane(key)
         }
-    }
-
-    func toggleGroupPin(_ group: DesktopGroup) async {
-        await call(WireProtocol.mLayoutPinGroup, ["group_id": group.id])
     }
 
     func setCollapsed(_ group: DesktopGroup, collapsed: Bool) async {

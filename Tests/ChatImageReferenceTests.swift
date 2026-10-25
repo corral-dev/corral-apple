@@ -28,9 +28,9 @@ final class ChatImageReferenceTests: XCTestCase {
     }
 
     func testUrlsAndFileLinks() {
-        let text = "See https://example.com/a/b/chart.png?raw=1 (or file:///Users/example/c.heic)."
+        let text = "See https://example.com/a/b/chart.png?raw=1 (or file:///Users/me/c.heic)."
         let refs = ChatImageReference.references(in: text)
-        XCTAssertEqual(refs.map(\.ref), ["https://example.com/a/b/chart.png?raw=1", "file:///Users/example/c.heic"])
+        XCTAssertEqual(refs.map(\.ref), ["https://example.com/a/b/chart.png?raw=1", "file:///Users/me/c.heic"])
     }
 
     func testNonImageUrlsAndPathsAreIgnored() {

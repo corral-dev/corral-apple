@@ -1,6 +1,6 @@
 import Foundation
 
-/// Localized titles for session notifications (waiting / completed / aborted).
+/// Localized titles for session notifications (waiting / completed / aborted / transient).
 ///
 /// Static keys only. `String(localized: "notification.\(kind)")` with a runtime
 /// variable compiles to the single catalog key `notification.%@`, which has no
@@ -16,6 +16,8 @@ nonisolated enum SessionNotificationText {
             return String(localized: "notification.completed")
         case "aborted":
             return String(localized: "notification.aborted")
+        case "transient":
+            return String(localized: "notification.transient")
         default:
             return nil
         }

@@ -8,6 +8,7 @@ struct MacSidebar: View {
     @Environment(\.sidebarRowSize) private var rowSize
     @Environment(AppModel.self) private var appModel
     @Environment(MacWorkspace.self) private var workspace
+    @Environment(MacCommandCenter.self) private var commands
     let feed: HostSessionFeed
     var onNewSession: () -> Void
     var onPair: () -> Void
@@ -305,6 +306,10 @@ struct MacSidebar: View {
         .onDeleteCommand(perform: canCreate && !batch.isRunning && !selectedKeys.isEmpty ? {
             deleteTargets = selectedSessions
         } : nil)
+        // Session ▸ Open in Split (⌘D) acts on this selection.
+        .onChange(of: selectedKeys, initial: true) { _, keys in
+            commands.sidebarSelection = keys.count == 1 ? keys.first : nil
+        }
         .environment(\.defaultMinListRowHeight, MacSidebarMetrics.compactRowHeight * interfaceScale)
         .environment(\.defaultMinListHeaderHeight, MacSidebarMetrics.sectionHeight * interfaceScale)
         // Keep scrolling rows legible beneath the native search and machine bars.
@@ -491,35 +496,17 @@ struct MacSidebar: View {
                           systemImage: "doc.on.clipboard")
                 }
                 Divider()
-                let pinned = targets.filter { workspace.layout.pinnedSessions[$0.key] != nil }
-                let unpinned = targets.filter { workspace.layout.pinnedSessions[$0.key] == nil }
+                let pinned = targets.filter { workspace.layout.isPinned($0.key) }
+                let unpinned = targets.filter { !workspace.layout.isPinned($0.key) }
                 if !unpinned.isEmpty {
                     Button { perform(.pin, on: unpinned) } label: {
-                        if targets.count == 1 {
-                            Label("mac.session.pin", systemImage: "pin")
-                        } else {
-                            Label("mac.sessions.pin \(unpinned.count)", systemImage: "pin")
-                        }
+                        Label(pinTitle(pinning: true, targets: unpinned), systemImage: "pin")
                     }
                     .disabled(!canCreate || batch.isRunning)
                 }
                 if !pinned.isEmpty {
                     Button { perform(.unpin, on: pinned) } label: {
-                        if targets.count == 1 {
-                            Label("mac.session.unpin", systemImage: "pin.slash")
-                        } else {
-                            Label("mac.sessions.unpin \(pinned.count)", systemImage: "pin.slash")
-                        }
-                    }
-                    .disabled(!canCreate || batch.isRunning)
-                }
-                if targets.count == 1, let session = targets.first,
-                   let split = workspace.layout.group(containing: session.key) {
-                    Button {
-                        Task { await workspace.toggleGroupPin(split) }
-                    } label: {
-                        Label(split.pinned ? "mac.group.unpin" : "mac.group.pin",
-                              systemImage: split.pinned ? "pin.slash" : "pin")
+                        Label(pinTitle(pinning: false, targets: pinned), systemImage: "pin.slash")
                     }
                     .disabled(!canCreate || batch.isRunning)
                 }
@@ -548,6 +535,23 @@ struct MacSidebar: View {
             // Template symbols that invert with the highlighted row's text.
             .tint(nil)
         }
+    }
+
+    /// TUI semantics: a split is one pin unit. A member row therefore names
+    /// the split action; only independent sessions keep the session wording.
+    /// A selection made entirely from one split also names the split action.
+    private func pinTitle(pinning: Bool, targets: [SessionSummary]) -> LocalizedStringKey {
+        let groupIDs = Set(targets.compactMap { workspace.layout.group(containing: $0.key)?.id })
+        let hasIndependent = targets.contains { workspace.layout.group(containing: $0.key) == nil }
+        if groupIDs.count == 1, !hasIndependent {
+            return pinning ? "mac.group.pin" : "mac.group.unpin"
+        }
+        if targets.count == 1 {
+            return pinning ? "mac.session.pin" : "mac.session.unpin"
+        }
+        return pinning
+            ? LocalizedStringKey("mac.sessions.pin \(targets.count)")
+            : LocalizedStringKey("mac.sessions.unpin \(targets.count)")
     }
 
     private var deleteTitle: Text {
@@ -829,15 +833,27 @@ struct MacSidebar: View {
         filter = oldFilter
         try? await Task.sleep(for: .milliseconds(400))
         var menuRows = Array(rows.prefix(2))
-        if let unpinned = rows.first(where: { workspace.layout.pinnedSessions[$0.key] == nil }) {
+        if let unpinned = rows.first(where: { !workspace.layout.isPinned($0.key) }) {
             menuRows.append(unpinned)
         } else {
             menuRows.append(rows[2])
         }
+        switch ProcessInfo.processInfo.environment["CORRAL_INSPECTION_PIN_MENU"] {
+        case "split":
+            if let split = rows.first(where: { workspace.layout.group(containing: $0.key) != nil }) {
+                menuRows = [split]
+            }
+        case "session":
+            if let standalone = rows.first(where: { workspace.layout.group(containing: $0.key) == nil }) {
+                menuRows = [standalone]
+            }
+        default:
+            break
+        }
         selectedKeys = Set(menuRows.map(\.key))
         for _ in 0..<40 {
             let current = descendants(root).compactMap { $0 as? NSOutlineView }.first
-            if current?.selectedRowIndexes.count == 3 { break }
+            if current?.selectedRowIndexes.count == menuRows.count { break }
             try? await Task.sleep(for: .milliseconds(100))
         }
         try? await Task.sleep(for: .seconds(1))
@@ -851,13 +867,15 @@ struct MacSidebar: View {
             ?? buttons.first {
                 $0 is NSPopUpButton && $0.convert($0.bounds, to: nil).maxY < 100
             }
-        let point = currentOutline.convert(NSPoint(x: 80, y: currentOutline.rect(ofRow: menuRows[1].row).midY), to: nil)
+        let targetRow = menuRows.count > 1 ? menuRows[1] : menuRows[0]
+        let point = currentOutline.convert(NSPoint(x: 80, y: currentOutline.rect(ofRow: targetRow.row).midY), to: nil)
         let event = NSEvent.mouseEvent(with: .rightMouseDown, location: point, modifierFlags: [],
                                       timestamp: ProcessInfo.processInfo.systemUptime,
                                       windowNumber: window.windowNumber, context: nil,
                                       eventNumber: 0, clickCount: 1, pressure: 0)
         let contextMenu = event.flatMap { currentOutline.menu(for: $0) }
         let evidence: [String: Any] = ["checks": checks, "selectedCount": selectedKeys.count,
+                                      "selectedKeys": selectedKeys.sorted(),
                                       "nativeSelectedCount": currentOutline.selectedRowIndexes.count,
                                       "nativeTables": descendants(root).compactMap { $0 as? NSTableView }.map { $0.numberOfRows },
                                       "filter": filter, "visibleCount": visibleKeys.count,
@@ -876,7 +894,7 @@ struct MacSidebar: View {
             try? data.write(to: URL(fileURLWithPath: output + ".selection"), options: .atomic)
         }
         if let contextMenu {
-            contextMenu.popUp(positioning: nil, at: NSPoint(x: 120, y: currentOutline.rect(ofRow: menuRows[1].row).midY),
+            contextMenu.popUp(positioning: nil, at: NSPoint(x: 120, y: currentOutline.rect(ofRow: targetRow.row).midY),
                               in: currentOutline)
         } else if let button, let action = button.action {
             NSApp.sendAction(action, to: button.target, from: button)

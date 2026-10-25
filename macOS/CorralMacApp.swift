@@ -140,6 +140,13 @@ final class MacCommandCenter {
     var previousAttentionRequest = 0
     var toggleTerminalRequest = 0
     var newTerminalTabRequest = 0
+    var openInSplitRequest = 0
+    var restartRequest = 0
+    /// The sidebar's single selection; Session ▸ Open in Split acts on it.
+    var sidebarSelection: String?
+    var canOpenInSplit = false
+    var canRestartSession = false
+    var paneCount = 0
     /// The machine runs project shells and this pairing may use them.
     var canUseTerminal = false
     /// Whether the main window currently has a connected, writable machine.
@@ -177,6 +184,9 @@ struct MacCommands: Commands {
             Button("mac.pane.toggle_view") { center.toggleViewRequest += 1 }
                 .keyboardShortcut("e", modifiers: .command)
                 .disabled(!center.hasFocusedPane)
+            Button("mac.session.open_in_split") { center.openInSplitRequest += 1 }
+                .keyboardShortcut("d", modifiers: .command)
+                .disabled(!center.canOpenInSplit)
             Button { center.pinRequest += 1 } label: {
                 Label(center.focusedSessionPinned ? "mac.session.unpin" : "mac.session.pin",
                       systemImage: center.focusedSessionPinned ? "pin.slash" : "pin")
@@ -184,6 +194,9 @@ struct MacCommands: Commands {
                 .labelStyle(.titleAndIcon)
                 .keyboardShortcut("p", modifiers: [.command, .option])
                 .disabled(!center.hasFocusedPane || !center.canCreateSession)
+            Button("session.actions.restart") { center.restartRequest += 1 }
+                .keyboardShortcut("r", modifiers: .command)
+                .disabled(!center.canRestartSession)
             Divider()
             ForEach(0..<4, id: \.self) { index in
                 Button("mac.pane.focus \(index + 1)") {
@@ -191,6 +204,7 @@ struct MacCommands: Commands {
                     center.focusPaneRequest += 1
                 }
                 .keyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: .command)
+                .disabled(index >= center.paneCount)
             }
             Divider()
             Button("mac.menu.next_needs_you") { center.nextAttentionRequest += 1 }

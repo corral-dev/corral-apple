@@ -21,6 +21,14 @@ struct MacSessionMenuItems: View {
     /// actions are unavailable.
     private var readonly: Bool { SessionActionsMenu.isReadonly(access: appModel.connectedAccess) }
 
+    /// TUI pin semantics: a split member's pin belongs to the whole split.
+    private var isSplit: Bool { workspace.layout.group(containing: session.key) != nil }
+    private var pinned: Bool { workspace.layout.isPinned(session.key) }
+    private var pinTitle: LocalizedStringKey {
+        if isSplit { return pinned ? "mac.group.unpin" : "mac.group.pin" }
+        return pinned ? "mac.session.unpin" : "mac.session.pin"
+    }
+
     @ViewBuilder
     private var items: some View {
         Picker(selection: $mode) {
@@ -37,8 +45,7 @@ struct MacSessionMenuItems: View {
         Button {
             Task { await workspace.togglePin(session.key) }
         } label: {
-            Label(workspace.layout.pinnedSessions[session.key] == nil ? "mac.session.pin" : "mac.session.unpin",
-                  systemImage: workspace.layout.pinnedSessions[session.key] == nil ? "pin" : "pin.slash")
+            Label(pinTitle, systemImage: pinned ? "pin.slash" : "pin")
         }
         .disabled(readonly)
         Button {
