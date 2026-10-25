@@ -254,6 +254,7 @@ struct MacFilterChoices<Content: View>: View {
 /// Adapted from the iPhone's searchable project picker with Mac controls. It
 /// stays open for repeated toggles and closes on a click outside or Esc.
 struct MacProjectFilterPopover: View {
+    @Environment(\.interfaceScale) private var interfaceScale
     let options: [SessionProjectOption]
     let hasNoProject: Bool
     @Binding var selected: Set<SessionProjectFilter>
@@ -273,37 +274,25 @@ struct MacProjectFilterPopover: View {
                 .padding(Space.md)
             Divider()
             List {
-                Button {
+                pickerRow(title: Text("sessions.filter.all"), selected: selected.isEmpty) {
                     selected.removeAll()
-                } label: {
-                    HStack {
-                        Label("sessions.filter.all", systemImage: "line.3.horizontal.decrease")
-                        Spacer()
-                        if selected.isEmpty { Image(systemName: "checkmark").accessibilityHidden(true) }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
                 ForEach(visibleOptions, id: \.path) { option in
-                    Toggle(isOn: selection(.project(path: option.path))) {
-                        VStack(alignment: .leading, spacing: Space.xs) {
-                            if option.label == "~" { Text("sessions.project.home") }
-                            else { Text(verbatim: option.label) }
-                            Text(verbatim: option.path)
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
+                    pickerRow(
+                        title: option.label == "~" ? Text("sessions.project.home") : Text(verbatim: option.label),
+                        path: option.path,
+                        selected: selected.contains(.project(path: option.path))
+                    ) {
+                        toggle(.project(path: option.path))
                     }
-                    .toggleStyle(.checkbox)
                 }
                 if hasNoProject {
-                    Toggle(isOn: selection(.noProject)) {
-                        Label("sessions.filter.project.none", systemImage: "folder.badge.questionmark")
+                    pickerRow(
+                        title: Text("sessions.filter.project.none"),
+                        selected: selected.contains(.noProject)
+                    ) {
+                        toggle(.noProject)
                     }
-                    .toggleStyle(.checkbox)
                 }
             }
             .listStyle(.plain)
@@ -313,12 +302,32 @@ struct MacProjectFilterPopover: View {
         .focusEffectDisabled()
     }
 
-    private func selection(_ project: SessionProjectFilter) -> Binding<Bool> {
-        Binding(
-            get: { selected.contains(project) },
-            set: { enabled in
-                if enabled { selected.insert(project) } else { selected.remove(project) }
-            }
+    private var rowInsets: EdgeInsets {
+        EdgeInsets(
+            top: 1,
+            leading: Space.md * interfaceScale,
+            bottom: 1,
+            trailing: Space.md * interfaceScale
         )
+    }
+
+    private func pickerRow(
+        title: Text,
+        path: String = "",
+        selected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            MacProjectPickerRow(title: title, path: path, selected: selected)
+                .interfacePadding(.vertical, 3)
+        }
+        .buttonStyle(.plain)
+        .listRowInsets(rowInsets)
+        .listRowSeparator(.hidden)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private func toggle(_ project: SessionProjectFilter) {
+        if selected.contains(project) { selected.remove(project) } else { selected.insert(project) }
     }
 }

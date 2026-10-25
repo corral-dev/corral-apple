@@ -120,13 +120,58 @@ struct NewSessionProjectList: View {
 #if os(macOS)
 import AppKit
 
+/// One row of a Mac project picker popover. It has no leading control and no
+/// separator: the name sits over its muted path, and a trailing checkmark
+/// marks the choice without shifting the labels when it is empty.
+struct MacProjectPickerRow: View {
+    @Environment(\.interfaceScale) private var interfaceScale
+    let title: Text
+    var path = ""
+    let selected: Bool
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: Space.sm * interfaceScale) {
+            VStack(alignment: .leading, spacing: 2 * interfaceScale) {
+                title
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                if !path.isEmpty {
+                    Text(verbatim: (path as NSString).abbreviatingWithTildeInPath)
+                        .interfaceFont(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+            Spacer(minLength: Space.sm * interfaceScale)
+            Image(systemName: "checkmark")
+                .interfaceFont(.caption.weight(.semibold))
+                .opacity(selected ? 1 : 0)
+                .accessibilityHidden(true)
+        }
+        .interfaceFrame(minHeight: 28)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+    }
+}
+
 /// The whole project catalog behind the New Session dialog's More button:
 /// searchable, and one click (or Return on the first match) chooses and closes.
 struct MacNewSessionProjectPopover: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.interfaceScale) private var interfaceScale
     let projects: [ProjectEntry]
     @Binding var selection: String
     @State private var query = ""
+
+    private var rowInsets: EdgeInsets {
+        EdgeInsets(
+            top: 1,
+            leading: Space.md * interfaceScale,
+            bottom: 1,
+            trailing: Space.md * interfaceScale
+        )
+    }
 
     var body: some View {
         let visible = ProjectEntry.matching(projects, query: query)
@@ -140,17 +185,16 @@ struct MacNewSessionProjectPopover: View {
                 Button {
                     choose(project)
                 } label: {
-                    HStack {
-                        NewSessionProjectRow(project: project)
-                        Spacer()
-                        if project.path == selection {
-                            Image(systemName: "checkmark").accessibilityHidden(true)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
+                    MacProjectPickerRow(
+                        title: Text(verbatim: project.displayName),
+                        path: project.path,
+                        selected: project.path == selection
+                    )
+                    .interfacePadding(.vertical, 3)
                 }
                 .buttonStyle(.plain)
+                .listRowInsets(rowInsets)
+                .listRowSeparator(.hidden)
                 .accessibilityAddTraits(project.path == selection ? .isSelected : [])
             }
             .listStyle(.plain)

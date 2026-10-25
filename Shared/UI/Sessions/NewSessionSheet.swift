@@ -151,7 +151,7 @@ struct NewSessionSheet: View {
                 }
                 .interfacePadding(.bottom, Space.md)
                 macFieldLabel("session.new.project")
-                HStack(spacing: Space.xs * interfaceScale) {
+                HStack(spacing: 6 * interfaceScale) {
                     MacFilterChoices {
                         ForEach(quickProjects) { project in
                             MacQuickFilterButton(selected: project.path == options.selectedProject) {
@@ -162,16 +162,16 @@ struct NewSessionSheet: View {
                             .help(Text(verbatim: project.path))
                         }
                     }
-                    Button {
+                    // The catalog entry wears the quick filter's fixed More
+                    // capsule. It is an action, so it never shows selection.
+                    MacQuickFilterButton(selected: false) {
+                        Text("sessions.filter.more")
+                        Image(systemName: "chevron.down")
+                            .imageScale(.small)
+                            .accessibilityHidden(true)
+                    } action: {
                         showProjects = true
-                    } label: {
-                        Image(systemName: "ellipsis")
-                            .interfaceFont(.body.weight(.medium))
-                            .foregroundStyle(.secondary)
-                            .interfaceFrame(width: 28, height: MacSidebarMetrics.filterHeight)
-                            .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
                     .accessibilityLabel(Text("sessions.filter.more"))
                     .help(Text("sessions.filter.more"))
                     .popover(isPresented: $showProjects) {
