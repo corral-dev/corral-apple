@@ -573,6 +573,9 @@ struct MacRootView: View {
         if ProcessInfo.processInfo.arguments.contains("-CorralInspectLifecycle") {
             Task { await MacLifecycleInspection.run(appModel: appModel, workspace: workspace, feed: current) }
         }
+        if ProcessInfo.processInfo.arguments.contains("-CorralInspectTerminalLatest") {
+            Task { await MacLatestInspection.prepare(feed: current, workspace: workspace) }
+        }
         if ProcessInfo.processInfo.arguments.contains("-CorralInspectTerminalSwitch") {
             Task { await MacTerminalSwitchInspection.run(workspace: workspace, appModel: appModel, feed: current) }
         }

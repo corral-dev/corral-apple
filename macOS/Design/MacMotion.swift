@@ -11,7 +11,8 @@ enum MacMotion {
     static let paneEntrance: Animation = Animation.easeOut(duration: 0.2).inspected
 
     /// Split panes travelling to their new slots (offset only, never width).
-    static let paneGlide: Animation = Animation.smooth(duration: 0.34).inspected
+    static let paneGlideSeconds = 0.34
+    static let paneGlide: Animation = Animation.smooth(duration: paneGlideSeconds).inspected
 
     /// A closed pane fading out in its slot before the others take the space.
     static let paneExitSeconds = 0.14

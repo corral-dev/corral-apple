@@ -32,7 +32,12 @@ with tempfile.TemporaryDirectory(prefix='corral-mac-lifecycle-') as directory:
     helper = Path(directory) / 'DirectoryIdentity.swift'
     helper.write_text('import Foundation\nenum SessionListFiltering {\n'
                       + filtering[filtering.index('    private static func normalizeDirectory'):])
+    pane_source = (ROOT / 'macOS/Panes/MacPaneReordering.swift').read_text()
+    pane_helper = Path(directory) / 'MacPaneDragGeometry.swift'
+    pane_helper.write_text('import Foundation\n'
+                           + pane_source[pane_source.index('nonisolated struct MacPaneDragGeometry'):
+                                         pane_source.index("/// The header's leading strip")])
     subprocess.run(['swiftc', '-swift-version', '6', '-default-isolation', 'MainActor',
-                    '-parse-as-library', str(helper), *[str(ROOT / path) for path in SOURCES],
+                    '-parse-as-library', str(helper), str(pane_helper), *[str(ROOT / path) for path in SOURCES],
                     '-o', executable], check=True)
     subprocess.run([executable], check=True)

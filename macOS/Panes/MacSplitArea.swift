@@ -73,8 +73,9 @@ private struct MacRetainedPanes: View {
                     }
                     .modifier(PaneEntrance(key: key, entering: workspace.pendingEntrances.contains(key)))
                 }
-                .modifier(PaneSlot(shift: workspace.paneShifts[key] ?? 0,
-                                   leaving: workspace.leavingPanes[key] != nil))
+                .modifier(PaneSlot(shift: (workspace.paneShifts[key] ?? 0) + dragOffset(key),
+                                   leaving: workspace.leavingPanes[key] != nil,
+                                   lifted: workspace.liftedPane == key))
                 .layoutValue(key: MacRetainedPaneKey.self, value: key)
             }
         }
@@ -87,6 +88,12 @@ private struct MacRetainedPanes: View {
             }
             recent = retained
         }
+    }
+}
+
+private extension MacRetainedPanes {
+    func dragOffset(_ key: String) -> CGFloat {
+        workspace.paneReorder?.key == key ? workspace.paneReorder?.offset ?? 0 : 0
     }
 }
 
@@ -228,9 +235,19 @@ private struct PaneSlot: ViewModifier {
     @Environment(\.interfaceScale) private var interfaceScale
     let shift: CGFloat
     let leaving: Bool
+    /// A pane being dragged by its header rides above its neighbours. The
+    /// shadow comes from a plain backing shape, never from the AppKit content.
+    var lifted = false
 
     func body(content: Content) -> some View {
         content
+            .background {
+                Rectangle()
+                    .fill(Color(nsColor: .windowBackgroundColor))
+                    .shadow(color: .black.opacity(lifted ? 0.28 : 0), radius: 18, x: 0, y: 4)
+                    .opacity(lifted ? 1 : 0)
+                    .allowsHitTesting(false)
+            }
             // A visual effect, not `.offset`: the pane's geometry stays in its
             // slot while it travels, so a conversation's lazy stack does not
             // re-place its rows on every frame of the glide (measured
@@ -241,5 +258,6 @@ private struct PaneSlot: ViewModifier {
             .animation(MacMotion.paneExit, value: leaving)
             .allowsHitTesting(!leaving)
             .accessibilityHidden(leaving)
+            .zIndex(lifted ? 1 : 0)
     }
 }

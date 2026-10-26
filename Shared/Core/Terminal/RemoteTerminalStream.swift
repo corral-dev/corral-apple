@@ -166,6 +166,28 @@ final class RemoteTerminalStream {
         }
     }
 
+    /// Retire a pending prompt reveal synchronously when the person chooses latest.
+    func cancelPromptNavigation() { promptNavigation = UUID() }
+
+    /// The host owns fullscreen history. A local emulator scroll alone cannot
+    /// return it to live output. Late replies never take over after newer input.
+    func returnToLatest() async -> Bool {
+        let request = UUID()
+        promptNavigation = request
+        let mine = generation
+        let inputRevision = input.revision
+        guard phase == .live, let client, client.hostCapabilities.terminalLatest else { return false }
+        do {
+            _ = try await client.call(WireProtocol.mTerminalLatest,
+                                      params: ["key": sessionKey, "navigation": request.uuidString])
+            return !Task.isCancelled && generation == mine && promptNavigation == request
+                && input.revision == inputRevision && phase == .live
+        } catch {
+            debugTrace("terminal latest: \(error)")
+            return false
+        }
+    }
+
     /// Resolve full host text by identity; card previews are never search input.
     /// The outcome feeds only the clicked row's status (owner decision 2026-10-19).
     /// `text` enables one retry when the host rebuilt the history after the

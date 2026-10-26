@@ -20,7 +20,6 @@ final class MacWorkspace {
     static let maxPanes = 4
 
     private(set) var hostID: String?
-    @ObservationIgnored private let paneDragWorkspaceID = UUID()
     @ObservationIgnored private var layoutGeneration = UUID()
 
     private(set) var paneKeys: [String] = []
@@ -46,6 +45,18 @@ final class MacWorkspace {
     private(set) var paneShifts: [String: CGFloat] = [:]
     /// Closed panes still drawn while they fade out, by key → slot.
     private(set) var leavingPanes: [String: Int] = [:]
+    /// Live header drag (design: Pane header reordering): the pane follows the
+    /// pointer while the others glide aside; the group is written on release.
+    struct PaneReorder: Equatable {
+        let key: String
+        let original: [String]
+        let origin: Int
+        /// The dragged pane's drawn offset from its current slot.
+        var offset: CGFloat = 0
+    }
+    private(set) var paneReorder: PaneReorder?
+    /// The dragged pane draws above its neighbours until it has settled.
+    private(set) var liftedPane: String?
     /// Width of the split area (set by it), for the slot positions.
     @ObservationIgnored var splitWidth: CGFloat = 0
     /// Height of the split area (set by it), for a new terminal's starting grid.
@@ -67,6 +78,7 @@ final class MacWorkspace {
     private(set) var scrollRequests: [String: ChatScrollRequest] = [:]
     /// Prompts card's last row → return that pane to the latest position.
     private(set) var latestScrollRequests: [String: Int] = [:]
+    private(set) var terminalLatestRequests: [String: Int] = [:]
     /// Project shells of this machine (terminal panes look their titles up here).
     let shells = ProjectShellStore()
     let paneSurfaces = MacPaneSurfaceCache()
@@ -141,6 +153,7 @@ final class MacWorkspace {
         keyFocusTarget = nil
         scrollRequests = [:]
         latestScrollRequests = [:]
+        terminalLatestRequests = [:]
         paneFrames = [:]
         actionError = nil
         feed = nil
@@ -448,22 +461,99 @@ final class MacWorkspace {
         scheduleLayout(WireProtocol.mLayoutSetFocus, ["key": key, "project": project])
     }
 
-    func paneDrag(for key: String) -> MacPaneDrag? {
-        guard paneKeys.count > 1, paneKeys.contains(key), leavingPanes.isEmpty else { return nil }
-        return MacPaneDrag(workspaceID: paneDragWorkspaceID, hostID: hostID, key: key, paneKeys: paneKeys)
+    var canReorderPanes: Bool { paneKeys.count > 1 && leavingPanes.isEmpty }
+
+    /// Called once per press. Updates cannot restart an interrupted gesture.
+    func beginPaneDrag(_ key: String) {
+        guard paneReorder == nil, canReorderPanes, splitWidth > 0,
+              let origin = paneKeys.firstIndex(of: key) else { return }
+        paneReorder = PaneReorder(key: key, original: paneKeys, origin: origin)
+        withAnimation(MacMotion.state) { liftedPane = key }
     }
 
-    /// Reposition existing identities only: preserve focus, surfaces and subscriptions.
-    @discardableResult
-    func reorderPane(_ drag: MacPaneDrag, to target: String) -> Bool {
-        guard leavingPanes.isEmpty,
-              let reordered = drag.reorderedKeys(workspaceID: paneDragWorkspaceID, hostID: hostID,
-                                                  current: paneKeys, target: target) else { return false }
+    /// One live drag step: `travel` is the pointer's horizontal distance
+    /// from the press, in window points. Reposition existing identities only:
+    /// focus, surfaces and subscriptions stay as they are.
+    func dragPane(_ key: String, travel: CGFloat) {
+        guard var drag = paneReorder, drag.key == key else { return }
+        // Something else changed the split mid-drag: let it win.
+        guard paneKeys.count == drag.original.count, Set(paneKeys) == Set(drag.original),
+              let current = paneKeys.firstIndex(of: key) else {
+            abandonPaneReorder()
+            return
+        }
+        let geometry = MacPaneDragGeometry(width: splitWidth, count: paneKeys.count)
+        let target = geometry.slot(origin: drag.origin, travel: travel)
+        if target != current {
+            let before = paneKeys
+            paneKeys.remove(at: current)
+            paneKeys.insert(key, at: target)
+            glide(from: before, excluding: key)
+        }
+        drag.offset = geometry.slotX(drag.origin) + geometry.clampedTravel(travel, from: drag.origin)
+            - geometry.slotX(target)
+        paneReorder = drag
+    }
+
+    /// Release (or a cancelled gesture, which restores the order it started
+    /// from): the pane glides into its slot and a changed order is written once.
+    func endPaneDrag(_ key: String, cancelled: Bool = false) {
+        guard let drag = paneReorder, drag.key == key else { return }
+        paneReorder = nil
+        // Validate again on release: a roster change may happen after the
+        // last mouse move, with no further update to invalidate the drag.
+        guard paneKeys.count == drag.original.count, Set(paneKeys) == Set(drag.original) else {
+            abandonPaneReorder()
+            return
+        }
+        var offset = drag.offset
+        if cancelled, paneKeys != drag.original, Set(paneKeys) == Set(drag.original),
+           let current = paneKeys.firstIndex(of: key) {
+            let geometry = MacPaneDragGeometry(width: splitWidth, count: paneKeys.count)
+            let before = paneKeys
+            paneKeys = drag.original
+            offset += geometry.slotX(current) - geometry.slotX(drag.origin)
+            glide(from: before, excluding: key)
+        }
+        settle(key, from: offset)
+        if !cancelled, paneKeys != drag.original { syncGroup() }
+    }
+
+    /// VoiceOver Move Left / Move Right: one slot, written immediately.
+    func movePane(_ key: String, by step: Int) {
+        guard canReorderPanes, paneReorder == nil, let index = paneKeys.firstIndex(of: key),
+              paneKeys.indices.contains(index + step) else { return }
         let before = paneKeys
-        paneKeys = reordered
+        paneKeys.swapAt(index, index + step)
         glide(from: before)
         syncGroup()
-        return true
+    }
+
+    private func abandonPaneReorder() {
+        paneReorder = nil
+        liftedPane = nil
+    }
+
+    /// The released pane is drawn where the pointer left it and glides home;
+    /// it stays lifted until it has landed.
+    private func settle(_ key: String, from offset: CGFloat) {
+        guard abs(offset) >= 1, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+            // A neighbour may still be waiting for its first glide frame.
+            // Keep its reset alive when this pane already sits in its slot.
+            withAnimation(MacMotion.state) { liftedPane = nil }
+            return
+        }
+        glideSerial += 1
+        let serial = glideSerial
+        paneShifts[key] = offset
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(16))
+            guard let self, self.glideSerial == serial else { return }
+            withAnimation(MacMotion.paneGlide) { self.paneShifts = [:] }
+            try? await Task.sleep(for: .seconds(MacMotion.seconds(MacMotion.paneGlideSeconds)))
+            guard self.glideSerial == serial, self.paneReorder == nil, self.liftedPane == key else { return }
+            withAnimation(MacMotion.state) { self.liftedPane = nil }
+        }
     }
 
     func focusPane(at index: Int) {
@@ -492,6 +582,7 @@ final class MacWorkspace {
         glideSerial += 1
         if !paneShifts.isEmpty { paneShifts = [:] }
         if !leavingPanes.isEmpty { leavingPanes = [:] }
+        if paneReorder != nil || liftedPane != nil { abandonPaneReorder() }
     }
 
     /// The closed pane stays in its slot while it fades out, then leaves the
@@ -516,12 +607,12 @@ final class MacWorkspace {
     /// layout change, then animate the offsets home once that frame is on
     /// screen; building a pane can block long enough to swallow an animation
     /// started with the change.
-    private func glide(from before: [String], entering: String? = nil) {
+    private func glide(from before: [String], entering: String? = nil, excluding dragged: String? = nil) {
         glideSerial += 1
         let after = drawnPaneKeys
         var shifts: [String: CGFloat] = [:]
         if splitWidth > 0, !before.isEmpty, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-            for (index, key) in after.enumerated() {
+            for (index, key) in after.enumerated() where key != dragged {
                 if let old = before.firstIndex(of: key) {
                     let delta = slotX(old, of: before.count) - slotX(index, of: after.count)
                     if abs(delta) >= 1 { shifts[key] = delta }
@@ -613,7 +704,12 @@ final class MacWorkspace {
     /// this pane to its latest position (chat bottom, or live terminal output).
     func scrollToLatest(in key: String) {
         focus(key)
-        latestScrollRequests[key] = (latestScrollRequests[key] ?? 0) + 1
+        scrollRequests[key] = nil
+        if mode(for: key) == .terminal {
+            terminalLatestRequests[key] = (terminalLatestRequests[key] ?? 0) + 1
+        } else {
+            latestScrollRequests[key] = (latestScrollRequests[key] ?? 0) + 1
+        }
     }
 
     /// The sidebar reflects the focused pane.

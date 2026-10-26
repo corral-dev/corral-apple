@@ -12,6 +12,7 @@ final class RemoteClient {
         var desktopLayout = true
         var terminalPrompt = true
         var terminalPromptDirect = false
+        var terminalLatest = false
     }
     var hostCapabilities = Capabilities()
     var readyHandlers: [UUID: @MainActor () -> Void] = [:]
@@ -57,6 +58,7 @@ enum WireProtocol {
     static let mTerminalAttach = "terminal.attach", mTerminalDetach = "terminal.detach"
     static let mTerminalResize = "terminal.resize", mTerminalInput = "terminal.input"
     static let mTerminalResync = "terminal.resync", mInputText = "input.text"
+    static let mTerminalLatest = "terminal.latest"
     static let mTerminalTheme = "terminal.theme"
     static func terminalChannel(sessionKey: String) -> String { "term:" + sessionKey }
 }
@@ -89,6 +91,16 @@ struct RuntimeEntry: Decodable { var id: String; var isActive: Bool { true } }
 @MainActor final class MacPaneSurfaceCache {
     func reset() {}
     func evict(_ key: String) {}
+    func evictDormant(visible: Set<String>) {}
+}
+// Transport-only fixture: memory pressure and emulator rendering are tested elsewhere.
+@MainActor enum ClientMemoryPressure {
+    static func install() {}
+    static func addHandler(_ handler: @escaping @MainActor () -> Void) -> UUID { UUID() }
+}
+@MainActor final class MacTerminalSessions {
+    func reset() {}
+    func close(_ key: String) {}
 }
 
 // This transport-only harness has no mounted views. Native reading restoration
@@ -588,8 +600,43 @@ struct LifecycleProbe {
         stream.input.send(Array("ordinary typing after native failure".utf8)[...])
         await settle()
         check(client.calls.last?.0 == WireProtocol.mTerminalInput, "native failure blocked ordinary typing")
+        // Latest invalidates old prompt replies and never reclaims after typing.
+        let oldPrompt = Gate()
+        client.hostCapabilities.terminalLatest = true
+        client.handler = { method, _ in
+            if method == "terminal.prompt" { return try await oldPrompt.wait() }
+            return ["ok": true]
+        }
+        let pendingPrompt = Task { await stream.navigatePrompt(seq: 40, historyGeneration: 9) }
+        await settle()
+        let beforeLatest = sink.reveals
+        let returnedLatest = await stream.returnToLatest()
+        check(returnedLatest, "native latest request did not complete")
+        oldPrompt.succeed(["query": "obsolete prompt"])
+        _ = await pendingPrompt.value
+        check(sink.reveals == beforeLatest, "latest allowed a late prompt reveal")
+        check(client.calls.contains { $0.0 == WireProtocol.mTerminalLatest && $0.1["navigation"] is String },
+              "latest did not use a session-scoped navigation identity")
+        let delayedLatest = Gate()
+        client.handler = { method, _ in
+            if method == WireProtocol.mTerminalLatest { return try await delayedLatest.wait() }
+            return [:]
+        }
+        let pendingLatest = Task { await stream.returnToLatest() }
+        await settle()
+        stream.input.send(Array("typing while latest returns".utf8)[...])
+        delayedLatest.succeed(["ok": true])
+        let typedLatest = await pendingLatest.value
+        check(!typedLatest, "late latest completion took over after typing")
+        let retiredLatest = Gate()
+        client.handler = { _, _ in try await retiredLatest.wait() }
+        let retiring = Task { await stream.returnToLatest() }
+        await settle()
         stream.stop()
-        print("PASS prompt lifecycle: host identity, local read-only path, silent miss, retired response")
+        retiredLatest.succeed(["ok": true])
+        let retiredResult = await retiring.value
+        check(!retiredResult, "retired stream accepted a latest response")
+        print("PASS prompt/latest lifecycle: native latest, stale prompt, typing and retired responses")
     }
 
     @MainActor static func selectionCopyRegressions() {

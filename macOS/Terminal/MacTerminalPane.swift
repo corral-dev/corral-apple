@@ -89,7 +89,13 @@ struct MacTerminalPane: View {
             // Chat is untouched; only a presented terminal has live output to
             // return to (owner requirement 2026-10-25).
             guard isPresented, let terminal, showsEmulator(terminal.stream) else { return }
+            handledPromptRequest = promptRequest?.id
+            terminal.stream.cancelPromptNavigation()
             terminal.view.scrollToLiveOutput()
+            Task { @MainActor in
+                guard await terminal.stream.returnToLatest() else { return }
+                terminal.view.scrollToLiveOutput()
+            }
         }
     }
 

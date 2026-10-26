@@ -200,6 +200,7 @@ nonisolated struct HostCapabilities: Codable, Sendable, Equatable {
     var terminalStream: Bool = false
     var terminalPrompt: Bool = false
     var terminalPromptDirect: Bool = false
+    var terminalLatest: Bool = false
     /// Host lists every human prompt of a session (`session.userPrompts`).
     var userPrompts: Bool = false
     /// Host runs project shells for the project terminal (`shell.*`).
@@ -218,6 +219,7 @@ nonisolated struct HostCapabilities: Codable, Sendable, Equatable {
         case terminalStream = "terminal_stream"
         case terminalPrompt = "terminal_prompt"
         case terminalPromptDirect = "terminal_prompt_direct"
+        case terminalLatest = "terminal_latest"
         case userPrompts = "user_prompts"
         case projectShell = "project_shell"
     }
@@ -237,6 +239,7 @@ nonisolated struct HostCapabilities: Codable, Sendable, Equatable {
         desktopLayout = (try? container.decode(Bool.self, forKey: .desktopLayout)) ?? features.contains("desktop_layout")
         terminalPrompt = (try? container.decode(Bool.self, forKey: .terminalPrompt)) ?? features.contains("terminal_prompt")
         terminalPromptDirect = (try? container.decode(Bool.self, forKey: .terminalPromptDirect)) ?? features.contains("terminal_prompt_direct")
+        terminalLatest = (try? container.decode(Bool.self, forKey: .terminalLatest)) ?? features.contains("terminal_latest")
         terminalStream = (try? container.decode(Bool.self, forKey: .terminalStream)) ?? features.contains("terminal_stream")
         userPrompts = (try? container.decode(Bool.self, forKey: .userPrompts)) ?? features.contains("user_prompts")
         projectShell = (try? container.decode(Bool.self, forKey: .projectShell)) ?? features.contains("project_shell")
@@ -274,6 +277,7 @@ nonisolated struct HostCapabilities: Codable, Sendable, Equatable {
         try container.encode(terminalStream, forKey: .terminalStream)
         try container.encode(terminalPrompt, forKey: .terminalPrompt)
         try container.encode(terminalPromptDirect, forKey: .terminalPromptDirect)
+        try container.encode(terminalLatest, forKey: .terminalLatest)
         try container.encode(userPrompts, forKey: .userPrompts)
         try container.encode(projectShell, forKey: .projectShell)
     }

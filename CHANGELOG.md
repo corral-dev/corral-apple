@@ -8,13 +8,21 @@ the named acceptance is done.
 
 ## Unreleased
 
+## 0.3.154 — 2026-10-26
+
 ### macOS
 
-- Fix split-pane reordering: dragging a pane header now starts a drag and moves the pane to the drop position; the unrequested grip icon is removed and the header strip itself is the handle.
+- Keep agent and shell headers compact while their full leading strips remain draggable; the drag region no longer expands the header into the conversation.
+- Fix split-pane drag interruption and landing: immediate release no longer leaves neighbours overlapped, roster changes cannot write or restart an interrupted drag, and an older landing cannot finish a newer drag. Regression checks now execute the production motion/reset path.
+- The Your prompts card's last row now returns the terminal pane's agent-owned viewport to live output through the host's guarded `terminal.latest` action, instead of scrolling only SwiftTerm's local buffer. Drafts, running work and the Chat/Terminal mode are preserved; older hosts keep the local-buffer fallback, and Chat mode is unchanged.
+- Reorder split panes by dragging the header itself: the pane lifts with a shadow and follows the pointer, neighbours slide aside once it covers half of them, and releasing inserts it at that slot (`[1, 2, 3, 4]` → drag 4 over 2 → `[1, 4, 2, 3]`). The title, project label, status area and blank header space are all handles; the trailing menu and Close stay buttons, a click without travel keeps the title's prompts toggle and focus, single panes do not move, a cancelled drag restores its starting order, and a roster change abandons the drag without writing a group. The order syncs once on release and the focused session, drafts and native terminals stay intact.
 
 ### 简体中文
 
-- 修复分屏拖动排序：现在拖动分屏顶部能真正开始拖动并把该格移动到松手位置；同时移除未经要求的拖动柄图标，顶部标题栏本身就是拖动区域。
+- 会话和项目终端的顶栏保持紧凑，左侧整条区域仍可拖动；拖动区域不会再把顶栏撑高并挤占对话。
+- 修复分屏拖动的中断和落位：快速松手不再让相邻面板残留重叠，面板数量变化后不会错误同步或重新启动旧拖动，旧动画也不会提前结束新拖动。回归检查现已执行生产代码中的位移和收尾流程。
+- 提问卡片的最后一行现在通过宿主侧受控的 `terminal.latest` 动作，把终端分屏里助手自己的滚动位置带回最新输出，而不只是滚 SwiftTerm 的本地缓冲。草稿、进行中的工作和聊天/终端模式都保留；旧宿主继续使用本地缓冲回退，聊天模式不变。
+- 分屏改为直接拖动顶栏排序：被拖的格子浮起并带阴影跟随鼠标，盖住相邻格一半时相邻格实时让位，松手后插入该位置（`[1, 2, 3, 4]` 把 4 拖过 2 得到 `[1, 4, 2, 3]`）。标题、项目名、状态区和顶栏空白处都可拖；右侧菜单和关闭仍是按钮，只点不拖时标题的提问卡开关和聚焦照常，只有一个分屏时不能拖，拖动被取消时恢复原顺序，格子数量变化时放弃本次拖动，两者都不写分组。顺序只在松手后同步一次，焦点会话、草稿和原生终端都保持不变。
 
 ## 0.3.152
 

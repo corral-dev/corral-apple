@@ -86,6 +86,7 @@ nonisolated enum WireProtocol {
     static let mTerminalAttach = "terminal.attach"
     static let mTerminalResize = "terminal.resize"
     static let mTerminalResync = "terminal.resync"
+    static let mTerminalLatest = "terminal.latest"
     static let mTerminalInput = "terminal.input"
     static let mTerminalDetach = "terminal.detach"
     /// `{key, background, foreground}` (`#rrggbb`): colours the host answers to the agent's queries.

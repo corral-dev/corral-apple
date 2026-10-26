@@ -194,6 +194,7 @@ struct MacPaneView: View {
         .task { await MacSelectionDragInspection.run(key: session.key, workspace: workspace) }
         .task(id: store.map(ObjectIdentifier.init)) {
             MacTerminalPromptInspection.start(session: session, store: store, workspace: workspace)
+            MacLatestInspection.start(session: session, store: store, workspace: workspace, appModel: appModel)
         }
         #endif
         .background {
@@ -236,7 +237,7 @@ struct MacPaneView: View {
                     isFocused: isFocused && mode == .terminal,
                     isPresented: mode == .terminal && (lifetime?.isPresented ?? true),
                     promptRequest: terminalPromptRequest,
-                    latestRequest: workspace.latestScrollRequests[session.key] ?? 0,
+                    latestRequest: workspace.terminalLatestRequests[session.key] ?? 0,
                     onPromptOutcome: { request, outcome in
                         promptStatus = promptStatus?.finishing(request, with: outcome)
                     }
@@ -364,7 +365,7 @@ struct MacPaneHeader: View {
     var body: some View {
         HStack(spacing: 0) {
             HStack(spacing: 0) {
-                // Keep the existing title reading edge; the blank strip is the drag area.
+                // Keep the existing title reading edge; this whole strip is the drag handle.
                 titleButton
                     .layoutPriority(1)
                 projectLabel
@@ -377,7 +378,8 @@ struct MacPaneHeader: View {
                 }
                 Spacer(minLength: Space.sm)
             }
-            .modifier(MacPaneDragSource(key: session.key))
+            .frame(maxHeight: .infinity)
+            .modifier(MacPaneReorderHandle(key: session.key))
             // Hover-only (owner correction 2026-10-18); the slots keep their
             // width so the title never reflows when they appear.
             HStack(spacing: 0) {
@@ -391,8 +393,8 @@ struct MacPaneHeader: View {
             .allowsHitTesting(hovering)
         }
         .interfacePadding(.horizontal, Space.md)
-        .interfaceFrame(minHeight: 40)
-        .modifier(MacPaneDropTarget(key: session.key))
+        .interfaceFrame(height: 40)
+        .modifier(MacPaneMoveActions(key: session.key))
         .background(headerSurface)
         .animation(MacMotion.state, value: isFocused)
         .animation(MacMotion.state, value: hovering)

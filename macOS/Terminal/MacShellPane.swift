@@ -83,7 +83,8 @@ struct MacShellPane: View {
                 .interfaceFrame(minWidth: 30, maxWidth: .infinity, alignment: .leading)
                 .help(Text(verbatim: shell?.cwd ?? ""))
             }
-            .modifier(MacPaneDragSource(key: shellKey))
+            .frame(maxHeight: .infinity)
+            .modifier(MacPaneReorderHandle(key: shellKey))
             Button {
                 workspace.requestClose(shellKey)
             } label: {
@@ -98,6 +99,7 @@ struct MacShellPane: View {
         .interfaceControlSize(.small)
         .interfacePadding(.horizontal, Space.md)
         .interfacePadding(.vertical, 6)
+        .interfaceFrame(height: 40)
         .overlay(alignment: .bottom) {
             if isFocused && visiblePaneKeys.count > 1 {
                 Rectangle()
@@ -107,7 +109,7 @@ struct MacShellPane: View {
                     .accessibilityHidden(true)
             }
         }
-        .modifier(MacPaneDropTarget(key: shellKey))
+        .modifier(MacPaneMoveActions(key: shellKey))
         .animation(MacMotion.state, value: isFocused)
         .contentShape(Rectangle())
         .onTapGesture {

@@ -22,7 +22,7 @@ packages:
   # both clients (owner request 2026-10-07); pinned release.
   SwiftTerm:
     url: https://github.com/migueldeicaza/SwiftTerm
-    exactVersion: 1.20.0
+    exactVersion: 1.99.1
 
 settings:
   base:
@@ -114,6 +114,7 @@ targets:
       - path: Shared/Core/Push/NotificationPreview.swift
       - path: Shared/Core/Push/SessionNotificationText.swift
       - path: Shared/Core/Push/NotificationSound.swift
+      # Also in the app bundle; kept here so either lookup resolves the preset.
       - path: Shared/Resources/Sounds
       - path: Shared/Resources/Localizable.xcstrings
     settings:
@@ -167,8 +168,8 @@ targets:
       base:
         PRODUCT_NAME: Corral
         PRODUCT_BUNDLE_IDENTIFIER: com.example.corral
-        MARKETING_VERSION: "0.3.153"
-        CURRENT_PROJECT_VERSION: "157"
+        MARKETING_VERSION: "0.3.154"
+        CURRENT_PROJECT_VERSION: "158"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         ENABLE_HARDENED_RUNTIME: YES
@@ -180,7 +181,11 @@ targets:
       path: macOS/Info.plist
       properties:
         LSApplicationCategoryType: public.app-category.developer-tools
+        # Direct-download only: a future store target must strip SUFeedURL,
+        # the SUPublicEDKey/SU* keys and the Sparkle dependency entirely
+        # (store builds exclude the updater; see AGENTS.md Mac delivery).
         CFBundleDisplayName: Corral
+        CorralKeychainAccessGroup: $(AppIdentifierPrefix)$(CORRAL_KEYCHAIN_GROUP)
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
@@ -208,6 +213,20 @@ targets:
         # XCTestCase 生命周期不能默认 MainActor。
         SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated
 
+  CorralUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: Corral
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.corral.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Corral
+        SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated
+
 schemes:
   CorralMac:
     build:
@@ -223,12 +242,14 @@ schemes:
         Corral: all
         CorralNSE: all
         CorralTests: [test]
+        CorralUITests: [test]
     run:
       config: Debug
     test:
       config: Debug
       targets:
         - CorralTests
+        - CorralUITests
     profile:
       config: Release
     analyze:
