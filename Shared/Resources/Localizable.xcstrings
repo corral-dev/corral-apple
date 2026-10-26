@@ -2325,13 +2325,6 @@
         "zh-Hans": { "stringUnit": { "state": "translated", "value": "向右移动分屏" } }
       }
     },
-    "mac.pane.reorder": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": { "stringUnit": { "state": "translated", "value": "Drag to reorder panes" } },
-        "zh-Hans": { "stringUnit": { "state": "translated", "value": "拖动调整分屏位置" } }
-      }
-    },
     "mac.pane.terminal": {
       "extractionState": "manual",
       "localizations": {

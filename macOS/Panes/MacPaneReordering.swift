@@ -34,27 +34,19 @@ struct MacPaneDragSource: ViewModifier {
     @Environment(MacWorkspace.self) private var workspace
     let key: String
 
+    @ViewBuilder
     func body(content: Content) -> some View {
-        content
-            .contentShape(Rectangle())
-            .draggable(MacPaneDrag.self, item: workspace.paneDrag(for: key))
-            .dragConfiguration(DragConfiguration(
-                operationsWithinApp: .init(allowCopy: false, allowMove: true),
-                operationsOutsideApp: .init(allowCopy: false)))
-    }
-}
-
-struct MacPaneDragGrip: View {
-    @Environment(MacWorkspace.self) private var workspace
-
-    var body: some View {
-        if workspace.paneKeys.count > 1 {
-            Image(systemName: "line.3.horizontal")
-                .interfaceFont(.system(size: 11, weight: .medium))
-                .foregroundStyle(.secondary)
-                .interfacePadding(.horizontal, 6)
-                .help(Text("mac.pane.reorder"))
-                .accessibilityHidden(true)
+        // Payload overload only: the `draggable(_:item:)` overload is a drag-container
+        // child and silently does nothing without a `dragContainer` ancestor.
+        if let drag = workspace.paneDrag(for: key) {
+            content
+                .contentShape(Rectangle())
+                .draggable(drag)
+                .dragConfiguration(DragConfiguration(
+                    operationsWithinApp: .init(allowCopy: false, allowMove: true),
+                    operationsOutsideApp: .init(allowCopy: false)))
+        } else {
+            content
         }
     }
 }

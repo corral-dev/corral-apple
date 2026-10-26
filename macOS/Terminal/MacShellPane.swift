@@ -82,7 +82,6 @@ struct MacShellPane: View {
                 }
                 .interfaceFrame(minWidth: 30, maxWidth: .infinity, alignment: .leading)
                 .help(Text(verbatim: shell?.cwd ?? ""))
-                MacPaneDragGrip()
             }
             .modifier(MacPaneDragSource(key: shellKey))
             Button {

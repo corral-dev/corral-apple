@@ -364,7 +364,7 @@ struct MacPaneHeader: View {
     var body: some View {
         HStack(spacing: 0) {
             HStack(spacing: 0) {
-                // Keep the existing title reading edge; the grip shares the blank space.
+                // Keep the existing title reading edge; the blank strip is the drag area.
                 titleButton
                     .layoutPriority(1)
                 projectLabel
@@ -376,7 +376,6 @@ struct MacPaneHeader: View {
                     statusDotsView
                 }
                 Spacer(minLength: Space.sm)
-                MacPaneDragGrip()
             }
             .modifier(MacPaneDragSource(key: session.key))
             // Hover-only (owner correction 2026-10-18); the slots keep their
