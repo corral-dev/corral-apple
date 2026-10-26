@@ -179,8 +179,7 @@ final class ConnectionRecoveryTests: XCTestCase {
         await store.stop()
     }
 
-    func testDeliveredQuestionRetiresEvenWhenHostPromptsAreStillStale() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    func testDeliveredQuestionRetiresEvenWhenHostPromptsAreStillStale() async throws {        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         ConversationTailCache.directoryOverride = directory
         defer {
             ConversationTailCache.directoryOverride = nil
@@ -207,6 +206,49 @@ final class ConnectionRecoveryTests: XCTestCase {
         ]))
         try await Task.sleep(for: .milliseconds(250))
         XCTAssertTrue(store.prompts.isEmpty, "An old host response must not revive an answered request")
+        await store.stop()
+    }
+
+    /// A slow event consumer must recover through an authoritative snapshot:
+    /// the coalesced gap marker replaces the partial realtime sequence, with no
+    /// duplicate or phantom messages.
+    func testConversationGapMarkerReplacesAPartialStreamWithTheHostSnapshot() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        ConversationTailCache.directoryOverride = directory
+        PendingCommandStore.directoryOverride = directory
+        defer {
+            ConversationTailCache.directoryOverride = nil
+            PendingCommandStore.directoryOverride = nil
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let server = try RecoveryHost()
+        let host = try await server.start()
+        defer { server.stop() }
+        let client = RemoteClient(devicePrivateKey: RemoteCryptoKeys.generatePrivateKey())
+        defer { client.disconnect() }
+        try await client.connect(host: host)
+        _ = try await client.hello(name: "review")
+        let store = ConversationStore(sessionKey: "codex:fixture", client: client, live: true, hostID: host.hostID)
+        await store.start()
+        XCTAssertEqual(store.messages.map(\.text), ["question"])
+
+        // The main actor dispatches faster than the store's event loop can merge.
+        let channel = WireProtocol.sessionChannel(sessionKey: "codex:fixture")
+        for index in 0..<120 {
+            client.dispatch(["t": "evt", "c": channel, "d": [
+                "kind": "delta",
+                "messages": [["seq": 500 + index, "role": "assistant", "text": "ghost \(index)"]],
+            ]])
+        }
+        XCTAssertTrue(store.messages.allSatisfy { !($0.text ?? "").hasPrefix("ghost") },
+                      "Nothing merges while the main actor is busy dispatching")
+
+        await server.setFinalAnswer("authoritative tail")
+        try await waitForText("authoritative tail", in: store)
+        XCTAssertEqual(store.messages.map(\.text), ["question", "authoritative tail"],
+                       "The gap snapshot replaces the partial sequence without duplicates")
+        let watches = await server.sessionWatchCount()
+        XCTAssertGreaterThanOrEqual(watches, 2, "Initial watch plus the gap resync")
         await store.stop()
     }
 
@@ -265,6 +307,7 @@ nonisolated private final class RecoveryHost: @unchecked Sendable {
     private let paired: Bool
     private var rejectFirst: Bool
     private var hellos = 0
+    private var sessionWatches = 0
     private var inputIDs: [String] = []
     private var finalAnswer: String?
     private let pendingQuestion: Bool
@@ -317,6 +360,7 @@ nonisolated private final class RecoveryHost: @unchecked Sendable {
     }
 
     func helloCount() async -> Int { await withCheckedContinuation { c in queue.async { c.resume(returning: self.hellos) } } }
+    func sessionWatchCount() async -> Int { await withCheckedContinuation { c in queue.async { c.resume(returning: self.sessionWatches) } } }
     func stop() { queue.async { self.connections.forEach { $0.cancel() }; self.listener.cancel() } }
 
     private func send(_ data: Data, on connection: NWConnection) {
@@ -351,6 +395,7 @@ nonisolated private final class RecoveryHost: @unchecked Sendable {
                         hellos += 1
                         payload = ["paired": paired, "host_id": "review-fixture", "access": "readonly"]
                     } else if method == WireProtocol.mSessionWatch {
+                        sessionWatches += 1
                         var messages: [[String: Any]] = [["seq": 1, "role": "user", "text": "question"]]
                         if let finalAnswer { messages.append(["seq": 2, "role": "assistant", "text": finalAnswer]) }
                         payload = ["messages": messages, "generation": 1, "oldest_seq": 1,

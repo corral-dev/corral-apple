@@ -19,6 +19,52 @@ final class DesktopSidebarProjectionTests: XCTestCase {
         )
     }
 
+    func testCachedProjectionReusesRowsAndDisclosureMembership() {
+        let cache = DesktopSidebarProjection.Cache()
+        var order = DesktopSidebarProjection.StableOrder()
+        let sessions = [session("a", hoursAgo: 1), session("b", hoursAgo: 2)]
+        for _ in 0..<100 {
+            let sections = cache.sections(hostID: "host", sessions: sessions, layout: .empty,
+                filter: "", order: &order, now: now, calendar: calendar)
+            XCTAssertEqual(cache.visibleKeys(expanding: Set(sections.map(\.id))), ["a", "b"])
+        }
+        XCTAssertEqual(cache.buildCount, 1)
+        XCTAssertEqual(cache.visibilityBuildCount, 1)
+        XCTAssertEqual(cache.visibleKeys(expanding: []), [])
+        XCTAssertEqual(cache.visibilityBuildCount, 2)
+        XCTAssertEqual(cache.buildCount, 1, "Disclosure must not sort/group the list again")
+    }
+
+    func testCachedProjectionInvalidatesEveryPresentationInput() {
+        let cache = DesktopSidebarProjection.Cache()
+        var order = DesktopSidebarProjection.StableOrder()
+        var sessions = [session("a", hoursAgo: 1), session("b", hoursAgo: 2)]
+        func project(host: String = "host", layout: DesktopLayout = .empty,
+                     filter: String = "", date: Date? = nil, calendar nextCalendar: Calendar? = nil)
+                     -> [DesktopSidebarProjection.Section] {
+            cache.sections(hostID: host, sessions: sessions, layout: layout, filter: filter,
+                order: &order, now: date ?? now, calendar: nextCalendar ?? calendar)
+        }
+        _ = project()
+        sessions[0].title = "Changed title"
+        XCTAssertEqual(project().first?.items.first?.session.title, "Changed title")
+        XCTAssertEqual(cache.buildCount, 2)
+        let pinned = DesktopLayout(revision: 1, groups: [], pinnedSessions: ["b": 1])
+        XCTAssertEqual(project(layout: pinned).first?.id, "pinned")
+        XCTAssertEqual(project(filter: "Changed").flatMap(\.items).map { $0.session.key }, ["a"])
+        _ = project(date: now.addingTimeInterval(86_400))
+        var utc = calendar
+        utc.timeZone = TimeZone(secondsFromGMT: 0)!
+        _ = project(calendar: utc)
+        XCTAssertEqual(cache.buildCount, 6)
+        sessions.removeFirst()
+        XCTAssertEqual(project().flatMap(\.items).map { $0.session.key }, ["b"])
+        XCTAssertEqual(cache.visibleKeys(expanding: ["today"]), ["b"], "Removed rows cannot be repaired")
+        _ = project(host: "other-host")
+        XCTAssertEqual(cache.buildCount, 8)
+        XCTAssertEqual(order.rank.count, 1, "First-seen order belongs to the current host")
+    }
+
     func testSplitMembersRemainFlatAndRetainMembershipWhenFiltered() {
         let group = DesktopGroup(id: "g", name: "Group Apple", members: ["a", "b"])
         let layout = DesktopLayout(revision: 1, groups: [group], pinnedSessions: [:])

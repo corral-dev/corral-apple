@@ -144,6 +144,18 @@ final class AppModel {
     }
 
     private func performConnect(to host: HostInfo) async {
+        #if DEBUG
+        // Debug acceptance: render the production keychain recovery banner
+        // without touching the user's Keychain or pairing.
+        if ProcessInfo.processInfo.environment["CORRAL_INSPECTION_CONNECTION_ERROR"] == "keychain" {
+            disconnect(clearSelection: false)
+            selectedHostID = host.hostID
+            connectionState = .failed(
+                ConnectionFailureMessage.text(for: HostKeychainError.keychainReadFailed(-25293))
+            )
+            return
+        }
+        #endif
         disconnect(clearSelection: false)
         connectionState = .connecting
         activeTransport = nil
@@ -154,7 +166,7 @@ final class AppModel {
         do {
             remote = try RemoteClient(hostStore: hostStore)
         } catch {
-            connectionState = .failed(error.localizedDescription)
+            connectionState = .failed(ConnectionFailureMessage.text(for: error))
             return
         }
         client = remote
@@ -305,7 +317,7 @@ final class AppModel {
             try Task.checkCancellation()
             guard client === remote else { throw CancellationError() }
         } catch {
-            failConnection(from: remote, message: error.localizedDescription)
+            failConnection(from: remote, message: ConnectionFailureMessage.text(for: error))
             throw error
         }
         hostStore.addFromPairing(payload)

@@ -50,13 +50,13 @@ import Foundation
 
         if !keepSubscriptions {
             for (_, buckets) in channelSubscribers {
-                for (_, continuation) in buckets {
-                    continuation.finish()
+                for (_, subscriber) in buckets {
+                    subscriber.finish()
                 }
             }
             channelSubscribers.removeAll()
-            for (_, continuation) in wildcardSubscribers {
-                continuation.finish()
+            for (_, subscriber) in wildcardSubscribers {
+                subscriber.finish()
             }
             wildcardSubscribers.removeAll()
             readyHandlers.removeAll()

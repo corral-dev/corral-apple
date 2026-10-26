@@ -49,7 +49,7 @@ nonisolated enum NotificationPreview {
         } else {
             plain = input
         }
-        plain = plain.trimmingCharacters(in: .whitespacesAndNewlines)
+        plain = plain.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         guard !plain.isEmpty else { return fallback }
         guard plain.count > characterLimit || wasBounded else { return plain }
         return String(plain.prefix(characterLimit - 1)).trimmingCharacters(in: .whitespacesAndNewlines) + "…"

@@ -182,7 +182,7 @@ struct MacPairingView: View {
                 link = ""
                 if isSheet { dismiss() }
             } catch {
-                errorMessage = error.localizedDescription
+                errorMessage = ConnectionFailureMessage.text(for: error)
             }
         }
     }

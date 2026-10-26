@@ -19,8 +19,12 @@ struct MacPromptsCard: View {
     /// The clicked row's jump status, shown in place of its time.
     var status: TerminalPromptRowStatus? = nil
     var onSelect: (RichMessage) -> Void = { _ in }
+    /// The last row: return the pane to the latest position (owner 2026-10-25).
+    var onJumpLatest: () -> Void = {}
 
     static let width: CGFloat = 300
+    /// Identity of the fixed last row, which is not a prompt.
+    static let latestRowID = "corral-prompts-latest"
     /// Over content the card leaves part of the narrow pane visible.
     static let overContentWidthFraction: CGFloat = 0.6
     static let overContentMinimumWidth: CGFloat = 220
@@ -37,6 +41,7 @@ struct MacPromptsCard: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var listHeight: CGFloat = 0
     @State private var hoveredID: RichMessage.ID?
+    @State private var hoveredLatest = false
     @State private var currentID: RichMessage.ID?
     @State private var clickMonitor: Any?
     @State private var cardAnchor = PromptsCardClickAnchor()
@@ -103,6 +108,7 @@ struct MacPromptsCard: View {
                         ForEach(prompts) { prompt in
                             row(prompt).id(prompt.id)
                         }
+                        latestRow.id(Self.latestRowID)
                     }
                     .nativeOverlayScrollers()
                     .interfacePadding(Self.rowInset)
@@ -112,8 +118,10 @@ struct MacPromptsCard: View {
                 .frame(height: min(max(listHeight, 1), maxListHeight))
                 .task(id: prompts.last?.id) {
                     await Task.yield()
-                    guard !Task.isCancelled, let last = prompts.last else { return }
-                    proxy.scrollTo(last.id, anchor: .bottom)
+                    guard !Task.isCancelled, prompts.last != nil else { return }
+                    // Anchor the fixed latest row, so it is visible with the
+                    // newest prompt directly above it.
+                    proxy.scrollTo(Self.latestRowID, anchor: .bottom)
                 }
             }
         }
@@ -189,6 +197,36 @@ struct MacPromptsCard: View {
         }
         // Compact rows cut long prompts at two lines; hovering shows the rest.
         .help(overContent ? Text(verbatim: Self.hoverText(prompt)) : Text("mac.prompts.jump"))
+    }
+
+    /// Fixed last row: returns the pane to the latest position, never to a
+    /// prompt (owner requirement 2026-10-25). A docked card stays open; one
+    /// floating over content closes first so the landing is actually seen.
+    private var latestRow: some View {
+        Button {
+            onJumpLatest()
+            if overContent { setOpen(false) }
+        } label: {
+            HStack(spacing: Space.sm * interfaceScale) {
+                Image(systemName: "arrow.down.to.line.compact")
+                    .interfaceFont(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Text("session.detail.user_prompts.jump_latest")
+                    .interfaceFont(.body)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .interfacePadding(.horizontal, Space.sm + 2)
+            .interfacePadding(.vertical, overContent ? 5 : 7)
+            .interfaceFrame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.primary.opacity(hoveredLatest ? 0.06 : 0), in: rowShape)
+            .contentShape(rowShape)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("corral.prompt.latest")
+        .help(Text("session.detail.user_prompts.jump_latest"))
+        .onHover { hoveredLatest = $0 }
     }
 
     private func rowContent(_ prompt: RichMessage) -> some View {

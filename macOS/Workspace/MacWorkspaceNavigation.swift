@@ -15,7 +15,7 @@ extension MacWorkspace {
         guard let key = focusedKey, let entry = paneSurfaces.existingEntry(for: key) else { return }
         if mode(for: key) == .terminal,
            let terminal = descendant(StreamTerminalView.self, in: entry.view) {
-            navigation.host.reading[key] = .terminal(row: terminal.getTerminal().buffer.yDisp,
+            navigation.host.reading[key] = .terminal(row: terminal.terminalStateSnapshot().viewportRow,
                 followsLatest: !terminal.canScroll || terminal.scrollPosition >= 1)
         } else if let scroll = descendant(MacConversationTable.ConversationScrollView.self, in: entry.view),
                   let coordinator = scroll.coordinator {

@@ -546,6 +546,9 @@ struct MacRootView: View {
         if ProcessInfo.processInfo.arguments.contains("-CorralInspectPopupMenus") {
             Task { await MacZoomInspection.inspectPopupMenus(zoom: zoom) }
         }
+        if ProcessInfo.processInfo.arguments.contains("-CorralInspectPaneReorder") {
+            Task { await MacPaneReorderInspection.run(feed: current, workspace: workspace) }
+        }
         if MacSessionSwitchInspection.enabled {
             Task { await MacSessionSwitchInspection.run(feed: current, workspace: workspace, zoom: zoom) }
         }
@@ -569,6 +572,12 @@ struct MacRootView: View {
         }
         if ProcessInfo.processInfo.arguments.contains("-CorralInspectLifecycle") {
             Task { await MacLifecycleInspection.run(appModel: appModel, workspace: workspace, feed: current) }
+        }
+        if ProcessInfo.processInfo.arguments.contains("-CorralInspectTerminalSwitch") {
+            Task { await MacTerminalSwitchInspection.run(workspace: workspace, appModel: appModel, feed: current) }
+        }
+        if ProcessInfo.processInfo.arguments.contains("-CorralInspectPiRedraw") {
+            Task { await MacPiRedrawInspection.run(workspace: workspace, appModel: appModel, feed: current) }
         }
         if ProcessInfo.processInfo.arguments.contains("-CorralInspectModeSwitch") {
             Task { await MacModeSwitchInspection.run(workspace: workspace, feed: current) }
@@ -723,7 +732,7 @@ struct MacRootView: View {
             // The window starts its own connection as soon as the paired machine
             // appears; that supersedes the pairing connection, not the pairing.
         } catch {
-            pairingError = error.localizedDescription
+            pairingError = ConnectionFailureMessage.text(for: error)
         }
     }
 }

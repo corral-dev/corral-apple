@@ -39,6 +39,7 @@ struct CorralMacApp: App {
     }
 
     init() {
+        ClientMemoryPressure.install()
         #if CORRAL_DIRECT_DOWNLOAD
         // Keep scheduled updates alive independently of menus and Settings.
         _ = MacUpdater.shared

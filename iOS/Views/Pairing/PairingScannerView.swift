@@ -261,7 +261,7 @@ struct PairingScannerView: View {
             dismiss()
         } catch {
             failedLink = link
-            errorMessage = error.localizedDescription
+            errorMessage = ConnectionFailureMessage.text(for: error)
             HapticFeedback.shared.failure(error, operationID: operationID, scope: hapticScope)
             isPairing = false
             // A transient failure (network) can be retried by holding the

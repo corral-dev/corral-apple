@@ -6,6 +6,7 @@ import SwiftUI
 @MainActor final class ConversationStore {
     var clientIdentity: ObjectIdentifier? { nil }
     var messages: [Message] = []
+    var retainedByteEstimate: Int { messages.reduce(0) { $0 + ($1.text?.utf8.count ?? 0) } }
     var stops = 0
     var stopContinuation: CheckedContinuation<Void, Never>?
     var pause = false
@@ -26,7 +27,21 @@ struct SessionSummary: Equatable { let key: String }
     var paneFrames: [String: CGRect] = [:]
     var focusedKey: String?
     enum PaneMode { case chat, terminal }
+    var runtimes: [RuntimeEntry] = []
     func mode(for key: String) -> PaneMode { .chat }
+    func setMode(_ mode: PaneMode, for key: String) {}
+    func focus(_ key: String) { focusedKey = key }
+    func requestKeyFocus(_ key: String) {}
+    func requestClose(_ key: String) {}
+}
+struct RuntimeEntry {}
+// Menu content is outside this cache/lifetime fixture; hosting uses the production protocol.
+struct MacSessionMenuItems: View {
+    let session: SessionSummary
+    let runtimes: [RuntimeEntry]
+    @Binding var mode: MacWorkspace.PaneMode
+    let onClose: () -> Void
+    var body: some View { EmptyView() }
 }
 struct MacPaneView: View {
     let session: SessionSummary
@@ -91,24 +106,21 @@ struct Probe {
         precondition(cache.entry(for: "a") === a, "visible entries cannot be evicted")
 
         let terminal = cache.entry(for: "terminal")
-        var terminalStarts = 0
-        var terminalStops = 0
-        terminal.lifetime.bindTerminal(start: { terminalStarts += 1 },
-                                       stop: { terminalStops += 1 })
-        cache.present(terminal, isTerminal: true)
-        precondition(terminalStarts == 1)
-        cache.suspend(terminal, key: "terminal", lease: terminal.lease, keepingMounted: true)
-        precondition(terminalStops == 1)
-        cache.present(terminal, isTerminal: true)
-        precondition(terminalStarts == 2, "a returning terminal resumes its stream")
-        cache.suspend(terminal, key: "terminal", lease: terminal.lease, keepingMounted: true)
-        cache.present(terminal, isTerminal: false)
-        precondition(terminalStarts == 2, "a hidden terminal in chat mode stays stopped")
+        // Terminal streams now belong to MacTerminalSessions (lifecycle probe),
+        // not pane leases. A store-less terminal surface still retains its identity.
+        cache.present(terminal)
+        let terminalLease = terminal.lease
+        cache.suspend(terminal, key: "terminal", lease: terminalLease, keepingMounted: true)
+        precondition(!terminal.lifetime.isPresented)
+        cache.present(terminal)
+        precondition(cache.entry(for: "terminal") === terminal)
+        cache.suspend(terminal, key: "terminal", lease: terminalLease, keepingMounted: true)
+        precondition(terminal.lifetime.isPresented, "stale terminal surface lease must not hide a new mount")
         cache.suspend(terminal, key: "terminal", lease: terminal.lease)
         precondition(cache.entry(for: "terminal") !== terminal)
         let big = cache.entry(for: "big")
         let bigStore = ConversationStore()
-        bigStore.messages = [Message(text: String(repeating: "x", count: 2 * 1024 * 1024 + 1))]
+        bigStore.messages = [Message(text: String(repeating: "x", count: MacPaneLifetime.maxRetainedBytes + 1))]
         big.lifetime.bind(bigStore)
         cache.present(big)
         precondition(!cache.retainedKeys(visible: [], previous: ["big"]) { _ in true }.contains("big"))

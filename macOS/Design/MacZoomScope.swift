@@ -88,10 +88,13 @@ struct MacZoomCommands: Commands {
 /// SwiftUI may rebuild menus when a window changes; reconcile the native alias
 /// after structural notifications instead of intercepting text or terminal keys.
 @MainActor
-private final class MacZoomKeyAlias: NSObject, NSMenuItemValidation {
+final class MacZoomKeyAlias: NSObject, NSMenuItemValidation {
     static let shared = MacZoomKeyAlias()
     private weak var zoom: MacInterfaceZoom?
-    private var observers: [NSObjectProtocol] = []
+    private var observing = false
+    private var installPending = false
+    private var isInstalling = false
+    private(set) var reconciliationCount = 0
     private lazy var alias: NSMenuItem = {
         let item = NSMenuItem(title: String(localized: "mac.zoom.in"), action: #selector(increase), keyEquivalent: "=")
         item.target = self
@@ -103,17 +106,35 @@ private final class MacZoomKeyAlias: NSObject, NSMenuItemValidation {
 
     func configure(zoom: MacInterfaceZoom) {
         self.zoom = zoom
-        if observers.isEmpty {
+        if !observing {
+            observing = true
             for name in [NSMenu.didAddItemNotification, NSMenu.didRemoveItemNotification] {
-                observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in
-                    Task { @MainActor in Self.shared.install() }
-                })
+                NotificationCenter.default.addObserver(self, selector: #selector(menuStructureChanged(_:)),
+                                                       name: name, object: nil)
             }
         }
         install()
     }
 
+    @objc private func menuStructureChanged(_ notification: Notification) {
+        scheduleInstall()
+    }
+
+    private func scheduleInstall() {
+        guard !isInstalling, !installPending else { return }
+        installPending = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.installPending = false
+            self.install()
+        }
+    }
+
     func install() {
+        guard !isInstalling else { return }
+        isInstalling = true
+        defer { isInstalling = false }
+        reconciliationCount += 1
         guard let menu = NSApp.mainMenu?.items.compactMap(\.submenu).first(where: { menu in
             menu.items.contains { $0.keyEquivalent == "+" && $0.keyEquivalentModifierMask.contains(.command) }
         }) else { return }

@@ -96,29 +96,28 @@ extension TerminalView {
     /// Search the actual buffer, preserving wide glyphs at soft-wrap boundaries.
     /// SwiftTerm's native scroll API owns viewport movement. No input is sent.
     func revealPrompt(_ query: String, occurrence: Int = 0, total: Int = 1) -> Bool {
-        let emulator = getTerminal()
-        let trimmed = emulator.buffer.totalLinesTrimmed
+        guard let snapshot = terminalContentSnapshot(region: .history(maximumScrollbackRows: 10_000)) else { return false }
+        let trimmed = snapshot.capturedRange.lowerBound
         var projection = ""
         var rowEnds: [(end: Int, row: Int)] = []
         var pendingSpace = false
         var utf16Length = 0
-        var row = trimmed
-        while let line = emulator.getScrollInvariantLine(row: row) {
-            if row > trimmed && !line.isWrapped { pendingSpace = true }
+        for (index, line) in snapshot.rows.enumerated() {
+            if index > 0 && !line.isWrapped { pendingSpace = true }
             // Translation skips only null cells belonging to a wide glyph;
             // it never removes the final translated character (CJK regression).
-            let next = emulator.getScrollInvariantLine(row: row + 1)
+            let next = index + 1 < snapshot.rows.count ? snapshot.rows[index + 1] : nil
             let continues = next?.isWrapped == true
-            var endColumn = line.count
+            var endColumn = line.cells.count
             // A wide glyph moved to the next row may leave one unused cell.
             // Exclude only that null padding, never a wide glyph's trailing half.
-            if continues, let next, endColumn > 1, next[0].width == 2,
-               line[endColumn - 1].getCharacter() == "\u{0}", line[endColumn - 2].width != 2 {
+            if continues, let next, endColumn > 1, next.cells.first?.width == 2,
+               line.cells[endColumn - 1].text == "\u{0}", line.cells[endColumn - 2].width != 2 {
                 endColumn -= 1
             }
-            let text = line.translateToString(trimRight: !continues, endCol: endColumn,
-                                              skipNullCellsFollowingWide: true,
-                                              characterProvider: { emulator.getCharacter(for: $0) })
+            let text = line.cells.prefix(endColumn).filter { $0.width != 0 }.map {
+                $0.text.isEmpty || $0.text == "\u{0}" ? " " : $0.text
+            }.joined()
             for character in text {
                 if character.isWhitespace {
                     pendingSpace = true
@@ -129,8 +128,7 @@ extension TerminalView {
                     utf16Length += String(character).utf16.count
                 }
             }
-            rowEnds.append((utf16Length, row - trimmed))
-            row += 1
+            rowEnds.append((utf16Length, line.absoluteRow - trimmed))
         }
         guard !query.isEmpty, total > 0, occurrence >= 0, occurrence < total else { return false }
         var matches: [Range<String.Index>] = []
@@ -149,7 +147,7 @@ extension TerminalView {
         // third-down reveal. SwiftTerm clamps only at the buffer's end.
         // The alternate buffer has no scrollback. Finding text below its
         // first row does not mean that the requested top-edge landing occurred.
-        if emulator.isCurrentBufferAlternate { return target == 0 }
+        if snapshot.inputState.isAlternateBuffer { return target == 0 }
         scrollTo(row: max(0, target))
         return true
     }

@@ -50,6 +50,8 @@ final class RemoteTerminalStream {
     }
 
     private(set) var phase: Phase = .connecting
+    /// A snapshot arrived on this stream at least once.
+    private(set) var hasBeenLive = false
 
     @ObservationIgnored let sessionKey: String
     @ObservationIgnored let input: TerminalInputSender
@@ -65,6 +67,14 @@ final class RemoteTerminalStream {
     @ObservationIgnored private var resyncing = false
     /// Snapshot plus later output that arrived before the view existed.
     @ObservationIgnored private var backlog: (grid: TerminalGrid, data: [Data])?
+    @ObservationIgnored private var backlogBytes = 0
+    /// The retained backlog was dropped at its byte ceiling; the next attached
+    /// view must start from a fresh snapshot rather than a truncated stream.
+    @ObservationIgnored private var backlogNeedsResync = false
+    /// Raw output retained while no view is attached. A snapshot plus a burst
+    /// fits; beyond that the screen is rebuilt from a fresh snapshot instead of
+    /// retaining every byte produced while the pane was hidden.
+    static let backlogByteLimit = 4 * 1024 * 1024
     @ObservationIgnored private var attached = false
     @ObservationIgnored private var attachGeneration: UUID?
     @ObservationIgnored private var generation = UUID()
@@ -92,6 +102,11 @@ final class RemoteTerminalStream {
     static weak var inspectionStream: RemoteTerminalStream?
     var inspectionAcknowledgedGrid: TerminalGrid? { sentGrid }
     var inspectionEpoch: UUID { generation }
+    /// Retained raw output while no view is attached, and whether the ceiling
+    /// already discarded it in favour of a fresh snapshot.
+    var inspectionBacklogBytes: Int { backlogBytes }
+    var inspectionNeedsResync: Bool { backlogNeedsResync }
+    func inspectionHandle(_ payload: [String: Any]) { handle(payload) }
     #endif
 
     /// Local subscriptions survive reconnect; the host subscription does not.
@@ -125,6 +140,8 @@ final class RemoteTerminalStream {
         attached = false
         synced = false
         backlog = nil
+        backlogBytes = 0
+        backlogNeedsResync = false
         if let readyHandlerID, let client { client.removeReadyHandler(readyHandlerID) }
         readyHandlerID = nil
         guard wasRunning, let client else { return }
@@ -323,6 +340,8 @@ final class RemoteTerminalStream {
         resyncing = false
         lastSeq = 0
         backlog = nil
+        backlogBytes = 0
+        backlogNeedsResync = false
         phase = .connecting
         attachIfReady()
     }
@@ -341,8 +360,16 @@ final class RemoteTerminalStream {
         }
     }
 
+    #if DEBUG
+    /// Host attach requests made by every stream (switch acceptance counts them).
+    static var inspectionAttachCalls = 0
+    #endif
+
     private func attach(_ grid: TerminalGrid, generation mine: UUID) async {
         defer { if attachGeneration == mine { attachGeneration = nil } }
+        #if DEBUG
+        Self.inspectionAttachCalls += 1
+        #endif
         for attempt in 0..<4 {
             guard let client, isCurrent(mine) else { return }
             do {
@@ -463,6 +490,16 @@ final class RemoteTerminalStream {
     // MARK: - Events
 
     private func handle(_ payload: [String: Any]) {
+        // A bounded subscriber that fell behind reports one coalesced gap: raw
+        // bytes are missing, so only a fresh host snapshot may restore the screen.
+        if payload["resync"] as? Bool == true {
+            backlog = nil
+            backlogBytes = 0
+            backlogNeedsResync = false
+            synced = false
+            requestResync()
+            return
+        }
         let seq = (payload["seq"] as? Int) ?? 0
         switch payload["kind"] as? String {
         case "snapshot":
@@ -473,11 +510,14 @@ final class RemoteTerminalStream {
             snapshotRevision += 1
             synced = true
             phase = .live
+            if !hasBeenLive { hasBeenLive = true }
             let grid = TerminalGrid(cols: cols, rows: rows)
             if let sink {
                 sink.terminalReset(grid: grid, data: data)
             } else {
                 backlog = (grid, [data])
+                backlogBytes = data.count
+                backlogNeedsResync = false
             }
         case "output":
             guard synced, let data = decode(payload["data"]) else { return }
@@ -490,7 +530,7 @@ final class RemoteTerminalStream {
             if let sink {
                 sink.terminalFeed(data)
             } else {
-                backlog?.data.append(data)
+                appendBacklog(data)
             }
         case "ended":
             cancelSnapshotRecovery()
@@ -501,9 +541,42 @@ final class RemoteTerminalStream {
         }
     }
 
+    /// Buffer live output only up to a fixed ceiling while no view is attached.
+    private func appendBacklog(_ data: Data) {
+        guard backlog != nil else { return }
+        backlog?.data.append(data)
+        backlogBytes += data.count
+        guard backlogBytes > Self.backlogByteLimit else { return }
+        // Keep the last full screen for instant display; the missing tail is
+        // recovered from a fresh snapshot when the view attaches.
+        if let first = backlog?.data.first {
+            backlog = (backlog!.grid, [first])
+            backlogBytes = first.count
+        } else {
+            backlog = nil
+            backlogBytes = 0
+        }
+        backlogNeedsResync = true
+    }
+
     private func replayBacklog() {
-        guard let sink, let pending = backlog else { return }
+        guard let sink else { return }
+        if backlogNeedsResync {
+            backlogNeedsResync = false
+            // Show the last full screen immediately; the snapshot requested below
+            // replaces it authoritatively instead of trusting the dropped tail.
+            if let pending = backlog, let first = pending.data.first {
+                sink.terminalReset(grid: pending.grid, data: first)
+            }
+            backlog = nil
+            backlogBytes = 0
+            synced = false
+            requestResync()
+            return
+        }
+        guard let pending = backlog else { return }
         backlog = nil
+        backlogBytes = 0
         guard let first = pending.data.first else { return }
         sink.terminalReset(grid: pending.grid, data: first)
         for data in pending.data.dropFirst() {

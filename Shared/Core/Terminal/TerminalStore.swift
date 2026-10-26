@@ -112,6 +112,12 @@ final class TerminalStore {
     }
 
     private func handle(_ event: RemoteEvent) async {
+        // A coalesced gap marker: diffs were lost, so re-watch for a full frame
+        // instead of applying a broken partial screen.
+        if event.data["resync"] as? Bool == true {
+            await repullAfterReconnect()
+            return
+        }
         // 事件载荷可能是整帧对象，也可能是 {"frame": {...}}。
         let frameDict: Any
         if event.data["cols"] != nil {

@@ -20,6 +20,7 @@ final class MacWorkspace {
     static let maxPanes = 4
 
     private(set) var hostID: String?
+    @ObservationIgnored private let paneDragWorkspaceID = UUID()
     @ObservationIgnored private var layoutGeneration = UUID()
 
     private(set) var paneKeys: [String] = []
@@ -64,9 +65,13 @@ final class MacWorkspace {
     var promptsOpen: [String: Bool] = [:]
     /// Prompts card → scroll that pane's conversation to a prompt.
     private(set) var scrollRequests: [String: ChatScrollRequest] = [:]
+    /// Prompts card's last row → return that pane to the latest position.
+    private(set) var latestScrollRequests: [String: Int] = [:]
     /// Project shells of this machine (terminal panes look their titles up here).
     let shells = ProjectShellStore()
     let paneSurfaces = MacPaneSurfaceCache()
+    /// Agent and project-shell terminals; they outlive the panes showing them.
+    let terminals = MacTerminalSessions()
     /// A terminal pane whose shell runs a program, waiting for close confirmation.
     var pendingTerminalClose: ProjectShell?
 
@@ -74,12 +79,24 @@ final class MacWorkspace {
     @ObservationIgnored private var layoutTask: Task<Void, Never>?
     @ObservationIgnored private var layoutClient: RemoteClient?
     @ObservationIgnored private var readyHandlerID: UUID?
+    @ObservationIgnored private var pressureHandler: UUID?
     @ObservationIgnored weak var feed: HostSessionFeed?
 
     private static let modesKey = "corral.mac.paneModes"
     /// Settings: the view a session created by this client opens in.
     static let newSessionModeKey = "corral.mac.newSessionMode"
     @ObservationIgnored private var modes: [String: String] = UserDefaults.standard.dictionary(forKey: MacWorkspace.modesKey) as? [String: String] ?? [:]
+    private static let modeOrderKey = "corral.mac.paneModesOrder"
+    /// Stored mode keys, least recently chosen first (pruning order).
+    @ObservationIgnored private var modeOrder: [String] = UserDefaults.standard.stringArray(forKey: MacWorkspace.modeOrderKey) ?? []
+    #if DEBUG
+    /// Debug and Release share one defaults domain: an inspection launch may
+    /// switch modes on screen but must never rewrite the person's choices.
+    private static let persistsModes = !ProcessInfo.processInfo.arguments.contains { $0.hasPrefix("-CorralInspect") }
+        && !ProcessInfo.processInfo.environment.keys.contains { $0.hasPrefix("CORRAL_INSPECTION_") }
+    #else
+    private static let persistsModes = true
+    #endif
     /// Observed per session: one pane's chat/terminal switch must not
     /// re-render every visible and retained pane (each is its own hosting
     /// view, so a shared dictionary cost one transaction per pane).
@@ -92,6 +109,17 @@ final class MacWorkspace {
 
     func attach(appModel: AppModel) {
         self.appModel = appModel
+        ClientMemoryPressure.install()
+        guard pressureHandler == nil else { return }
+        pressureHandler = ClientMemoryPressure.addHandler { [weak self] in
+            self?.releaseRebuildableResources()
+        }
+    }
+
+    /// System memory pressure releases warm panes; the open pane keeps its
+    /// subscription, drafts, reading position, selection and terminal state.
+    private func releaseRebuildableResources() {
+        paneSurfaces.evictDormant(visible: Set(paneKeys))
     }
 
     /// Reset host-owned state before showing another machine's cached list.
@@ -100,6 +128,7 @@ final class MacWorkspace {
         rememberReadingPosition()
         stopLayoutWatch()
         paneSurfaces.reset()
+        terminals.reset()
         hostID = id
         layout = .empty
         paneKeys = []
@@ -111,6 +140,7 @@ final class MacWorkspace {
         cancelSplitMotion()
         keyFocusTarget = nil
         scrollRequests = [:]
+        latestScrollRequests = [:]
         paneFrames = [:]
         actionError = nil
         feed = nil
@@ -143,27 +173,40 @@ final class MacWorkspace {
         let storageKey = modeKey(key)
         guard modes[storageKey] != mode.rawValue else { return }
         modes[storageKey] = mode.rawValue
+        touchModeOrder(storageKey)
         modeSignal(storageKey).revision &+= 1
         pruneModesIfNeeded()
+        persistModes()
+    }
+
+    private func touchModeOrder(_ storageKey: String, replacing old: String? = nil) {
+        modeOrder.removeAll { $0 == storageKey || $0 == old }
+        modeOrder.append(storageKey)
+    }
+
+    private func persistModes() {
+        guard Self.persistsModes else { return }
         UserDefaults.standard.set(modes, forKey: Self.modesKey)
+        UserDefaults.standard.set(modeOrder, forKey: Self.modeOrderKey)
     }
 
     /// Modes are keyed by host+session and would otherwise grow without bound
     /// across machines and history. Cap the table; eviction only forgets a
-    /// remembered chat/terminal choice (defaults back to chat).
+    /// remembered chat/terminal choice (defaults back to chat), other hosts'
+    /// and then the least recently chosen first. Entries stored before the
+    /// order was recorded count as the oldest.
     private func pruneModesIfNeeded(limit: Int = 500) {
         guard modes.count > limit else { return }
+        let ordered = Set(modeOrder)
+        let oldestFirst = modes.keys.filter { !ordered.contains($0) }.sorted()
+            + modeOrder.filter { modes[$0] != nil }
         let hostPrefix = "\(hostID ?? ""):"
-        // Prefer evicting other hosts' entries first.
-        for key in modes.keys where !key.hasPrefix(hostPrefix) {
-            modes.removeValue(forKey: key)
-            modeSignals.removeValue(forKey: key)
-            if modes.count <= limit { break }
-        }
-        while modes.count > limit, let key = modes.keys.first {
+        let victims = oldestFirst.filter { !$0.hasPrefix(hostPrefix) } + oldestFirst.filter { $0.hasPrefix(hostPrefix) }
+        for key in victims.prefix(modes.count - limit) {
             modes.removeValue(forKey: key)
             modeSignals.removeValue(forKey: key)
         }
+        modeOrder.removeAll { modes[$0] == nil }
     }
 
     private func modeSignal(_ storageKey: String) -> ModeSignal {
@@ -179,10 +222,15 @@ final class MacWorkspace {
         let old = "\(hostID ?? ""):\(oldKey)"
         guard let stored = modes.removeValue(forKey: old) else { return }
         let new = modeKey(newKey)
-        if modes[new] == nil { modes[new] = stored }
+        if modes[new] == nil {
+            modes[new] = stored
+            touchModeOrder(new, replacing: old)
+        } else {
+            modeOrder.removeAll { $0 == old }
+        }
         modeSignal(old).revision &+= 1
         modeSignal(new).revision &+= 1
-        UserDefaults.standard.set(modes, forKey: Self.modesKey)
+        persistModes()
     }
 
     /// Only sessions created here follow the setting; history keeps chat so
@@ -400,6 +448,24 @@ final class MacWorkspace {
         scheduleLayout(WireProtocol.mLayoutSetFocus, ["key": key, "project": project])
     }
 
+    func paneDrag(for key: String) -> MacPaneDrag? {
+        guard paneKeys.count > 1, paneKeys.contains(key), leavingPanes.isEmpty else { return nil }
+        return MacPaneDrag(workspaceID: paneDragWorkspaceID, hostID: hostID, key: key, paneKeys: paneKeys)
+    }
+
+    /// Reposition existing identities only: preserve focus, surfaces and subscriptions.
+    @discardableResult
+    func reorderPane(_ drag: MacPaneDrag, to target: String) -> Bool {
+        guard leavingPanes.isEmpty,
+              let reordered = drag.reorderedKeys(workspaceID: paneDragWorkspaceID, hostID: hostID,
+                                                  current: paneKeys, target: target) else { return false }
+        let before = paneKeys
+        paneKeys = reordered
+        glide(from: before)
+        syncGroup()
+        return true
+    }
+
     func focusPane(at index: Int) {
         guard paneKeys.indices.contains(index) else { return }
         focus(paneKeys[index])
@@ -543,6 +609,13 @@ final class MacWorkspace {
         scrollRequests[key] = ChatScrollRequest(messageID: messageID)
     }
 
+    /// The prompts card's last row: keep the current presentation and return
+    /// this pane to its latest position (chat bottom, or live terminal output).
+    func scrollToLatest(in key: String) {
+        focus(key)
+        latestScrollRequests[key] = (latestScrollRequests[key] ?? 0) + 1
+    }
+
     /// The sidebar reflects the focused pane.
     func replaceKey(_ old: String, with new: String) {
         navigation.host.history.replace(old, with: new)
@@ -566,9 +639,10 @@ final class MacWorkspace {
 
     private func scheduleLayout(_ method: String, _ params: [String: Any]) {
         #if DEBUG
-        // A tool activity inspection keeps its local conversation steady and
-        // never changes the person's shared terminal/workspace layout.
-        guard !ProcessInfo.processInfo.arguments.contains("-CorralInspectToolActivity") else { return }
+        // Presentation inspections never change the person's shared host groups.
+        let arguments = ProcessInfo.processInfo.arguments
+        guard !arguments.contains("-CorralInspectToolActivity"),
+              !arguments.contains("-CorralInspectPaneReorder") else { return }
         #endif
         guard let client = appModel?.client else { return }
         let host = hostID
@@ -959,6 +1033,7 @@ final class MacWorkspace {
     func endTerminal(_ key: String) {
         pendingTerminalClose = nil
         closePane(key)
+        terminals.close(key)
         guard let client = appModel?.client else { return }
         Task { await shells.close(key, client: client) }
     }
@@ -967,5 +1042,6 @@ final class MacWorkspace {
     func terminalEnded(_ key: String) {
         shells.removeEnded(key)
         closePane(key)
+        terminals.close(key)
     }
 }

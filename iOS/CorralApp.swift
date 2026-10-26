@@ -18,6 +18,9 @@ struct CorralApp: App {
     #endif
 
     init() {
+        // Release rebuildable image/text caches on a memory warning; history,
+        // drafts, reading position and terminal state stay untouched.
+        ClientMemoryPressure.install()
         // Apple requires the notification-center delegate before the app finishes
         // launching; a cold-launch tap response must never arrive before first
         // appear. configure() keeps the idempotent re-set plus categories/status.

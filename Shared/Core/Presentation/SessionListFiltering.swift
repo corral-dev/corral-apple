@@ -219,35 +219,46 @@ enum SessionListFiltering {
         return next
     }
 
-    /// Active quick filter membership: exactly the sessions that show an
-    /// activity dot (waiting / working / recent). Red unread alone is not
-    /// active — it is only an explanation of unseen messages and can coexist
-    /// with an activity dot behind it — so the dot and the filter never disagree.
-    static func isActive(_ session: SessionSummary) -> Bool {
-        SessionPresentation.activityMarker(for: session) != nil
+    /// Focus filter windows (owner decision 2026-10-26); used only for hosts
+    /// that predate the host-computed `needs_attention` field.
+    static let attentionRecentSeconds: Double = 30 * 60
+    static let attentionUnreadSeconds: Double = 7 * 24 * 60 * 60
+
+    /// Focus quick filter membership. The host decides it once
+    /// (`activity_board.needs_attention`): any yellow/green dot, an unread
+    /// result from the last week, or a session whose last activity or open is
+    /// within half an hour. Older hosts fall back to the same rule without
+    /// open times.
+    static func needsAttention(_ session: SessionSummary, now: Date = Date()) -> Bool {
+        if let decided = session.needsAttention { return decided }
+        if SessionPresentation.activityMarker(for: session) != nil { return true }
+        let age = now.timeIntervalSince1970 - session.mtime
+        guard session.mtime > 0 else { return false }
+        if SessionPresentation.hasUnread(for: session), age <= attentionUnreadSeconds { return true }
+        return age <= attentionRecentSeconds
     }
 
-    /// Unread-only and idle open panes never count as activity.
-    static func activeCount(sessions: [SessionSummary]) -> Int {
+    /// The count beside the Focus chip uses the same predicate as the list.
+    static func attentionCount(sessions: [SessionSummary], now: Date = Date()) -> Int {
         sessions.reduce(0) { count, session in
             let counted = ActiveRuntimeVisibility.isListVisible(session)
-                && isActive(session)
+                && needsAttention(session, now: now)
             return count + (counted ? 1 : 0)
         }
     }
 
     /// Production filter path used by the list: dormant-identity exclusion
-    /// plus the Active/runtime/project intersection. Order-preserving; empty
+    /// plus the Focus/runtime/project intersection. Order-preserving; empty
     /// filters pass everything through.
     static func apply(
         sessions: [SessionSummary],
         runtimes: Set<SessionRuntimeFilter>,
         projects: Set<SessionProjectFilter>,
-        activeOnly: Bool = false
+        attentionOnly: Bool = false
     ) -> [SessionSummary] {
         sessions.filter { session in
             ActiveRuntimeVisibility.isListVisible(session)
-                && (!activeOnly || isActive(session))
+                && (!attentionOnly || needsAttention(session))
                 && (runtimes.isEmpty || runtimes.contains { $0.matches(session) })
                 && (projects.isEmpty || projects.contains { $0.matches(session) })
         }
@@ -259,10 +270,10 @@ enum SessionListFiltering {
         to sections: [SessionListStore.Section],
         runtimes: Set<SessionRuntimeFilter>,
         projects: Set<SessionProjectFilter>,
-        activeOnly: Bool = false
+        attentionOnly: Bool = false
     ) -> [SessionListStore.Section] {
         sections.compactMap { section in
-            let kept = apply(sessions: section.sessions, runtimes: runtimes, projects: projects, activeOnly: activeOnly)
+            let kept = apply(sessions: section.sessions, runtimes: runtimes, projects: projects, attentionOnly: attentionOnly)
             guard !kept.isEmpty else { return nil }
             switch section {
             case .waiting: return .waiting(kept)

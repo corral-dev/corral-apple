@@ -30,7 +30,7 @@ final class RemoteConnectionStabilityTests: XCTestCase {
             ),
             transport: .local,
             localHint: nil
-        ))
+        ), budget: PlaneOutgoingBudget(maxQueuedBytes: 4 * 1024 * 1024, maxQueuedFrames: 1_024))
         defer {
             plane.stop()
             socket.cancel(with: .goingAway, reason: nil)
@@ -125,6 +125,187 @@ final class RemoteConnectionStabilityTests: XCTestCase {
         #else
         XCTAssertFalse(urls.contains("ws://127.0.0.1:8737"))
         #endif
+    }
+
+    // MARK: - Bounded ordered outgoing admission (memory slice 2026-10-25)
+
+    func testReservedFramesCountAgainstTheFrameCeiling() {
+        let outbox = PlaneOutbox(budget: PlaneOutgoingBudget(maxQueuedBytes: 1_000_000, maxQueuedFrames: 2))
+        let failures = FailureCounter()
+        XCTAssertEqual(admit(outbox, bytes: 10, failures: failures), .admitted)
+        XCTAssertEqual(admit(outbox, bytes: 10, failures: failures), .admitted)
+        XCTAssertEqual(outbox.depth.frames, 2)
+
+        XCTAssertEqual(admit(outbox, bytes: 10, failures: failures), .overloaded)
+        XCTAssertEqual(failures.count, 2, "Every admitted frame is failed exactly once")
+        XCTAssertEqual(outbox.depth.frames, 0)
+        XCTAssertTrue(outbox.isStopped)
+        XCTAssertEqual(admit(outbox, bytes: 10, failures: failures), .overloaded)
+    }
+
+    func testByteCeilingIncludesTheInFlightFrame() async {
+        let outbox = PlaneOutbox(budget: PlaneOutgoingBudget(maxQueuedBytes: 1_000, maxQueuedFrames: 10))
+        let failures = FailureCounter()
+        XCTAssertEqual(admit(outbox, bytes: 400, failures: failures), .admitted)
+        XCTAssertEqual(admit(outbox, bytes: 400, failures: failures), .admitted)
+
+        // Popping a frame only moves it to the writer; its bytes stay counted.
+        let inFlight = await outbox.next()
+        XCTAssertNotNil(inFlight)
+        XCTAssertEqual(outbox.depth.bytes, 800)
+        XCTAssertEqual(admit(outbox, bytes: 300, failures: failures), .overloaded)
+        XCTAssertEqual(failures.count, 2)
+
+        if let inFlight { outbox.complete(inFlight) }
+        XCTAssertEqual(failures.count, 2, "Completing a settled frame cannot settle it twice")
+    }
+
+    func testOneLegalMaximumFrameFitsAnEmptyQueue() {
+        let standard = PlaneOutbox(budget: .standard)
+        XCTAssertEqual(standard.reserve(bytes: WireProtocol.maxFrameBytes), .admitted)
+        standard.cancelReservation(bytes: WireProtocol.maxFrameBytes)
+        XCTAssertEqual(standard.depth.frames, 0)
+
+        let tight = PlaneOutbox(budget: PlaneOutgoingBudget(maxQueuedBytes: 1_024, maxQueuedFrames: 8))
+        XCTAssertEqual(tight.reserve(bytes: 1_024), .admitted)
+        tight.cancelReservation(bytes: 1_024)
+        XCTAssertEqual(tight.reserve(bytes: 1_025), .overloaded)
+    }
+
+    func testStopFailsEveryQueuedFrameExactlyOnce() {
+        let outbox = PlaneOutbox(budget: PlaneOutgoingBudget(maxQueuedBytes: 10_000, maxQueuedFrames: 8))
+        let failures = FailureCounter()
+        for _ in 0..<3 { _ = admit(outbox, bytes: 100, failures: failures) }
+
+        outbox.stop()
+        XCTAssertEqual(failures.count, 3)
+        outbox.stop()
+        XCTAssertEqual(failures.count, 3, "A repeated stop has no additional outcome")
+        XCTAssertEqual(outbox.reserve(bytes: 1), .stopped)
+        XCTAssertEqual(outbox.depth.frames, 0)
+    }
+
+    func testCompletedFramesAreNotFailedAgainOnStop() async {
+        let outbox = PlaneOutbox(budget: PlaneOutgoingBudget(maxQueuedBytes: 10_000, maxQueuedFrames: 8))
+        let failures = FailureCounter()
+        _ = admit(outbox, bytes: 100, failures: failures)
+        _ = admit(outbox, bytes: 100, failures: failures)
+        for _ in 0..<2 {
+            guard let frame = await outbox.next() else {
+                XCTFail("missing frame")
+                return
+            }
+            outbox.complete(frame)
+        }
+        XCTAssertEqual(outbox.depth.frames, 0)
+
+        outbox.stop()
+        XCTAssertEqual(failures.count, 0, "Delivered frames are not reported as failures")
+        let next = await outbox.next()
+        XCTAssertNil(next)
+    }
+
+    func testSendFailureSettlesTheInFlightAndQueuedFramesOnce() async {
+        let outbox = PlaneOutbox(budget: PlaneOutgoingBudget(maxQueuedBytes: 10_000, maxQueuedFrames: 8))
+        let failures = FailureCounter()
+        _ = admit(outbox, bytes: 100, failures: failures)
+        _ = admit(outbox, bytes: 100, failures: failures)
+        let inFlight = await outbox.next()
+
+        outbox.close(with: PlaneIOError.overloaded)
+        XCTAssertEqual(failures.count, 2, "The in-flight frame and the queued frame both fail once")
+        if let inFlight { outbox.complete(inFlight) }
+        XCTAssertEqual(failures.count, 2)
+        let next = await outbox.next()
+        XCTAssertNil(next)
+    }
+
+    func testOverloadResetsThePlaneInsteadOfDroppingAnEncryptedFrame() async throws {
+        let server = try OrderedFrameServer(expected: 1)
+        defer { server.stop() }
+        let port = try await server.start()
+        let session = URLSession(configuration: .ephemeral)
+        let socket = session.webSocketTask(with: try XCTUnwrap(URL(string: "ws://127.0.0.1:\(port)")))
+        socket.resume()
+        let plane = PlaneIO(win: HandshakeRace.Win(
+            webSocket: socket,
+            urlSession: session,
+            channelID: WireProtocol.zeroChannel,
+            secureChannel: SecureChannel(
+                sendKey: Data(repeating: 1, count: 32),
+                recvKey: Data(repeating: 2, count: 32),
+                peerStaticPublic: Data(repeating: 3, count: 32)
+            ),
+            transport: .local,
+            localHint: nil
+        ), budget: PlaneOutgoingBudget(maxQueuedBytes: 512, maxQueuedFrames: 8))
+        defer {
+            plane.stop()
+            socket.cancel(with: .goingAway, reason: nil)
+            session.invalidateAndCancel()
+        }
+        let failures = FailureCounter()
+        try plane.enqueue(["t": "req", "id": 1, "m": "a", "p": [:]], compress: false) { _ in failures.increment() }
+
+        // Far beyond one legal frame for this budget: rejected, never sent.
+        do {
+            try plane.enqueue(["t": "req", "id": 2, "m": "b", "p": ["blob": String(repeating: "x", count: 2_000)]], compress: false) { _ in failures.increment() }
+            XCTFail("An oversized frame must be rejected")
+        } catch {
+            XCTAssertEqual(error as? PlaneIOError, .overloaded)
+        }
+        XCTAssertEqual(failures.count, 1, "The queued frame is failed instead of delivered")
+        XCTAssertEqual(plane.outboxDepth.frames, 0)
+        do {
+            try plane.enqueue(["t": "req", "id": 3, "m": "c", "p": [:]], compress: false)
+            XCTFail("A reset plane must not accept more frames")
+        } catch {
+            XCTAssertEqual(error as? PlaneIOError, .overloaded)
+        }
+        XCTAssertEqual(failures.count, 1, "Reset outcomes are exactly once")
+    }
+
+    @MainActor
+    func testStoppedPlaneRejectsADelayedProducer() throws {
+        let client = RemoteClient(devicePrivateKey: Data(repeating: 0, count: 32))
+        defer { client.disconnect() }
+        _ = client.installPlaneForTesting(isControl: true)
+        let plane = try XCTUnwrap(client.controlPlane)
+        plane.stop()
+        do {
+            try plane.enqueue(["t": "req", "id": 1, "m": "late", "p": [:]], compress: false)
+            XCTFail("A replaced plane must not accept frames")
+        } catch {
+            XCTAssertEqual(error as? PlaneIOError, .stopped)
+        }
+    }
+
+    private func admit(_ outbox: PlaneOutbox, bytes: Int, failures: FailureCounter) -> PlaneAdmission {
+        let admission = outbox.reserve(bytes: bytes)
+        guard admission == .admitted else { return admission }
+        let frame = PlaneOutbox.Frame(data: Data(repeating: 7, count: bytes)) { _ in
+            failures.increment()
+        }
+        outbox.commit(frame, estimatedBytes: bytes)
+        return admission
+    }
+}
+
+/// Thread-safe callback count: failure handlers run off the calling thread.
+private final class FailureCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+
+    func increment() {
+        lock.lock()
+        value += 1
+        lock.unlock()
+    }
+
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
     }
 }
 

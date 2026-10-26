@@ -79,7 +79,6 @@ Corral's built-in updater remains enabled. On current Homebrew, this versioned s
 
 Existing-App incident (2026-10-12): the owner supplied an installation log for Cask 0.3.79 ending in `It seems there is already an App at '/Applications/Corral.app'`. Subsequent read-only inspection found the actual app at 0.3.80 (84), Homebrew registration/Cask at 0.3.79 and `outdated: false`. This establishes readable newer-bundle handling in the current installation. It does not prove Sparkle performed that replacement, identify the original argv or explain why that earlier operation entered installation. Preserve this as an unresolved historical operation until the exact command and matching registration state are known; do not prescribe a forced 0.3.79 installation over 0.3.80.
 
-Maintainers can bootstrap or retry Cask publication independently with `python3 scripts/publish-mac-release.py --sync-homebrew-release mac-v<version>`. This checks the stable release metadata and anonymously downloads the immutable DMG before publishing. Normal Mac publication calls the same compare-and-swap path and records `homebrewCask` in its terminal receipt; an unchanged publication is a no-op. Credentials stay in the existing authenticated GitHub CLI.
 
 The Cask installs only `Corral.app`; it must not remove `~/.config/corral-mac/`, preferences or Keychain entries during installation, upgrades or uninstall, and has no `zap` stanza. Keep bundle/signing identity unchanged so existing pairing and preferences remain usable. Source builds remain a separate route.
 

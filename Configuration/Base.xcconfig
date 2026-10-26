@@ -1,7 +1,8 @@
 // 所有环境共享的配置
-PRODUCT_BUNDLE_IDENTIFIER = com.x0c.corral
-DEVELOPMENT_TEAM = SHZQ3MWP3B
-// Fallback only: project.yml settings.base overrides these for every target.
-MARKETING_VERSION = 1.0.190
-CURRENT_PROJECT_VERSION = 200
+PRODUCT_BUNDLE_IDENTIFIER = com.example.corral
+MARKETING_VERSION = 1.0.159
+CURRENT_PROJECT_VERSION = 169
 SWIFT_VERSION = 6.0
+// 与通知扩展共享的钥匙串分组（entitlements 与 Info.plist 以
+// $(AppIdentifierPrefix)$(CORRAL_KEYCHAIN_GROUP) 展开）。自编译时按需改成本地值；勿提交个人团队信息。
+CORRAL_KEYCHAIN_GROUP = com.example.corral

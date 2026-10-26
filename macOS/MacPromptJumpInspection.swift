@@ -7,6 +7,7 @@ import Foundation
 /// session). The pane jumps to its first prompt, the second and the last, each in
 /// one unanimated move; each step first writes its name to
 /// `/tmp/corral-mac-prompt-jump-step.txt` so an external sampler can capture frames.
+/// `-CorralInspectPromptLatest` adds the card's return-to-latest row step.
 ///
 /// After each jump settles the harness writes the live table's first visible
 /// row, the target row's top against the reading viewport top, and app-owned
@@ -49,6 +50,32 @@ enum MacPromptJumpInspection {
             try? await Task.sleep(for: .seconds(3))
             var report = record(step: name, target: target, key: key, workspace: workspace)
             report["before"] = before ?? [:]
+            report["frames"] = frames
+            reports.append(report)
+            if let data = try? JSONSerialization.data(withJSONObject: reports, options: [.prettyPrinted, .sortedKeys]) {
+                try? data.write(to: URL(fileURLWithPath: "/tmp/corral-mac-prompt-jump.json"), options: .atomic)
+            }
+        }
+        // The card's fixed last row is not a prompt: it must return the pane to
+        // the latest messages (owner requirement 2026-10-25). Move away from the
+        // bottom first, so the return is measurable.
+        if ProcessInfo.processInfo.arguments.contains("-CorralInspectPromptLatest") {
+            if let first = list.first {
+                workspace.scrollToPrompt(ConversationTimelineItem.message(first).id, in: key)
+            }
+            try? await Task.sleep(for: .seconds(2))
+            mark("latest-before")
+            let before = sample(key: key, workspace: workspace) ?? [:]
+            workspace.scrollToLatest(in: key)
+            var frames: [[String: Double]] = []
+            for _ in 0..<60 {
+                try? await Task.sleep(for: .milliseconds(30))
+                if let frame = sample(key: key, workspace: workspace) { frames.append(frame) }
+            }
+            try? await Task.sleep(for: .seconds(1))
+            var report = record(step: "latest", target: "", key: key, workspace: workspace)
+            report["requestedLatest"] = true
+            report["before"] = before
             report["frames"] = frames
             reports.append(report)
             if let data = try? JSONSerialization.data(withJSONObject: reports, options: [.prettyPrinted, .sortedKeys]) {

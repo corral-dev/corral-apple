@@ -56,7 +56,16 @@ final class ChatImageLoader {
     private let hostID: String
     private let sessionKey: String
     private weak var client: RemoteClient?
-    private let memory = NSCache<NSString, PlatformImage>()
+    /// One app-wide bitmap cache. A loader per conversation used to own its own
+    /// 48 MiB cost limit, so retained panes plus the open chat multiplied the
+    /// real budget far past 48 MiB. Cache keys already carry host, session and
+    /// tier, so sharing preserves per-conversation isolation. NSCache limits
+    /// remain advisory; `purgeMemory()` releases everything under pressure.
+    @MainActor private static let memory: NSCache<NSString, PlatformImage> = {
+        let cache = NSCache<NSString, PlatformImage>()
+        cache.totalCostLimit = 48 * 1024 * 1024
+        return cache
+    }()
     private var inFlight: [String: Task<Outcome, Never>] = [:]
     private var missing: Set<String> = []
 
@@ -64,7 +73,11 @@ final class ChatImageLoader {
         self.client = client
         self.hostID = hostID
         self.sessionKey = sessionKey
-        memory.totalCostLimit = 48 * 1024 * 1024
+    }
+
+    /// Release decoded previews; disk copies stay for a cheap reload.
+    static func purgeMemory() {
+        memory.removeAllObjects()
     }
 
     var isAvailable: Bool { client?.supportsMediaImage == true }
@@ -84,9 +97,9 @@ final class ChatImageLoader {
     func cachedImage(seq: Int, ref: String, tier: ChatImageTier) -> PlatformImage? {
         for candidate in ChatImageTier.allCases.reversed() where candidate >= tier {
             let key = cacheKey(seq: seq, ref: ref, tier: candidate)
-            if let hit = memory.object(forKey: key as NSString) { return hit }
+            if let hit = Self.memory.object(forKey: key as NSString) { return hit }
             if let data = try? Data(contentsOf: diskURL(key)), let image = Self.decode(data) {
-                memory.setObject(image, forKey: key as NSString, cost: Self.cost(of: image))
+                Self.memory.setObject(image, forKey: key as NSString, cost: Self.cost(of: image))
                 return image
             }
         }
@@ -151,7 +164,7 @@ final class ChatImageLoader {
             return .failed
         }
         ChatNetworkConditions.shared.record(bytes: data.count, seconds: Date().timeIntervalSince(started))
-        memory.setObject(image, forKey: key as NSString, cost: Self.cost(of: image))
+        Self.memory.setObject(image, forKey: key as NSString, cost: Self.cost(of: image))
         let url = diskURL(key)
         try? FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),

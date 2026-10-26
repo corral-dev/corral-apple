@@ -44,7 +44,7 @@ final class ChatMarkdownTests: XCTestCase {
         | 端 | 版本 | 状态 |
         |---|---|---|
         | 开发机 | 0.24.177 | 已发布 |
-        | iPhone Max | 1.0.44 (45) | 已装 |
+        | the paired iPhone | 1.0.44 (45) | 已装 |
         """
         let attributed = ChatMarkdown.attributed(source)
         let text = String(attributed.characters)
@@ -58,7 +58,7 @@ final class ChatMarkdownTests: XCTestCase {
         XCTAssertTrue(text.contains(" | "), "table cells need readable separators")
         XCTAssertTrue(text.contains("开发机"))
         XCTAssertTrue(text.contains("0.24.177"))
-        XCTAssertTrue(text.contains("iPhone Max"))
+        XCTAssertTrue(text.contains("the paired iPhone"))
 
         // Blocks must not collapse into one run-on line.
         let lines = text.split(whereSeparator: \.isNewline)

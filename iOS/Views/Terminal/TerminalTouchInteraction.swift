@@ -38,7 +38,7 @@ final class TerminalTouchInteraction: NSObject, UIGestureRecognizerDelegate {
 
     func reset() {
         cancelScrolling()
-        terminal?.selection?.selectNone()
+        terminal?.selectNone()
     }
 
     func cancelScrolling() {
@@ -52,7 +52,7 @@ final class TerminalTouchInteraction: NSObject, UIGestureRecognizerDelegate {
     private var forwardsWheel: Bool {
         guard let terminal else { return false }
         return terminal.canSendTouchInput && !terminal.hasActiveSelection
-            && terminal.getTerminal().mouseMode != .off
+            && (terminal.terminalInputStateSnapshot()?.mouseMode ?? .off) != .off
     }
 
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
@@ -110,7 +110,7 @@ final class TerminalTouchInteraction: NSObject, UIGestureRecognizerDelegate {
 
     private func consume(_ delta: CGFloat) {
         guard forwardsWheel, let terminal else { return }
-        let rows = max(1, terminal.getTerminal().rows)
+        let rows = max(1, terminal.terminalDimensions.rows)
         let cellHeight = terminal.getOptimalFrameSize().height / CGFloat(rows)
         guard cellHeight > 0 else { return }
         remainingTranslation += delta

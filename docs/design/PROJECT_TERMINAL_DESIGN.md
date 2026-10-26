@@ -65,7 +65,7 @@ Debug inspection (no pointer driving; hold `/tmp/corral-mac-acceptance.lock`): `
 
 - Host: CLI v0.24.266/0.24.267 (`shell.*`, security hardening); the remote service runs it. The TUI typing rule ships with v0.24.268.
 - Mac 0.3.36 (40), source `b82e165`: universal Release from an export of the commit, Developer ID signed, installed in `/Applications/Corral.app`; diagnostics read back 0.3.36 / 40, local transport ready, data attached.
-- iPhone 1.0.127 (137), same source, installed on iPhone Max and read back with `devicectl`.
+- iPhone 1.0.127 (137), same source, installed on the paired iPhone and read back with `devicectl`.
 - Verified on the real host: Mac Debug build opened a terminal pane beside two session panes in the focused project (`pwd`, output, `tput cols`), reopening reattached the same shell with its history, `exit` closed the pane, the host layout store held no `shell:` key; after scrolling back three lines and typing `clear` as key events, the view was at the bottom (scroll position 1.0) with the prompt on the top rows. iPhone same-source Debug build opened the terminal from a session in a disposable folder: command output, a 58 × 29 grid matching the phone, keyboard accessory with Esc, Ctrl, Tab and arrows; the Release build was restored afterwards.
 - Not exercised: physical keyboard and IME typing on the iPhone terminal, ⌥F12 and ⌥⌘T pressed on a physical keyboard (menu wiring built and inspected only), the busy-close confirmation, VoiceOver.
 

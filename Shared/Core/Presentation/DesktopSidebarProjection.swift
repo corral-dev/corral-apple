@@ -33,6 +33,51 @@ enum DesktopSidebarProjection {
         }
     }
 
+    /// One exact-input projection per sidebar, shared by native row callbacks.
+    /// Only the current result is retained; selection itself stays live in the view.
+    final class Cache {
+        private struct Input: Equatable {
+            let hostID: String
+            let sessions: [SessionSummary]
+            let layout: DesktopLayout
+            let filter: String
+            let now: Date
+            let calendar: Calendar
+        }
+
+        private var input: Input?
+        private var result: [Section] = []
+        private var expandedIDs: Set<String>?
+        private var visible: Set<String> = []
+        private(set) var buildCount = 0
+        private(set) var visibilityBuildCount = 0
+
+        func sections(
+            hostID: String, sessions: [SessionSummary], layout: DesktopLayout,
+            filter: String, order: inout StableOrder, now: Date, calendar: Calendar
+        ) -> [Section] {
+            let next = Input(hostID: hostID, sessions: sessions, layout: layout,
+                             filter: filter, now: now, calendar: calendar)
+            guard next != input else { return result }
+            if let input, input.hostID != hostID { order = StableOrder() }
+            result = DesktopSidebarProjection.sections(sessions: sessions, layout: layout,
+                filter: filter, order: &order, now: now, calendar: calendar)
+            input = next
+            expandedIDs = nil
+            buildCount += 1
+            return result
+        }
+
+        /// Call after sections(), including when disclosure changes alone.
+        func visibleKeys(expanding ids: Set<String>) -> Set<String> {
+            guard expandedIDs != ids else { return visible }
+            visible = Set(result.filter { ids.contains($0.id) }.flatMap(\.items).map { $0.session.key })
+            expandedIDs = ids
+            visibilityBuildCount += 1
+            return visible
+        }
+    }
+
     /// Remembers first-seen positions so live updates never reshuffle rows.
     struct StableOrder: Equatable {
         private(set) var rank: [String: Int] = [:]

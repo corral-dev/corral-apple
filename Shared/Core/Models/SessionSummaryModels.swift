@@ -70,6 +70,9 @@ nonisolated struct SessionSummary: Codable, Sendable, Identifiable, Equatable, H
     /// Host-computed TUI dot (`waiting` / `working` / `unread` / `recent` / "").
     /// Nil only for older hosts that predate the field.
     let marker: String?
+    /// Host-computed Focus filter membership (`needs_attention`). Nil only for
+    /// older hosts; `SessionListFiltering` then falls back to the same rule.
+    let needsAttention: Bool?
     let completionID: String
 
     var id: String { key }
@@ -86,6 +89,7 @@ nonisolated struct SessionSummary: Codable, Sendable, Identifiable, Equatable, H
         case lastUser = "last_user"
         case lastAgent = "last_agent"
         case rich, group, pinned, marker
+        case needsAttention = "needs_attention"
         case completionID = "completion_id"
     }
 
@@ -110,6 +114,7 @@ nonisolated struct SessionSummary: Codable, Sendable, Identifiable, Equatable, H
         group: SessionGroupInfo? = nil,
         pinned: Bool? = nil,
         marker: String? = nil,
+        needsAttention: Bool? = nil,
         completionID: String = ""
     ) {
         self.key = key
@@ -132,6 +137,7 @@ nonisolated struct SessionSummary: Codable, Sendable, Identifiable, Equatable, H
         self.group = group
         self.pinned = pinned
         self.marker = marker
+        self.needsAttention = needsAttention
         self.completionID = completionID
     }
 
@@ -159,6 +165,7 @@ nonisolated struct SessionSummary: Codable, Sendable, Identifiable, Equatable, H
             group: group,
             pinned: pinned,
             marker: marker,
+            needsAttention: needsAttention,
             completionID: completionID
         )
     }
@@ -199,6 +206,11 @@ nonisolated struct SessionSummary: Codable, Sendable, Identifiable, Equatable, H
             pinned = nil
         }
         marker = container.decodeFlexibleOptionalString(forKey: .marker)
+        if container.contains(.needsAttention) {
+            needsAttention = container.decodeFlexibleBool(forKey: .needsAttention)
+        } else {
+            needsAttention = nil
+        }
         completionID = container.decodeFlexibleString(forKey: .completionID)
     }
 }

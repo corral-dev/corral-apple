@@ -155,4 +155,109 @@ final class RemoteClientLifecycleTests: XCTestCase {
         }
         XCTAssertEqual(client.pendingRequests.count, 1, "The control-plane request stays pending")
     }
+
+    // MARK: - Bounded multicast delivery (memory slice 2026-10-25)
+
+    func testEventSizingCountsLargeStringBodies() {
+        let payload: [String: Any] = [
+            "kind": "patch",
+            "sessions": [["title": String(repeating: "x", count: 4_096)]],
+        ]
+        XCTAssertGreaterThan(RemoteEventSizing.estimatedBytes(of: payload), 4_096)
+    }
+
+    func testSlowSubscriberRetainsABoundedWindowAndOneResyncMarker() async throws {
+        let client = RemoteClient(devicePrivateKey: Data(repeating: 0, count: 32))
+        let events = client.subscribeAll()
+        // The main actor is busy dispatching, so this consumer cannot drain yet.
+        for index in 0..<100 {
+            client.dispatch(["t": "evt", "c": "sessions", "d": ["kind": "patch", "index": index]])
+        }
+        XCTAssertEqual(client.diagnostics.counters["eventGap", default: 0], 1,
+                       "One coalesced gap report for the flooded subscriber")
+        XCTAssertEqual(client.diagnosticState.subscriptions, 1)
+
+        let reader = resyncReader(events)
+        let received = await reader.value
+
+        XCTAssertEqual(received.count, 1, "Only the coalesced marker survives the flood")
+        XCTAssertEqual(received.first?.data["resync"] as? Bool, true)
+        XCTAssertGreaterThan(received.first?.data["dropped"] as? Int ?? 0, 0)
+        client.disconnect()
+    }
+
+    func testGapMarkerArrivesOnTheChannelThatLostEvents() async {
+        let client = RemoteClient(devicePrivateKey: Data(repeating: 0, count: 32))
+        let events = client.subscribe(channel: "term:abc")
+        for index in 0..<60 {
+            client.dispatch(["t": "evt", "c": "term:abc", "d": ["kind": "output", "seq": index]])
+        }
+        let reader = resyncReader(events)
+        let received = await reader.value
+
+        XCTAssertEqual(received.count, 1)
+        XCTAssertEqual(received.last?.channel, "term:abc")
+        XCTAssertEqual(received.last?.data["resync"] as? Bool, true)
+        client.disconnect()
+    }
+
+    func testASlowChannelDoesNotGapAnIdleChannel() async {
+        let client = RemoteClient(devicePrivateKey: Data(repeating: 0, count: 32))
+        defer { client.disconnect() }
+        _ = client.subscribe(channel: "sessions")
+        let fast = client.subscribe(channel: "session:k")
+        for index in 0..<60 {
+            client.dispatch(["t": "evt", "c": "sessions", "d": ["kind": "patch", "index": index]])
+        }
+        client.dispatch(["t": "evt", "c": "session:k", "d": ["kind": "attention", "attention": "unread"]])
+
+        let first = await Task { @MainActor () -> RemoteEvent? in
+            for await event in fast { return event }
+            return nil
+        }.value
+        XCTAssertEqual(first?.channel, "session:k")
+        XCTAssertEqual(first?.data["kind"] as? String, "attention")
+    }
+
+    func testGapRecoveryNotificationIsCoalesced() async throws {
+        let client = RemoteClient(devicePrivateKey: Data(repeating: 0, count: 32))
+        defer { client.disconnect() }
+        var ready = 0
+        client.addReadyHandler { ready += 1 }
+        _ = client.subscribe(channel: "sessions")
+
+        for index in 0..<40 {
+            client.dispatch(["t": "evt", "c": "sessions", "d": ["kind": "patch", "index": index]])
+        }
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(ready, 1, "One resync for the first gap")
+
+        for index in 0..<40 {
+            client.dispatch(["t": "evt", "c": "sessions", "d": ["kind": "patch", "index": index + 40]])
+        }
+        XCTAssertEqual(ready, 1, "A second gap within the spacing window is coalesced")
+    }
+
+    func testDisconnectFinishesBoundedSubscribers() async {
+        let client = RemoteClient(devicePrivateKey: Data(repeating: 0, count: 32))
+        let events = client.subscribeAll()
+        client.disconnect()
+        var received = 0
+        for await _ in events { received += 1 }
+        XCTAssertEqual(received, 0)
+        XCTAssertEqual(client.diagnosticState.subscriptions, 0)
+    }
+
+    /// Collects events until the coalesced marker, or until the stream finishes.
+    private func resyncReader(_ stream: AsyncStream<RemoteEvent>) -> Task<[RemoteEvent], Never> {
+        Task { @MainActor in
+            var received: [RemoteEvent] = []
+            for await event in stream {
+                received.append(event)
+                if event.data["resync"] as? Bool == true { break }
+                if received.count > RemoteEventDelivery.capacity + 1 { break }
+            }
+            return received
+        }
+    }
 }

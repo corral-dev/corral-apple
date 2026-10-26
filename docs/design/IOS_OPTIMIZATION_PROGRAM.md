@@ -53,7 +53,7 @@
 - 手机端收包、解密、解码仍主要在连接对象上完成后再交给界面；新客户端会再开一条数据连接承载历史页和终端画面，旧客户端仍单连接。
 - 已有的正确方向不能被“优化”掉：本地快照先显示、版本不变不清空、事件合并、序号去重、终端空白格跳过绘制、发送前登记等待、局域网与中继竞速、重连时保留已有内容，以及禁止发送 `screen.resize`。
 - **2026-08-30 已闭合（CLI 0.24.150 / iOS 1.0.11）**：JSONL 与 Cursor 第一次打开只读尾部；换网按序号补缺口；新手机控制/数据分两条连接。Kimi / OpenCode / Pi 仍走各自整段会话读取，不是这条尾部偏移路径。
-- 仍未闭合：有限优先级背压、手机端后台解密/解码、连接路径与恢复过程的可观测性。真机换网与超大历史体感仍须在 iPhone Max 上点一次确认。
+- 仍未闭合：有限优先级背压、手机端后台解密/解码、连接路径与恢复过程的可观测性。真机换网与超大历史体感仍须在 the paired iPhone 上点一次确认。
 - iOS 基线要求通知权限不要在应用刚出现时打断用户；当前启动流程仍需由专项确认合适的请求时机。
 
 ### 2.1 目前最值得先验证的瓶颈
@@ -73,9 +73,9 @@
 - [手机客户端职责与验收入口](../../AGENTS.md)
 - [手机客户端界面知识库](../UI_DESIGN_KNOWLEDGE_BASE.md)
 - [手机客户端性能知识库](../PERFORMANCE_KNOWLEDGE_BASE.md)
-- [移动端数据面设计](../../../cli/docs/design/MOBILE_REMOTE_DATA_PLANE_DESIGN.md)
-- [远程接力知识库](../../../cli/docs/REMOTE_KNOWLEDGE_BASE.md)
-- [中继协议 v2](../../../relay/docs/PROTOCOL_V2.md)
+- [移动端数据面设计](../https://github.com/corral-dev/corral/blob/main/docs/design/MOBILE_REMOTE_DATA_PLANE_DESIGN.md)
+- [远程接力知识库](../https://github.com/corral-dev/corral/blob/main/docs/REMOTE_KNOWLEDGE_BASE.md)
+- [中继协议 v2](https://github.com/corral-dev/corral-relay/blob/main/docs/PROTOCOL_V2.md)
 
 ## 3. 建议成立的专项优化小组
 
@@ -227,9 +227,9 @@
 - [iOS 项目入口与真机验收](../../AGENTS.md)
 - [UI 设计知识库](../UI_DESIGN_KNOWLEDGE_BASE.md)
 - [性能知识库](../PERFORMANCE_KNOWLEDGE_BASE.md)
-- [移动端数据面设计](../../../cli/docs/design/MOBILE_REMOTE_DATA_PLANE_DESIGN.md)
-- [远程接力知识库](../../../cli/docs/REMOTE_KNOWLEDGE_BASE.md)
-- [中继协议 v2](../../../relay/docs/PROTOCOL_V2.md)
+- [移动端数据面设计](../https://github.com/corral-dev/corral/blob/main/docs/design/MOBILE_REMOTE_DATA_PLANE_DESIGN.md)
+- [远程接力知识库](../https://github.com/corral-dev/corral/blob/main/docs/REMOTE_KNOWLEDGE_BASE.md)
+- [中继协议 v2](https://github.com/corral-dev/corral-relay/blob/main/docs/PROTOCOL_V2.md)
 
 ### 官方与同类实现
 
@@ -300,7 +300,7 @@ Verification remains separate: regression tests cover stale physical-connection 
   placeholder policy are pure Foundation logic covered without UIKit, simulator,
   or APNs. Device-path evidence
   (cold-launch tap, background tap, cross-host reply, reconnect races) remains
-  coordinator-run on iPhone Max.
+  coordinator-run on the paired iPhone.
 
 ## Review verification (2026-09-30)
 
@@ -315,18 +315,18 @@ Verification remains separate: regression tests cover stale physical-connection 
   `build-for-testing`. Both bundles report 1.0.71 (81), with valid signatures.
   The Release app's actual `aps-environment` is `development`, so its token must
   be registered as sandbox even though the build configuration is Release.
-- At validation time iPhone Max is unavailable; the paired iPad requires a
+- At validation time the paired iPhone is unavailable; the paired iPad requires a
   passcode. Cross-host switching, notification taps/replies, offline navigation,
   question interaction, and partial image failure still need physical-device
   evidence. Direct installation and AppShelf publication have separate outcomes.
 - General asynchronous ownership and signing lessons are maintained in the
-  [shared Swift client integration guide](../../../../_standards/workspace-docs/swift-docs/client-backend-integration.md).
+  shared Swift client integration guide (maintainer reference, not distributed).
 
 Delivery evidence: commit `890fc83` is pushed to `main`; the published
-[v1.0.71 release](https://forgejo.caozc.top/Max/corral-ios/releases/tag/v1.0.71)
+v1.0.71 release
 points to that exact commit. The signed IPA is published at
-[AppShelf](https://apps.caozc.com/a/corral), with a server receipt matching bundle
-`com.x0c.corral`, version 1.0.71, build 81 (release 123). Direct iPhone Max
+the internal install shelf, with a server receipt matching bundle
+`com.x0c.corral`, version 1.0.71, build 81 (release 123). Direct the paired iPhone
 installation returned `device_unavailable`; no installed-version readback,
 launch, screenshot, or phone interaction was obtained. Hosted tests on the
 paired iPad stopped at "Unlock iPad to Continue" before test execution; no
@@ -376,20 +376,20 @@ The integrated source `94c10dc` passes the complete generic-iOS hosted `build-fo
 
 The installed Mac was subsequently advanced by parallel work to 0.3.9 (13), which includes the diagnostics. Its actual installed process passed the reader's confirmed-data health check: ready local control, acknowledged data, zero pending waits and zero scheduled retries. A later absent/newly replaced process correctly failed verification. This establishes real diagnostic behavior, not sustained connectivity under concurrent Debug clients. The earlier installed Mac window was inspected; final-window captures failed while parallel acceptance replaced/closed windows, so no new visual proof is claimed.
 
-iPhone app inventory independently confirms installed 1.0.108 (118), and AppShelf independently confirms release 202 at <https://apps.caozc.com/a/corral>. The device requires its passcode: latest launch/runtime and screen acceptance remain unverified. Existing physical-device reports from 1.0.106/107 were copied and parsed, with stale evidence rejected and phone PIDs deliberately unverified on the Mac. No simulator was used.
+iPhone app inventory independently confirms installed 1.0.108 (118), and AppShelf independently confirms release 202 at . The device requires its passcode: latest launch/runtime and screen acceptance remain unverified. Existing physical-device reports from 1.0.106/107 were copied and parsed, with stale evidence rejected and phone PIDs deliberately unverified on the Mac. No simulator was used.
 
 An independent fresh-Agent usability evaluation was not run: the current task does not authorize worker delegation. Primary-model contract checks and real-client reads were performed instead; do not label these as an independent usability evaluation. The remaining development obstacle is concurrent Debug pairing/socket interference, tracked above; this bounded diagnostic delivery does not claim that all development friction has been eliminated.
 
 
 ## Creation and input outcome reliability (2026-10-09)
 
-Owner-approved shared iPhone/Mac correction: retain a durable creation identity before calling the host and reuse it after a transport failure; reconcile the same request instead of launching another empty session. Poll accepted/dispatching text receipts until the host establishes native acceptance or a useful uncertain/failure outcome. Cancel provisional Working on failure/uncertainty and retain the original outgoing instruction for review. Existing native New Session `Button`, `ProgressView` and error text remain the interface; no extra confirmation step is introduced. Host semantics and acceptance matrix are owned by [the mobile data plane design](../../../cli/docs/design/MOBILE_REMOTE_DATA_PLANE_DESIGN.md#10-creation-and-first-input-reliability-2026-10-09).
+Owner-approved shared iPhone/Mac correction: retain a durable creation identity before calling the host and reuse it after a transport failure; reconcile the same request instead of launching another empty session. Poll accepted/dispatching text receipts until the host establishes native acceptance or a useful uncertain/failure outcome. Cancel provisional Working on failure/uncertainty and retain the original outgoing instruction for review. Existing native New Session `Button`, `ProgressView` and error text remain the interface; no extra confirmation step is introduced. Host semantics and acceptance matrix are owned by [the mobile data plane design](../https://github.com/corral-dev/corral/blob/main/docs/design/MOBILE_REMOTE_DATA_PLANE_DESIGN.md#10-creation-and-first-input-reliability-2026-10-09).
 
 The Mac workspace assistant shortcut must use the same creation coordinator as New Session. A host/client switch while creation awaits must not open the result in another machine’s workspace; the original durable operation remains recoverable.
 
 
 Validation: 362 portable Core tests pass, including a real ConversationStore polling task resolving accepted to reviewable unknown while its connection remains open. Core compilation has no new warnings; native lifecycle/selection probes and localization coverage pass. Fresh generic-device iOS and native Mac Release builds include these changes. The existing native font/paragraph, serial camera queue, terminal trait and App Intents warnings retain the individual origin/risk/follow-up assessments in [New Session diagnostic review](../PERFORMANCE_KNOWLEDGE_BASE.md#new-session-delivery-diagnostic-review); no warning suppression was introduced. The Mac is locked during SSH work, so physical window and phone gesture/error presentation remain unverified. Build/logic checks are not physical acceptance.
 
-Delivery: shared source `6965329` is pushed/tagged as iPhone 1.0.138 (148) and Mac 0.3.60 (64). AppShelf release 227 holds the signature/profile-verified iPhone artifact at [Corral](https://apps.caozc.com/a/corral); paired-device installation/launch failed independently with `device_unavailable`. Mac 0.3.60 is installed from the signed universal export and the actual process is ready over local control with data attached after the CLI 0.24.276 host restart. This proves installation/connectivity, not physical New Session or receipt-error interaction. Distribution follow-up is tracked in [Mac distribution](MACOS_CLIENT_DESIGN.md#distribution-and-software-updates).
+Delivery: shared source `6965329` is pushed/tagged as iPhone 1.0.138 (148) and Mac 0.3.60 (64). AppShelf release 227 holds the signature/profile-verified iPhone artifact at the internal install page; paired-device installation/launch failed independently with `device_unavailable`. Mac 0.3.60 is installed from the signed universal export and the actual process is ready over local control with data attached after the CLI 0.24.276 host restart. This proves installation/connectivity, not physical New Session or receipt-error interaction. Distribution follow-up is tracked in [Mac distribution](MACOS_CLIENT_DESIGN.md#distribution-and-software-updates).
 
 <!-- 该文档整理/压缩于 2026-10-20 -->

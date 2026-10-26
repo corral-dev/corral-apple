@@ -64,8 +64,27 @@ struct Probe {
         let laterMenu = NSMenu(title: "New context menu")
         NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: laterMenu)
         precondition(laterMenu.font.pointSize == 21)
+        let zoomIn = commandMenu.addItem(withTitle: "Zoom In", action: nil, keyEquivalent: "+")
+        zoomIn.keyEquivalentModifierMask = .command
+        MacZoomKeyAlias.shared.configure(zoom: zoom)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        let before = MacZoomKeyAlias.shared.reconciliationCount
+        for _ in 0..<500 {
+            NotificationCenter.default.post(name: NSMenu.didAddItemNotification, object: commandMenu)
+            NotificationCenter.default.post(name: NSMenu.didRemoveItemNotification, object: commandMenu)
+        }
+        precondition(MacZoomKeyAlias.shared.reconciliationCount == before)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        precondition(MacZoomKeyAlias.shared.reconciliationCount == before + 1)
+        let aliases = commandMenu.items.filter { $0.keyEquivalent == "=" && $0.isHidden }
+        precondition(aliases.count == 1 && aliases[0].allowsKeyEquivalentWhenHidden)
+        commandMenu.removeItem(aliases[0])
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        precondition(commandMenu.items.filter { $0.keyEquivalent == "=" && $0.isHidden }.count == 1)
+        precondition(MacZoomKeyAlias.shared.reconciliationCount == before + 2,
+                     "Inserting our own alias must not schedule a second reconciliation")
         NSApp.mainMenu = nil
-        print("PASS popup/context/submenu fonts at 80/100/120/150%, late menus and native menu-bar isolation")
+        print("PASS popup/context/submenu fonts, 1000 coalesced menu notifications and alias replacement")
 
         let context = EnvironmentValues().fontResolutionContext
         let font = Font.body.monospaced().weight(.semibold).italic()

@@ -19,6 +19,7 @@ with tempfile.TemporaryDirectory(prefix="corral-mac-session-switch-") as directo
         "-DDEBUG", "-parse-as-library", str(ROOT / "macOS/Panes/MacPaneSurface.swift"),
         str(ROOT / "macOS/Panes/EqualPaneLayout.swift"),
         str(ROOT / "Shared/UI/Chat/MacConversationTextDocument.swift"),
+        str(ROOT / "Shared/UI/Platform/MacSessionContextMenu.swift"),
         str(combined), "-o", binary,
     ], check=True)
     subprocess.run([binary], check=True)

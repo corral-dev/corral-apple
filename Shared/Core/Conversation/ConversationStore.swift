@@ -108,6 +108,8 @@ final class ConversationStore {
     private var readyHandlerID: UUID?
     private var catchUpTask: Task<Void, Never>?
     private var catchUpRequested = false
+    /// The next catch-up must not trust the local resume cursor (event gap).
+    private var catchUpFullSnapshot = false
     /// 将一批实时增量收敛为一次提示选项查询，避免每条消息都占用同一条远程连接。
     private var promptRefreshTask: Task<Void, Never>?
     /// 上次成功应用到的历史代次；重连时带给开发机，对不上则改取尾部。
@@ -707,9 +709,12 @@ final class ConversationStore {
         }
     }
 
-    private func requestCatchUp() {
+    /// A gap lost events: the local resume cursor cannot be trusted, so the
+    /// catch-up asks for the authoritative tail instead of "after newest".
+    private func requestCatchUp(fullSnapshot: Bool = false) {
         guard !hasStopped, client != nil else { return }
         catchUpRequested = true
+        if fullSnapshot { catchUpFullSnapshot = true }
         guard catchUpTask == nil else { return }
         let revision = lifecycleRevision
         catchUpTask = Task { [weak self] in
@@ -720,16 +725,18 @@ final class ConversationStore {
             while self.catchUpRequested, !self.hasStopped,
                   self.lifecycleRevision == revision, !Task.isCancelled {
                 self.catchUpRequested = false
-                await self.repullAfterReconnect()
+                let full = self.catchUpFullSnapshot
+                self.catchUpFullSnapshot = false
+                await self.repullAfterReconnect(fullSnapshot: full)
             }
         }
     }
 
-    private func repullAfterReconnect() async {
+    private func repullAfterReconnect(fullSnapshot: Bool = false) async {
         guard let client, !hasStopped else { return }
         let revision = lifecycleRevision
         // 本地 AsyncStream 订阅在重连时保留；只需重新向服务端登记 watch。
-        await pullSnapshot(client, resumeCursor: true)
+        await pullSnapshot(client, resumeCursor: !fullSnapshot)
         guard lifecycleRevision == revision, !hasStopped, !Task.isCancelled else { return }
         await reconcilePendingCommands(client)
         guard lifecycleRevision == revision, !hasStopped, !Task.isCancelled else { return }
@@ -1046,6 +1053,12 @@ final class ConversationStore {
 
     func handle(_ event: RemoteEvent) async {
         guard !hasStopped else { return }
+        // A coalesced gap marker: the subscriber lost events, so pull the
+        // authoritative tail instead of merging a partial sequence.
+        if event.data["resync"] as? Bool == true {
+            requestCatchUp(fullSnapshot: true)
+            return
+        }
         if let eventSession = event.data["session"] as? String, eventSession != sessionKey {
             return
         }

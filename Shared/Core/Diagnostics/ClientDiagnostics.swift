@@ -7,6 +7,10 @@ nonisolated enum ClientDiagnosticEvent: String, Codable, Sendable {
     case disconnected, socketTeardown, planeFailed, reconnectScheduled
     case dataAttached, dataAttachFailed, dataRetryScheduled, dataRetryExhausted
     case responseReceived, responseRejected, orphanResponse, malformedResponse, slowRequest
+    /// One plane's bounded outgoing queue rejected a frame; the plane resets.
+    case planeOverload
+    /// A slow event subscriber lost events and receives a coalesced resync marker.
+    case eventGap
 }
 
 nonisolated enum ClientDiagnosticFailure: String, Codable, Sendable {

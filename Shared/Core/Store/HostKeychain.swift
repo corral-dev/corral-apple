@@ -5,15 +5,30 @@ nonisolated enum HostKeychainError: Error, Sendable {
     case invalidKeyLength
     case keychainReadFailed(OSStatus)
     case keychainWriteFailed(OSStatus)
+    case missingAccessGroup
 }
 
 /// Keychain 共享读写：设备私钥与开发机公钥，供主 App 与通知服务扩展共用。
 ///
-/// access group 必须写死团队前缀——`$(AppIdentifierPrefix)` 只在 entitlements / Info.plist
-/// 里由 Xcode 展开，Swift 源码里写这串会被当成字面量，两边永远对不上。
+/// access group 来自主 target Info.plist 的 `CorralKeychainAccessGroup`
+///（Xcode 以 `$(AppIdentifierPrefix)$(CORRAL_KEYCHAIN_GROUP)` 展开，与各
+/// target entitlements 里的 keychain-access-groups 保持一致）。Swift 里不
+/// 写死任何团队前缀，也不写 `$(...)` 字面量：取不到、为空或未展开时直接
+/// 抛 `missingAccessGroup`，绝不回退到无 group 的默认钥匙串分区。
 nonisolated enum HostKeychain {
-    /// 与 entitlements 里 `$(AppIdentifierPrefix)com.x0c.corral` 展开后一致。
-    static let accessGroup = "SHZQ3MWP3B.com.x0c.corral"
+    /// Build-expanded keychain access group shared with the notification extension.
+    /// Missing, empty or unresolved values fail closed: callers never read from
+    /// or write to the default keychain group.
+    static var accessGroup: String {
+        get throws {
+            guard let group = Bundle.main.object(forInfoDictionaryKey: "CorralKeychainAccessGroup") as? String,
+                  !group.isEmpty,
+                  !group.contains("$") else {
+                throw HostKeychainError.missingAccessGroup
+            }
+            return group
+        }
+    }
     static let deviceService = "sh.corral.device.identity"
     static let deviceAccount = "x25519"
     static let hostService = "sh.corral.host.public"
@@ -54,12 +69,17 @@ nonisolated enum HostKeychain {
     }
 
     static func removeHostPublicKey(hostID: String) {
-        let query: [String: Any] = [
+        guard let query = try? scoped([
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: hostService,
             kSecAttrAccount as String: hostID,
-        ]
-        SecItemDelete(scoped(query) as CFDictionary)
+        ]) else {
+            // Fail closed without throwing: never delete from the default
+            // group when the shared group is unconfigured. Loud in Debug.
+            assertionFailure("CorralKeychainAccessGroup missing or unresolved")
+            return
+        }
+        SecItemDelete(query as CFDictionary)
     }
 
     private static func readGeneric(service: String, account: String) throws -> Data? {
@@ -71,7 +91,7 @@ nonisolated enum HostKeychain {
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
         var item: CFTypeRef?
-        let status = SecItemCopyMatching(scoped(query) as CFDictionary, &item)
+        let status = SecItemCopyMatching(try scoped(query) as CFDictionary, &item)
         if status == errSecItemNotFound { return nil }
         guard status == errSecSuccess, let data = item as? Data else {
             throw HostKeychainError.keychainReadFailed(status)
@@ -80,7 +100,7 @@ nonisolated enum HostKeychain {
     }
 
     private static func saveGeneric(service: String, account: String, data: Data) throws {
-        let query = scoped([
+        let query = try scoped([
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
@@ -99,10 +119,10 @@ nonisolated enum HostKeychain {
     /// group. The Mac app has no extension: its items live in the login keychain,
     /// partitioned to the app's own Developer ID signature (no access group or
     /// data-protection entitlement, which would require a provisioning profile).
-    private static func scoped(_ query: [String: Any]) -> [String: Any] {
+    private static func scoped(_ query: [String: Any]) throws -> [String: Any] {
         #if os(iOS)
         var query = query
-        query[kSecAttrAccessGroup as String] = accessGroup
+        query[kSecAttrAccessGroup as String] = try accessGroup
         return query
         #else
         return query

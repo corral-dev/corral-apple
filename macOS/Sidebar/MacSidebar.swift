@@ -16,7 +16,7 @@ struct MacSidebar: View {
     @State private var filter = ""
     @State private var sectionExpansion: [String: Bool] = [:]
     @State private var filteredSectionExpansion: [String: Bool] = [:]
-    @State private var activeOnly = false
+    @State private var attentionOnly = false
     @State private var runtimeFilter: Set<SessionRuntimeFilter> = []
     @State private var projectFilter: Set<SessionProjectFilter> = []
     @State private var orderBox = OrderBox()
@@ -37,15 +37,16 @@ struct MacSidebar: View {
     /// without triggering another render pass.
     final class OrderBox {
         var order = DesktopSidebarProjection.StableOrder()
+        let projection = DesktopSidebarProjection.Cache()
     }
 
     private var sessions: [SessionSummary] { feed.listStore.windowSessions }
     private var filteredSessions: [SessionSummary] {
         SessionListFiltering.apply(sessions: sessions, runtimes: runtimeFilter, projects: projectFilter,
-                                   activeOnly: activeOnly)
+                                   attentionOnly: attentionOnly)
     }
     private var hasActiveScope: Bool {
-        !filter.isEmpty || activeOnly || !runtimeFilter.isEmpty || !projectFilter.isEmpty
+        !filter.isEmpty || attentionOnly || !runtimeFilter.isEmpty || !projectFilter.isEmpty
     }
 
     var body: some View {
@@ -61,7 +62,7 @@ struct MacSidebar: View {
                 #if DEBUG
                   if ProcessInfo.processInfo.arguments.contains("-CorralInspectSearchNavigation") {
                       filter = "__corral_navigation_conflicting_filter__"
-                      activeOnly = true
+                      attentionOnly = true
                   }
                   if ProcessInfo.processInfo.arguments.contains("-CorralInspectPaneSelection") {
                       await inspectPaneSelection()
@@ -121,7 +122,7 @@ struct MacSidebar: View {
             .searchable(text: $filter, placement: .sidebar, prompt: Text("mac.sidebar.filter"))
             .onChange(of: feed.host.id) { _, _ in
                 filter = ""
-                activeOnly = false
+                attentionOnly = false
                 runtimeFilter.removeAll()
                 projectFilter.removeAll()
                 sectionExpansion.removeAll()
@@ -164,8 +165,8 @@ struct MacSidebar: View {
             .safeAreaBar(edge: .top, spacing: 0) {
                 MacSidebarFilters(
                     sessions: sessions,
-                    activeCount: SessionListFiltering.activeCount(sessions: sessions),
-                    activeOnly: $activeOnly, runtimes: $runtimeFilter, projects: $projectFilter
+                    attentionCount: SessionListFiltering.attentionCount(sessions: sessions),
+                    attentionOnly: $attentionOnly, runtimes: $runtimeFilter, projects: $projectFilter
                 )
                     .id(feed.host.id)
                     .modifier(MacZoomContent())
@@ -369,11 +370,11 @@ struct MacSidebar: View {
               let session = feed.listStore.session(for: key) else { return nil }
         if !DesktopSidebarProjection.matches(session, filter: filter) { filter = "" }
         if SessionListFiltering.apply(sessions: [session], runtimes: runtimeFilter,
-                                      projects: [], activeOnly: false).isEmpty { runtimeFilter = [] }
+                                      projects: [], attentionOnly: false).isEmpty { runtimeFilter = [] }
         if SessionListFiltering.apply(sessions: [session], runtimes: [],
-                                      projects: projectFilter, activeOnly: false).isEmpty { projectFilter = [] }
+                                      projects: projectFilter, attentionOnly: false).isEmpty { projectFilter = [] }
         if SessionListFiltering.apply(sessions: [session], runtimes: [],
-                                      projects: [], activeOnly: activeOnly).isEmpty { activeOnly = false }
+                                      projects: [], attentionOnly: attentionOnly).isEmpty { attentionOnly = false }
         guard let section = sidebarSections.first(where: { $0.items.contains { $0.session.key == key } }) else { return nil }
         if hasActiveScope { filteredSectionExpansion[section.id] = true }
         else {
@@ -400,7 +401,7 @@ struct MacSidebar: View {
             "selected": selectedKeys == [key],
             "nativeSelected": state?.selected == true,
             "rowVisible": state?.visible == true,
-            "conflictingFiltersCleared": filter.isEmpty && !activeOnly,
+            "conflictingFiltersCleared": filter.isEmpty && !attentionOnly,
         ]
     }
     #endif
@@ -464,8 +465,11 @@ struct MacSidebar: View {
             #endif
     }
 
+    /// Per split row: look members up by key. Filtering the whole window list
+    /// here cost every sidebar update rows × sessions (2026-10-25 profile).
     private func splitHelp(_ split: DesktopGroup) -> String {
-        let members = sessions.filter { split.members.contains($0.key) }
+        let members = split.members.compactMap { feed.listStore.session(for: $0) }
+            .filter(ActiveRuntimeVisibility.isListVisible)
         let path = split.project.isEmpty ? (members.first?.cwd ?? "") : split.project
         return ([String(localized: "mac.group.split"), path]
             + members.map { SessionPresentation.displayTitle(for: $0) })
@@ -588,14 +592,16 @@ struct MacSidebar: View {
     // MARK: - Selection and expansion
 
     private var sidebarSections: [DesktopSidebarProjection.Section] {
-        DesktopSidebarProjection.sections(
+        orderBox.projection.sections(
+            hostID: feed.host.hostID,
             sessions: filteredSessions, layout: sidebarLayout, filter: filter, order: &orderBox.order,
             now: feed.listStore.presentationDate, calendar: feed.listStore.presentationCalendar
         )
     }
 
     private var visibleKeys: Set<String> {
-        Set(sidebarSections.filter { expansion(for: $0).wrappedValue }.flatMap(\.items).map { $0.session.key })
+        let expanded = Set(sidebarSections.filter { expansion(for: $0).wrappedValue }.map(\.id))
+        return orderBox.projection.visibleKeys(expanding: expanded)
     }
 
     private var selectedSessions: [SessionSummary] { orderedSessions(for: selectedKeys) }

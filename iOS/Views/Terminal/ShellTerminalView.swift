@@ -48,6 +48,7 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
     override init(frame: CGRect) {
         super.init(frame: frame, font: UIFont.monospacedSystemFont(ofSize: Self.fontSize, weight: .regular))
         terminalDelegate = self
+        changeScrollback(10_000)
         touchInteraction = TerminalTouchInteraction(terminal: self)
         applyScheme()
         registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: ShellTerminalHost, _: UITraitCollection) in
@@ -154,7 +155,7 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
 
     @objc private func deliverFit() {
         guard presented, !feedingHost, bounds.width > 0, bounds.height > 0 else { return }
-        let emulator = getTerminal()
+        let emulator = terminalDimensions
         let optimal = getOptimalFrameSize()
         let cellWidth = optimal.width / CGFloat(max(1, emulator.cols))
         let cellHeight = optimal.height / CGFloat(max(1, emulator.rows))
@@ -171,15 +172,22 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
 
     // MARK: - TerminalStreamSink
 
+    /// Grid of the last host snapshot; the emulator may already have re-wrapped
+    /// itself to new bounds, so a reader's row is compared against this.
+    private var hostGrid: TerminalGrid?
+
     func terminalReset(grid: TerminalGrid, data: Data) {
         feedingHost = true
         defer { feedingHost = false }
-        let emulator = getTerminal()
-        preservingViewportDuringSnapshot {
+        let emulator = terminalDimensions
+        let hostGridChanged = hostGrid.map { $0 != grid } ?? false
+        hostGrid = grid
+        touchInteraction?.cancelScrolling()
+        preservingViewportDuringSnapshot(hostGridChanged: hostGridChanged) {
             if emulator.cols != grid.cols || emulator.rows != grid.rows {
                 resize(cols: grid.cols, rows: grid.rows)
             }
-            emulator.resetToInitialState()
+            resetToInitialState()
             feedFromHost(data)
         }
     }
@@ -198,23 +206,27 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
     /// Replies the emulator produces while drawing host output are dropped:
     /// tmux already answered the shell's terminal queries.
     /// A reset or alternate-screen switch replaces the selected document.
-    override func bufferActivated(source: Terminal) {
-        touchInteraction?.cancelScrolling()
-        selection?.selectNone()
+    nonisolated override func bufferActivated(source: Terminal) {
         super.bufferActivated(source: source)
+        Task { @MainActor [weak self] in
+            self?.touchInteraction?.cancelScrolling()
+            self?.selectNone()
+        }
     }
 
     /// SwiftTerm's default iOS mouse pan sends button press/drag events. A
     /// phone browsing gesture is a wheel instead; clicks keep the native path.
-    override func mouseModeChanged(source: Terminal) {
-        touchInteraction?.cancelScrolling()
+    nonisolated override func mouseModeChanged(source: Terminal) {
+        super.mouseModeChanged(source: source)
+        Task { @MainActor [weak self] in self?.touchInteraction?.cancelScrolling() }
     }
 
-    override func selectionChanged(source: Terminal) {
-        // Local selection must win over an application's mouse tracking, so
-        // tapping outside it cancels locally rather than clicking the agent.
-        allowMouseReporting = !(selection?.active ?? false)
+    nonisolated override func selectionChanged(source: Terminal) {
         super.selectionChanged(source: source)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.allowMouseReporting = !self.selectionActive
+        }
     }
 
     var canSendTouchInput: Bool { presented && allowsInput && stream?.phase == .live }
@@ -223,8 +235,8 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
     /// input queue. One frame is one batch, without returning history to live.
     func sendTouchScroll(lines: Int, at point: CGPoint) {
         guard canSendTouchInput, !hasActiveSelection, lines != 0 else { return }
-        let emulator = getTerminal()
-        guard emulator.mouseMode != .off else { return }
+        let emulator = terminalDimensions
+        guard (terminalInputStateSnapshot()?.mouseMode ?? .off) != .off else { return }
         let optimal = getOptimalFrameSize()
         let cellWidth = optimal.width / CGFloat(max(1, emulator.cols))
         let cellHeight = optimal.height / CGFloat(max(1, emulator.rows))
@@ -233,23 +245,30 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
         let y = max(0, min(bounds.height - 1, point.y - bounds.minY))
         let col = min(emulator.cols - 1, Int(x / cellWidth))
         let row = min(emulator.rows - 1, Int(y / cellHeight))
-        let flags = emulator.encodeButton(button: lines > 0 ? 4 : 5, release: false,
-                                          shift: false, meta: false, control: false)
         wheelBytes = []
         defer { wheelBytes = nil }
         for _ in 0..<min(abs(lines), 24) {
-            emulator.sendEvent(buttonFlags: flags, x: col, y: row, pixelX: Int(x), pixelY: Int(y))
+            sendMouseEvent(button: lines > 0 ? 4 : 5, release: false,
+                           col: col, row: row, pixelX: Int(x), pixelY: Int(y))
         }
         if let bytes = wheelBytes, !bytes.isEmpty { stream?.input.send(bytes[...]) }
     }
 
-    override func send(source: Terminal, data: ArraySlice<UInt8>) {
-        guard !feedingHost, presented, allowsInput, stream?.phase == .live else { return }
-        if wheelBytes != nil {
-            wheelBytes?.append(contentsOf: data)
-            return
+    /// SwiftTerm 1.99 sends parser replies and tap reports through this one
+    /// callback. Replies arise only while host output is parsed, synchronously
+    /// on the main thread; tmux already answered them, so they are dropped.
+    /// Anything else is the person's tap from SwiftTerm's gesture handlers,
+    /// delivered after SwiftTerm releases its terminal lock.
+    nonisolated override func send(source: Terminal, data: ArraySlice<UInt8>) {
+        guard Thread.isMainThread else { return }
+        MainActor.assumeIsolated {
+            guard !feedingHost else { return }
+            let bytes = Array(data)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.send(source: self, data: bytes[...])
+            }
         }
-        super.send(source: source, data: data)
     }
 
     // MARK: - TerminalViewDelegate
@@ -258,6 +277,10 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
     /// as in iTerm2: SwiftTerm only scrolls when the caret is off screen.
     func send(source: SwiftTerm.TerminalView, data: ArraySlice<UInt8>) {
         guard presented, allowsInput, stream?.phase == .live else { return }
+        if wheelBytes != nil {
+            wheelBytes?.append(contentsOf: data)
+            return
+        }
         touchInteraction?.cancelScrolling()
         scroll(toPosition: 1)
         stream?.input.send(data)

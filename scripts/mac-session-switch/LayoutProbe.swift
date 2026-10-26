@@ -81,6 +81,23 @@ struct RetainedLayoutProbeView: View {
     try? await Task.sleep(for: .milliseconds(20))
     precondition(b.convert(b.bounds, to: view).minX < a.convert(a.bounds, to: view).minX,
                  "visible workspace order must be independent of retained roster order")
+    window.setContentSize(NSSize(width: 1200, height: 400))
+    model.visible = ["a", "b", "c", "d"]
+    await Task.yield()
+    view.layoutSubtreeIfNeeded()
+    try? await Task.sleep(for: .milliseconds(60))
+    let identities = model.views
+    model.visible = ["a", "d", "b", "c"]
+    await Task.yield()
+    view.layoutSubtreeIfNeeded()
+    try? await Task.sleep(for: .milliseconds(60))
+    let positions = model.visible.compactMap { key in
+        model.views[key].map { $0.convert($0.bounds, to: view).minX }
+    }
+    precondition(positions.count == 4 && zip(positions, positions.dropFirst()).allSatisfy { $0 < $1 },
+                 "fourth pane must insert into second slot, shifting intervening native views")
+    precondition(model.visible.allSatisfy { model.views[$0] === identities[$0] && model.creations[$0] == 1 },
+                 "reordering cannot recreate a native pane")
     window.orderOut(nil)
-    print("PASS mounted layout: repeated split switching preserves native identity and dormant geometry")
+    print("PASS mounted layout: switching and 4→2 insertion preserve native identity and geometry")
 }

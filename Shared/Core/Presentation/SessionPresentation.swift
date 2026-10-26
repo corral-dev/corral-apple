@@ -19,8 +19,14 @@ enum SessionPresentation {
     private static let previewCache: NSCache<NSString, NSString> = {
         let cache = NSCache<NSString, NSString>()
         cache.countLimit = 256
+        cache.totalCostLimit = 256 * 1024
         return cache
     }()
+
+    /// Drop derived row text under system memory pressure.
+    static func purgePreviewCache() {
+        previewCache.removeAllObjects()
+    }
     /// 与电脑端侧栏一致：「刚刚」上界（秒）。
     static let justNowSeconds: TimeInterval = 180
     /// 超过一天退回绝对日期时间。
@@ -213,7 +219,7 @@ enum SessionPresentation {
         )
         let plain = parsed.map { String($0.characters) } ?? normalized
         let result = plain.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        previewCache.setObject(result as NSString, forKey: key)
+        previewCache.setObject(result as NSString, forKey: key, cost: max(32, result.utf8.count * 2))
         return result
     }
 

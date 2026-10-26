@@ -5,40 +5,62 @@ import SwiftUI
 /// The agent's own TUI in a pane: SwiftTerm's AppKit terminal fed by the
 /// host's raw stream. Scrollback, selection and copy are local; keys, input
 /// methods and mouse reports go to the agent; ⌘ shortcuts stay with the app.
+/// The terminal belongs to `MacTerminalSessions`, not to this pane: the pane
+/// only lends it a place, so hiding or rebuilding the pane keeps its screen.
 struct TerminalEmulator: NSViewRepresentable {
-    let stream: RemoteTerminalStream
+    let host: TerminalHostView
     let isFocusedPane: Bool
     let isPresented: Bool
     @Environment(\.interfaceScale) private var interfaceScale
     @Environment(\.conversationScrollReadAction) private var acknowledgeRead
 
-    func makeNSView(context: Context) -> TerminalHostView {
-        let view = TerminalHostView()
-        view.setPresented(isPresented)
-        view.onManualScroll = acknowledgeRead
-        view.updateInterfaceScale(interfaceScale)
-        view.bind(stream)
-        return view
+    func makeNSView(context: Context) -> TerminalSlot {
+        let slot = TerminalSlot()
+        update(slot)
+        return slot
     }
 
-    func updateNSView(_ view: TerminalHostView, context: Context) {
-        view.setPresented(isPresented)
-        view.onManualScroll = acknowledgeRead
-        if view.stream !== stream {
-            view.bind(stream)
-        }
-        view.updateInterfaceScale(interfaceScale)
-        view.wantsKeyboardFocus = isFocusedPane
+    func updateNSView(_ slot: TerminalSlot, context: Context) {
+        update(slot)
     }
 
-    static func dismantleNSView(_ view: TerminalHostView, coordinator: ()) {
-        view.unbind()
+    private func update(_ slot: TerminalSlot) {
+        if host.superview !== slot { slot.adopt(host) }
+        host.onManualScroll = acknowledgeRead
+        host.updateInterfaceScale(interfaceScale)
+        host.setPresented(isPresented)
+        host.wantsKeyboardFocus = isFocusedPane
+    }
+
+    static func dismantleNSView(_ slot: TerminalSlot, coordinator: ()) {
+        slot.release()
     }
 
     /// Take whatever the split offers: the host grid must never become the
     /// pane's minimum width (it would push the whole window out of bounds).
-    func sizeThatFits(_ proposal: ProposedViewSize, nsView: TerminalHostView, context: Context) -> CGSize? {
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: TerminalSlot, context: Context) -> CGSize? {
         CGSize(width: proposal.width ?? 480, height: proposal.height ?? 320)
+    }
+}
+
+/// A pane's place for a terminal that outlives it.
+final class TerminalSlot: NSView {
+    override var isFlipped: Bool { true }
+
+    func adopt(_ host: TerminalHostView) {
+        host.removeFromSuperview()
+        host.frame = bounds
+        host.autoresizingMask = [.width, .height]
+        addSubview(host)
+    }
+
+    /// The pane went away: the terminal hides and leaves the window, keeping
+    /// its screen and stream for the next pane that shows it.
+    func release() {
+        for case let host as TerminalHostView in subviews {
+            host.setPresented(false)
+            host.removeFromSuperview()
+        }
     }
 }
 
@@ -70,9 +92,13 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
         wantsLayer = true
         clipsToBounds = true
         terminal.terminalDelegate = self
+        terminal.changeScrollback(10_000)
         terminal.onPaste = { [weak self] text in
             self?.terminal.scroll(toPosition: 1)
             self?.stream?.input.paste(text)
+        }
+        terminal.onMouseReport = { [weak self] data, eventType in
+            self?.forward(data, eventType: eventType)
         }
         addSubview(terminal)
         // A terminal pane shows no scroll bar (owner decision 2026-10-06).
@@ -82,8 +108,40 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
         applyPalette()
         #if DEBUG
         Self.inspectionLatest = self
+        Self.startRenderLoggingIfRequested()
         #endif
     }
+
+    #if DEBUG
+    /// `CORRAL_INSPECTION_DRAW_LOG=1` appends a two-second render summary to
+    /// `/tmp/corral-inspect.log`. Debug builds only.
+    private static var renderLoggingStarted = false
+
+    private static func startRenderLoggingIfRequested() {
+        guard !renderLoggingStarted,
+              ProcessInfo.processInfo.environment["CORRAL_INSPECTION_DRAW_LOG"] == "1" else { return }
+        renderLoggingStarted = true
+        Task { @MainActor in
+            var lastFeeds = StreamTerminalView.feedCount
+            var lastBytes = StreamTerminalView.feedBytes
+            var lastInvalidations = StreamTerminalView.invalidations
+            var lastRows = StreamTerminalView.invalidatedRows
+            while true {
+                try? await Task.sleep(for: .seconds(2))
+                let feeds = StreamTerminalView.feedCount
+                let bytes = StreamTerminalView.feedBytes
+                let invalidations = StreamTerminalView.invalidations
+                let rows = StreamTerminalView.invalidatedRows
+                let newInvalidations = invalidations - lastInvalidations
+                let meanRows = newInvalidations > 0 ? (rows - lastRows) / Double(newInvalidations) : 0
+                debugTrace(String(format: "terminal-render feeds=%d bytes=%d redraws=%d meanRows=%.1f of %d",
+                                  feeds - lastFeeds, bytes - lastBytes, newInvalidations, meanRows,
+                                  StreamTerminalView.totalRows))
+                lastFeeds = feeds; lastBytes = bytes; lastInvalidations = invalidations; lastRows = rows
+            }
+        }
+    }
+    #endif
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
@@ -102,17 +160,25 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
         needsLayout = true
     }
 
+    /// A new stream keeps the current screen on display until its snapshot;
+    /// it needs this view's fit to attach, so the fit is reported again.
     func bind(_ stream: RemoteTerminalStream) {
         self.stream?.sink = nil
         self.stream = stream
-        grid = nil
         lastReportedFit = nil
         stream.sink = self
         stream.isInFront = { [weak self] in self?.isInFront ?? false }
         stream.updateTheme(palette.theme)
         needsLayout = true
+        if !inLiveResize { reportFit() }
         observeReadScrollIfNeeded()
     }
+
+    /// The emulator has drawn a host snapshot.
+    var hasScreen: Bool { grid != nil }
+
+    /// In a window and not hidden by this pane or any ancestor.
+    var isShown: Bool { window != nil && !isHiddenOrHasHiddenAncestor }
 
     private func observeReadScrollIfNeeded() {
         guard presentationEnabled, readScrollMonitor == nil, window != nil, stream != nil else { return }
@@ -159,6 +225,10 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
         applyPalette()
     }
 
+    /// Return the viewport to live output. Used by the prompts card's last
+    /// row, which is not a prompt jump (owner requirement 2026-10-25).
+    func scrollToLiveOutput() { terminal.scroll(toPosition: 1) }
+
     #if DEBUG
     static weak var inspectionLatest: TerminalHostView?
     private var lastInspectedFit: TerminalGrid?
@@ -169,16 +239,10 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
     var inspectionUsesMetal: Bool { terminal.isUsingMetalRenderer }
     var inspectionBottomVisible: Bool { terminal.frame.maxY <= bounds.maxY - inset + 1 }
     var inspectionVisibleText: [String] {
-        let emulator = terminal.getTerminal()
-        return (0..<emulator.rows).compactMap { row in
-            emulator.getLine(row: row)?.translateToString(trimRight: true)
-        }
+        terminal.visibleRowsText(0..<terminal.terminalDimensions.rows)
     }
     var inspectionVisibleRows: Int {
-        let emulator = terminal.getTerminal()
-        return (0..<emulator.rows).filter { row in
-            !(emulator.getLine(row: row)?.translateToString(trimRight: true) ?? "").isEmpty
-        }.count
+        inspectionVisibleText.filter { !$0.isEmpty }.count
     }
 
     /// Delivers key-down events through the window, as the keyboard does,
@@ -215,14 +279,21 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
     }
 
     func inspectionScrollUp(lines: Int) { terminal.scrollUp(lines: lines) }
+
+    /// A line-based wheel event handed straight to SwiftTerm's own handler;
+    /// nothing is posted to the system and the pointer does not move.
+    func inspectionScrollWheel(lines: Int32) -> Bool {
+        guard let cgEvent = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1,
+                                    wheel1: lines, wheel2: 0, wheel3: 0),
+              let event = NSEvent(cgEvent: cgEvent) else { return false }
+        terminal.scrollWheel(with: event)
+        return true
+    }
     var inspectionScrollPosition: Double { terminal.scrollPosition }
+    var inspectionGrid: TerminalGrid? { grid }
 
     func inspectionContains(_ text: String) -> Bool {
-        let emulator = terminal.getTerminal()
-        let visible = (0..<emulator.rows).compactMap { row in
-            emulator.getLine(row: row)?.translateToString(trimRight: true, skipNullCellsFollowingWide: true)
-        }.joined()
-        return visible.contains(text)
+        inspectionVisibleText.joined().contains(text)
     }
     #endif
 
@@ -236,6 +307,8 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
         if presented {
             observeReadScrollIfNeeded()
             if wantsKeyboardFocus { focusTerminal() }
+            // Showing a session is using it: the shared grid follows this view.
+            if isInFront { stream?.claimSize() }
         } else {
             if let window, let responder = window.firstResponder as? NSView,
                responder === terminal || responder.isDescendant(of: terminal) {
@@ -297,9 +370,7 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
         removeReadScrollMonitor()
         observeReadScrollIfNeeded()
         observeFront()
-        // SwiftTerm's renderer stays on CoreGraphics: its experimental Metal
-        // path blocks the main thread ~0.4 s per terminal while it searches
-        // every bundle for its shader library, and can present nothing.
+        // The pinned emulator owns its native render loop and visibility pause.
         guard window != nil, wantsKeyboardFocus else { return }
         focusTerminal()
     }
@@ -343,7 +414,7 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
 
     /// Width SwiftTerm keeps beside the cells for its scroller.
     private var scrollerReserve: CGFloat {
-        let terminalGrid = terminal.getTerminal()
+        let terminalGrid = terminal.terminalDimensions
         let optimal = terminal.getOptimalFrameSize()
         return max(0, optimal.width - cell.width * CGFloat(terminalGrid.cols))
     }
@@ -452,15 +523,18 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
         #if DEBUG
         if inspectionFirstReset == nil { inspectionFirstReset = Date() }
         #endif
+        // placeTerminal already re-wraps the emulator at the new grid, so the
+        // reader's row is compared against the host grid it was read on.
+        let hostGridChanged = self.grid.map { $0 != grid } ?? false
         self.grid = grid
         applyFittingFont(refreshing: false)
         placeTerminal()
         if !inLiveResize { reportFit() }
-        terminal.preservingViewportDuringSnapshot {
-            if terminal.getTerminal().cols != grid.cols || terminal.getTerminal().rows != grid.rows {
+        terminal.preservingViewportDuringSnapshot(hostGridChanged: hostGridChanged) {
+            if terminal.terminalDimensions.cols != grid.cols || terminal.terminalDimensions.rows != grid.rows {
                 terminal.resize(cols: grid.cols, rows: grid.rows)
             }
-            terminal.getTerminal().resetToInitialState()
+            terminal.resetToInitialState()
             terminal.feedFromHost(data)
         }
     }
@@ -471,32 +545,44 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
 
     // MARK: - TerminalViewDelegate
 
+    /// Keyboard and input-method bytes. Mouse reports arrive through
+    /// `StreamTerminalView.onMouseReport` with their own event type.
     func send(source: SwiftTerm.TerminalView, data: ArraySlice<UInt8>) {
+        let recent = NSApp.currentEvent.flatMap {
+            ProcessInfo.processInfo.systemUptime - $0.timestamp < 0.5 ? $0.type : nil
+        }
+        forward(data, eventType: recent)
+    }
+
+    private static let pointerEvents: Set<NSEvent.EventType> = [
+        .mouseMoved, .leftMouseDown, .leftMouseUp, .leftMouseDragged,
+        .rightMouseDown, .rightMouseUp, .rightMouseDragged,
+        .otherMouseDown, .otherMouseUp, .otherMouseDragged,
+    ]
+
+    private func forward(_ data: ArraySlice<UInt8>, eventType: NSEvent.EventType?) {
+        // Mouse motion/click reports belong only to the focused terminal.
+        // A deliberate wheel still scrolls the pane under the pointer.
+        if let eventType, Self.pointerEvents.contains(eventType),
+           !(window?.isKeyWindow == true && window?.firstResponder === terminal) { return }
         #if DEBUG
         debugTrace("emulator send \(data.prefix(24).map { String(format: "%02x", $0) }.joined(separator: " "))")
         #endif
         // Typing returns to the live screen, as in iTerm2 and Terminal.app;
         // SwiftTerm only scrolls when the caret is off screen, so after a
         // small scroll back a shell `clear` drew its prompt rows below the top.
-        if NSApp.currentEvent?.type == .keyDown { terminal.scroll(toPosition: 1) }
-        stream?.input.send(data, passive: Self.isEmulatorReply(data))
+        if eventType == .keyDown { terminal.scroll(toPosition: 1) }
+        stream?.input.send(data, passive: Self.isEmulatorReply(data, eventType: eventType))
     }
 
-    /// SwiftTerm answers the program's queries (cursor position, attributes,
-    /// colours) through this same callback. A reply is an escape sequence sent
-    /// with no person's key, click or scroll in the last half second.
-    private static func isEmulatorReply(_ data: ArraySlice<UInt8>) -> Bool {
+    /// An escape sequence the emulator produced by itself, not after a
+    /// person's key, click or scroll in the last half second (focus reports).
+    private static func isEmulatorReply(_ data: ArraySlice<UInt8>, eventType: NSEvent.EventType?) -> Bool {
         guard data.count >= 3, data.first == 0x1b,
               let kind = data.dropFirst().first, kind == 0x5b || kind == 0x5d || kind == 0x50 else { return false }
-        guard let event = NSApp.currentEvent,
-              ProcessInfo.processInfo.systemUptime - event.timestamp < 0.5 else { return true }
-        switch event.type {
-        case .keyDown, .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp, .otherMouseDown,
-             .otherMouseUp, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged, .scrollWheel:
-            return false
-        default:
-            return true
-        }
+        // Hover motion is passive too: it must not take the shared grid.
+        guard let eventType, eventType != .mouseMoved else { return true }
+        return !(eventType == .keyDown || eventType == .scrollWheel || pointerEvents.contains(eventType))
     }
 
     func sizeChanged(source: SwiftTerm.TerminalView, newCols: Int, newRows: Int) {

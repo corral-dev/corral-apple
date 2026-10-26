@@ -31,8 +31,17 @@ nonisolated enum ChatMarkdown: Sendable {
     nonisolated(unsafe) private static let cache: NSCache<NSString, CacheBox> = {
         let cache = NSCache<NSString, CacheBox>()
         cache.countLimit = 256
+        // Attributed strings retain runs, fonts and colors well beyond the
+        // source bytes; a byte budget bounds many short bodies as well as the
+        // count limit bounds body count.
+        cache.totalCostLimit = 8 * 1024 * 1024
         return cache
     }()
+
+    /// Drop parsed bodies under system memory pressure; text re-parses cheaply.
+    static func purgeCache() {
+        cache.removeAllObjects()
+    }
 
     /// Bubble text without leading or trailing blanks (spaces, blank lines,
     /// and newlines the structure pass inserts); inner blank lines stay.
@@ -48,7 +57,8 @@ nonisolated enum ChatMarkdown: Sendable {
         }
 
         let result = trimmed(style(parse(source)))
-        cache.setObject(CacheBox(result), forKey: key)
+        // Four bytes per source byte is a conservative rendered-size estimate.
+        cache.setObject(CacheBox(result), forKey: key, cost: max(64, source.utf8.count * 4))
         return result
     }
 

@@ -8,29 +8,22 @@ import SwiftUI
 final class MacPaneLifetime {
     private(set) var isPresented = false
     @ObservationIgnored private weak var store: ConversationStore?
-    @ObservationIgnored private var terminalStart: (@MainActor () -> Void)?
-    @ObservationIgnored private var terminalStop: (@MainActor () -> Void)?
     @ObservationIgnored private var suspension: Task<Void, Never>?
     @ObservationIgnored private var lease = 0
 
     func bind(_ store: ConversationStore) { self.store = store }
-    func bindTerminal(start: @escaping @MainActor () -> Void,
-                      stop: @escaping @MainActor () -> Void) {
-        terminalStart = start
-        terminalStop = stop
-    }
 
-    func present(isTerminal: Bool = false) -> Int {
+    /// Terminals are not part of a pane's lifetime: they live in
+    /// `MacTerminalSessions` and keep their stream while the pane sleeps.
+    func present() -> Int {
         lease &+= 1
         isPresented = true
-        if isTerminal { terminalStart?() }
         return lease
     }
 
     func suspend(lease: Int) {
         guard self.lease == lease, isPresented else { return }
         isPresented = false
-        terminalStop?()
         guard let store else { return }
         let previous = suspension
         suspension = Task {
@@ -43,10 +36,15 @@ final class MacPaneLifetime {
         await suspension?.value
     }
 
+    /// A pane is warm-retainable only while its whole rebuildable payload fits
+    /// one pane budget. Text alone used to decide this; long tool bodies,
+    /// question prompts and per-message objects are retained too and must count.
+    static let maxRetainedBytes = 4 * 1024 * 1024
+
     var canRetain: Bool {
         guard let store else { return true }
         return store.messages.count <= ConversationHistoryBudget.maxOfficialMessagesPerSession
-            && store.messages.reduce(0, { $0 + ($1.text?.utf8.count ?? 0) }) <= 2 * 1024 * 1024
+            && store.retainedByteEstimate <= Self.maxRetainedBytes
     }
 
     #if DEBUG
@@ -70,6 +68,9 @@ extension EnvironmentValues {
 @MainActor
 final class MacPaneSurfaceCache {
     static let maxDormant = 4
+    /// Aggregate warm-pane payload. Four panes under their individual 4 MiB
+    /// limits could otherwise retain 16 MiB of tool bodies and prompts.
+    static let maxDormantBytes = 12 * 1024 * 1024
 
     final class Entry {
         let lifetime = MacPaneLifetime()
@@ -114,8 +115,8 @@ final class MacPaneSurfaceCache {
 
     func existingEntry(for key: String) -> Entry? { entries[key] }
 
-    func present(_ entry: Entry, isTerminal: Bool = false) {
-        entry.lease = entry.lifetime.present(isTerminal: isTerminal)
+    func present(_ entry: Entry) {
+        entry.lease = entry.lifetime.present()
     }
 
     func suspend(_ entry: Entry, key: String, lease: Int, keepingMounted: Bool = false) {
@@ -143,10 +144,27 @@ final class MacPaneSurfaceCache {
     }
 
     func retainedKeys(visible: [String], previous: [String], eligible: (String) -> Bool) -> [String] {
-        let dormant = previous.filter {
-            !visible.contains($0) && eligible($0) && entries[$0]?.lifetime.canRetain != false
-        }.prefix(Self.maxDormant)
-        return visible + dormant
+        var kept: [String] = []
+        var keptBytes = 0
+        for key in previous where !visible.contains(key) {
+            if kept.count >= Self.maxDormant { break }
+            guard eligible(key), let entry = entries[key], entry.lifetime.canRetain else { continue }
+            let bytes = entry.store?.retainedByteEstimate ?? 0
+            // Always allow the first dormant pane; later ones must fit together.
+            if !kept.isEmpty, keptBytes + bytes > Self.maxDormantBytes { continue }
+            kept.append(key)
+            keptBytes += bytes
+        }
+        return visible + kept
+    }
+
+    /// Release warm panes under system memory pressure. Visible panes keep
+    /// their data, drafts, reading position, selection and terminal state.
+    func evictDormant(visible: Set<String>) {
+        let dormant = entries.filter { !visible.contains($0.key) && !$0.value.lifetime.isPresented }
+        for (key, entry) in dormant {
+            suspend(entry, key: key, lease: entry.lease)
+        }
     }
 
     func reset() {
@@ -264,7 +282,7 @@ struct MacPaneSurface: NSViewRepresentable {
     final class Coordinator {
         let cache: MacPaneSurfaceCache
         let key: String
-        let entry: MacPaneSurfaceCache.Entry
+        var entry: MacPaneSurfaceCache.Entry
         var lease = 0
         init(cache: MacPaneSurfaceCache, key: String) {
             self.cache = cache
@@ -324,7 +342,17 @@ struct MacPaneSurface: NSViewRepresentable {
     }
 
     func updateNSView(_ mount: NSView, context: Context) {
-        update(context.coordinator)
+        let coordinator = context.coordinator
+        if coordinator.cache.existingEntry(for: coordinator.key) !== coordinator.entry {
+            // Memory pressure released this dormant pane while its mount stayed
+            // in the roster: rebuild it in the same mount instead of showing
+            // an empty pane.
+            coordinator.entry = coordinator.cache.entry(for: coordinator.key)
+            (mount as? Mount)?.entry = coordinator.entry
+            coordinator.entry.view.frame = mount.bounds
+            mount.addSubview(coordinator.entry.view)
+        }
+        update(coordinator)
         if !isPresented { workspace.paneFrames[session.key] = nil }
     }
 
@@ -344,7 +372,7 @@ struct MacPaneSurface: NSViewRepresentable {
     private func update(_ coordinator: Coordinator) {
         let entry = coordinator.entry
         if isPresented, !entry.lifetime.isPresented {
-            coordinator.cache.present(entry, isTerminal: workspace.mode(for: session.key) == .terminal)
+            coordinator.cache.present(entry)
             coordinator.lease = entry.lease
             entry.view.isHidden = false
         } else if !isPresented, entry.lifetime.isPresented {

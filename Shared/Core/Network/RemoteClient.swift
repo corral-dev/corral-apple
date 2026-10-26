@@ -120,8 +120,12 @@ final class RemoteClient: NSObject {
     private var raceGeneration = 0
 
     /// 按通道多播：会话列表、对话、终端可以同时订阅而不互相抢包。
-    var channelSubscribers: [String: [UUID: AsyncStream<RemoteEvent>.Continuation]] = [:]
-    var wildcardSubscribers: [UUID: AsyncStream<RemoteEvent>.Continuation] = [:]
+    /// 每个订阅者的保留量有界；落后时读到合并后的 `resync` 标记。
+    var channelSubscribers: [String: [UUID: RemoteEventDelivery]] = [:]
+    var wildcardSubscribers: [UUID: RemoteEventDelivery] = [:]
+    /// 慢消费者缺口重同步通知的合并状态。
+    var gapResyncScheduled = false
+    var lastGapResyncAt: Date?
     /// 重连成功后通知上层重新发起 watch（服务端连接级订阅不会自动恢复）。
     var readyHandlers: [UUID: @MainActor () -> Void] = [:]
     private var hasBeenReady = false

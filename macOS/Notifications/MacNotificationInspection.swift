@@ -36,14 +36,18 @@ import UserNotifications
     }
 
     private static func inspectPreview(notifications: MacNotifications, feed: HostSessionFeed) async {
-        let source = "已发布 **[0.3.24 / 3042](https://github.com/NeatMacApps/NeatWebApp/releases/tag/v0.3.24)**，并覆盖安装到本机。"
+        let source = "已发布 **[0.3.24 / 3042](https://github.com/NeatMacApps/NeatWebApp/releases/tag/v0.3.24)**。\r\n\r\n- 覆盖安装到本机。\n- 验证 `Error 429`。\n\n```text\nready\t\tok\n```"
         let session = SessionSummary(key: "notification-preview-inspection", title: "Notification preview",
             lastAgent: source, completionID: UUID().uuidString)
         let center = UNUserNotificationCenter.current()
+        let notificationID = SessionNotificationKind.completed.identity(hostID: feed.host.hostID, session: session)
         await notifications.deliver(session, kind: "completed", hostID: feed.host.hostID)
-        try? await Task.sleep(for: .seconds(2))
-        let matching = await center.deliveredNotifications().filter {
-            $0.request.content.userInfo["session_key"] as? String == session.key
+        var matching: [UNNotification] = []
+        // System processing can outlast enqueue completion; await this exact request.
+        for _ in 0..<60 {
+            matching = await center.deliveredNotifications().filter { $0.request.identifier == notificationID }
+            if !matching.isEmpty { break }
+            try? await Task.sleep(for: .milliseconds(500))
         }
         let report: [String: Any] = ["source": source, "bodies": matching.map { $0.request.content.body },
             "enabled": notifications.enabled, "authorization": notifications.authorization.rawValue,
@@ -51,6 +55,8 @@ import UserNotifications
         if let data = try? JSONSerialization.data(withJSONObject: report, options: [.sortedKeys, .prettyPrinted]) {
             try? data.write(to: URL(fileURLWithPath: "/tmp/corral-mac-notification-preview.json"), options: .atomic)
         }
+        // Keep the observed notification briefly for an unattended window capture.
+        try? await Task.sleep(for: .seconds(10))
         center.removeDeliveredNotifications(withIdentifiers: matching.map { $0.request.identifier })
     }
 }

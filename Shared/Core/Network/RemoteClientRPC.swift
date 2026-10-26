@@ -79,9 +79,17 @@ import Foundation
                         }
                     }
                 } catch {
+                    if error is PlaneIOError {
+                        // The frame was never admitted: this plane is resetting, so
+                        // report the honest transport state rather than delivery.
+                        diagnose(.planeOverload, isControl: target === controlPlane, error: error)
+                    }
                     if let pending = pendingRequests.removeValue(forKey: requestID) {
                         pending.timeout.cancel()
-                        pending.continuation.resume(throwing: error)
+                        let failure = error is PlaneIOError
+                            ? ConnectionError.notConnected
+                            : error
+                        pending.continuation.resume(throwing: failure)
                     }
                 }
             }.message

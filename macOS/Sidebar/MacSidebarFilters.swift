@@ -4,9 +4,9 @@ import SwiftUI
 /// Native controls over the unfiltered host window; selections only narrow presentation.
 struct MacSidebarFilters: View {
     let sessions: [SessionSummary]
-    /// Sessions with waiting, working or recent activity; unread alone is excluded.
-    let activeCount: Int
-    @Binding var activeOnly: Bool
+    /// Sessions in the Focus filter (host `needs_attention`).
+    let attentionCount: Int
+    @Binding var attentionOnly: Bool
     @Binding var runtimes: Set<SessionRuntimeFilter>
     @Binding var projects: Set<SessionProjectFilter>
     @State private var showProjects = false
@@ -20,14 +20,14 @@ struct MacSidebarFilters: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Space.sm * interfaceScale) {
             MacFilterChoices {
-                MacQuickFilterButton(selected: activeOnly, sidebar: true) {
-                    Text("sessions.filter.active")
-                    Text(verbatim: activeCount.formatted()).monospacedDigit().opacity(0.75)
-                } action: { activeOnly.toggle() }
+                MacQuickFilterButton(selected: attentionOnly, sidebar: true) {
+                    Text("sessions.filter.attention")
+                    Text(verbatim: attentionCount.formatted()).monospacedDigit().opacity(0.75)
+                } action: { attentionOnly.toggle() }
                 .fixedSize()
-                .accessibilityLabel(Text("sessions.filter.active"))
-                .accessibilityValue(Text(verbatim: activeCount.formatted()))
-                .accessibilityIdentifier("corral.filter.active")
+                .accessibilityLabel(Text("sessions.filter.attention"))
+                .accessibilityValue(Text(verbatim: attentionCount.formatted()))
+                .accessibilityIdentifier("corral.filter.attention")
                 Divider().interfaceFrame(width: 1, height: 16)
                 ForEach(SessionRuntimeFilter.ordered.filter { $0 != .all }, id: \.self) { runtime in
                     MacQuickFilterButton(selected: runtimes.contains(runtime), sidebar: true, labelWidth: 20) {
@@ -85,7 +85,7 @@ struct MacSidebarFilters: View {
             guard !choices.isEmpty else { return }
             let arguments = ProcessInfo.processInfo.arguments
             if arguments.contains("-CorralInspectSelectedFilters") {
-                activeOnly = true
+                attentionOnly = true
                 runtimes = [.codex]
                 projects = [.project(path: choices[0].path)]
             } else if arguments.contains("-CorralInspectMultiFilters") {
@@ -96,7 +96,7 @@ struct MacSidebarFilters: View {
                 projects = [.project(path: last.path)]
             }
             if arguments.contains("-CorralInspectAllFilters") {
-                activeOnly = true
+                attentionOnly = true
                 runtimes = Set(SessionRuntimeFilter.ordered.filter { $0 != .all })
                 projects = Set(choices.prefix(2).map { .project(path: $0.path) })
             }

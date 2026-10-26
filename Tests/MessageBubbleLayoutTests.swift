@@ -126,7 +126,7 @@ final class MessageBubbleLayoutTests: XCTestCase {
         let reply = """
         **修复**：列表数据本身保证不重复，侧栏分组时每个会话只归第一个认领它的组；之前缓存在本机的旧列表读出时也会先去重。
         - **Mac**：已修复，0.3.4 已装到"应用程序"，连接正常，分组显示正确。
-        - **iPhone**：手机和 Mac 共用这部分代码，同一处修复覆盖两端（[装包页](https://apps.caozc.com/a/corral)）。
+        - **iPhone**：手机和 Mac 共用这部分代码，同一处修复覆盖两端（[装包页](https://example.com/a/corral)）。
         - **终端界面**：不受影响。开发机加会话进组时会把它从其他组移走、去掉重复成员。
 
         参考：[Apple 开发者论坛：列表里多个可展开组同时移动时行错位](https://developer.apple.com/forums/thread/742008)

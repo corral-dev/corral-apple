@@ -85,7 +85,8 @@ struct MacPaneView: View {
                 // Over content the whole card covers about a third of the pane.
                 maxListHeight: max(120, bodySize.height * (cardFitsBeside ? 0.7 : MacPromptsCard.overContentHeightFraction) - 56),
                 status: mode == .terminal ? promptStatus : nil,
-                onSelect: selectPrompt
+                onSelect: selectPrompt,
+                onJumpLatest: jumpToLatest
             )
             .interfacePadding(.top, Space.md)
             .interfacePadding(.trailing, Space.md)
@@ -107,6 +108,12 @@ struct MacPaneView: View {
         let request = TerminalPromptRequest(seq: prompt.seq, generation: generation, text: prompt.text)
         terminalPromptRequest = request
         promptStatus = TerminalPromptRowStatus(locating: request)
+    }
+
+    /// The card's last row: return this pane to its latest position without
+    /// switching Chat/Terminal (owner requirement 2026-10-25).
+    private func jumpToLatest() {
+        workspace.scrollToLatest(in: session.key)
     }
 
     /// Beside the conversation the card has its full width; over content it
@@ -229,6 +236,7 @@ struct MacPaneView: View {
                     isFocused: isFocused && mode == .terminal,
                     isPresented: mode == .terminal && (lifetime?.isPresented ?? true),
                     promptRequest: terminalPromptRequest,
+                    latestRequest: workspace.latestScrollRequests[session.key] ?? 0,
                     onPromptOutcome: { request, outcome in
                         promptStatus = promptStatus?.finishing(request, with: outcome)
                     }
@@ -249,6 +257,7 @@ struct MacPaneView: View {
                                 if focused { workspace.composerDidGainFocus(session.key) }
                             },
                             scrollRequest: workspace.scrollRequests[session.key],
+                            externalScrollToLatestRequest: workspace.latestScrollRequests[session.key] ?? 0,
                             onDidCreateSession: { created in workspace.openCreated(created, asPane: true) }
                         )
                         .environment(\.macConversationTextDocument, workspace.paneSurfaces.entry(for: session.key).textDocument())
@@ -354,19 +363,22 @@ struct MacPaneHeader: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            // The title starts at the header's leading edge, flush with the
-            // conversation below it (owner report 2026-10-17).
-            titleButton
-                .layoutPriority(1)
-            projectLabel
-            if let phase = appModel.restarts.phase(for: session.key) {
-                SessionRestartStatusLabel(phase: phase, font: .system(size: 12), compact: true)
-                    .interfacePadding(.leading, 8)
-                    .fixedSize()
-            } else {
-                statusDotsView
+            HStack(spacing: 0) {
+                // Keep the existing title reading edge; the grip shares the blank space.
+                titleButton
+                    .layoutPriority(1)
+                projectLabel
+                if let phase = appModel.restarts.phase(for: session.key) {
+                    SessionRestartStatusLabel(phase: phase, font: .system(size: 12), compact: true)
+                        .interfacePadding(.leading, 8)
+                        .fixedSize()
+                } else {
+                    statusDotsView
+                }
+                Spacer(minLength: Space.sm)
+                MacPaneDragGrip()
             }
-            Spacer(minLength: Space.sm)
+            .modifier(MacPaneDragSource(key: session.key))
             // Hover-only (owner correction 2026-10-18); the slots keep their
             // width so the title never reflows when they appear.
             HStack(spacing: 0) {
@@ -381,6 +393,7 @@ struct MacPaneHeader: View {
         }
         .interfacePadding(.horizontal, Space.md)
         .interfaceFrame(minHeight: 40)
+        .modifier(MacPaneDropTarget(key: session.key))
         .background(headerSurface)
         .animation(MacMotion.state, value: isFocused)
         .animation(MacMotion.state, value: hovering)

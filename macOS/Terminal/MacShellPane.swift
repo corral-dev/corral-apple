@@ -10,7 +10,6 @@ struct MacShellPane: View {
     @Environment(\.macVisiblePaneKeys) private var visiblePaneKeys
     let shellKey: String
 
-    @State private var stream: RemoteTerminalStream?
     /// The folder name stays in the header while a closed pane fades out
     /// (the store drops the shell as soon as the host ends it).
     @State private var title: String?
@@ -21,6 +20,11 @@ struct MacShellPane: View {
     private var isFocused: Bool { workspace.focusedKey == shellKey }
     private var isReady: Bool { appModel.connectionState == .connected && appModel.client != nil }
     private var shell: ProjectShell? { workspace.shells.shell(for: shellKey) }
+    /// The window's long-lived terminal for this shell (see `MacTerminalSessions`).
+    private var terminal: MacTerminalSessions.Terminal? {
+        workspace.terminals.terminal(for: shellKey, client: appModel.client)
+    }
+    private var stream: RemoteTerminalStream? { terminal?.stream }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -51,8 +55,6 @@ struct MacShellPane: View {
         }
         .onDisappear {
             workspace.paneFrames[shellKey] = nil
-            stream?.stop()
-            stream = nil
         }
     }
 
@@ -60,25 +62,29 @@ struct MacShellPane: View {
 
     private var header: some View {
         HStack(spacing: Space.sm * interfaceScale) {
-            Image(systemName: "terminal")
-                .interfaceFont(.system(size: 13, weight: .medium))
-                .foregroundStyle(.secondary)
-                .accessibilityHidden(true)
-            HStack(alignment: .firstTextBaseline, spacing: 6 * interfaceScale) {
-                Text(verbatim: shell?.name ?? title ?? String(localized: "terminal.panel.title"))
-                    .interfaceFont(.callout.weight(.semibold))
-                    .foregroundStyle(isFocused ? .primary : .secondary)
-                    .lineLimit(1)
-                    .layoutPriority(1)
-                if let shell, shell.busy, !shell.command.isEmpty {
-                    Text(verbatim: shell.command)
-                        .interfaceFont(.caption)
-                        .foregroundStyle(.tertiary)
+            HStack(spacing: Space.sm * interfaceScale) {
+                Image(systemName: "terminal")
+                    .interfaceFont(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+                HStack(alignment: .firstTextBaseline, spacing: 6 * interfaceScale) {
+                    Text(verbatim: shell?.name ?? title ?? String(localized: "terminal.panel.title"))
+                        .interfaceFont(.callout.weight(.semibold))
+                        .foregroundStyle(isFocused ? .primary : .secondary)
                         .lineLimit(1)
+                        .layoutPriority(1)
+                    if let shell, shell.busy, !shell.command.isEmpty {
+                        Text(verbatim: shell.command)
+                            .interfaceFont(.caption)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
                 }
+                .interfaceFrame(minWidth: 30, maxWidth: .infinity, alignment: .leading)
+                .help(Text(verbatim: shell?.cwd ?? ""))
+                MacPaneDragGrip()
             }
-            .interfaceFrame(minWidth: 30, maxWidth: .infinity, alignment: .leading)
-            .help(Text(verbatim: shell?.cwd ?? ""))
+            .modifier(MacPaneDragSource(key: shellKey))
             Button {
                 workspace.requestClose(shellKey)
             } label: {
@@ -102,6 +108,7 @@ struct MacShellPane: View {
                     .accessibilityHidden(true)
             }
         }
+        .modifier(MacPaneDropTarget(key: shellKey))
         .animation(MacMotion.state, value: isFocused)
         .contentShape(Rectangle())
         .onTapGesture {
@@ -115,7 +122,7 @@ struct MacShellPane: View {
 
     @ViewBuilder
     private var content: some View {
-        if let stream {
+        if let terminal, let stream {
             if case .failed(let error) = stream.phase {
                 ContentUnavailableView {
                     Label("terminal.load_failed.title", systemImage: "exclamationmark.triangle")
@@ -126,7 +133,7 @@ struct MacShellPane: View {
                 }
             } else {
                 // Clicks focus the pane through the window's click monitor (MacRootView).
-                TerminalEmulator(stream: stream, isFocusedPane: isFocused, isPresented: true)
+                TerminalEmulator(host: terminal.view, isFocusedPane: isFocused, isPresented: true)
                     .overlay {
                         if showsWaiting { waitingIndicator.transition(.opacity) }
                     }
@@ -137,7 +144,10 @@ struct MacShellPane: View {
         }
     }
 
-    private var isWaiting: Bool { stream == nil || stream?.phase == .connecting }
+    private var isWaiting: Bool {
+        guard let terminal else { return true }
+        return terminal.stream.phase == .connecting && !terminal.view.hasScreen
+    }
 
     private var waitingIndicator: some View {
         ProgressView {
@@ -149,21 +159,21 @@ struct MacShellPane: View {
         .background(.regularMaterial, in: .rect(cornerRadius: Radius.lg * interfaceScale))
     }
 
-    /// Attaches on a ready connection (again after the client is replaced).
-    /// A restored pane whose shell no longer exists on the host closes itself.
+    /// Shows the shell's open terminal at once; otherwise attaches on a ready
+    /// connection. A restored pane whose shell no longer exists closes itself.
     private func start() async {
         guard isReady, let client = appModel.client else { return }
+        if workspace.terminals.terminal(for: shellKey, client: client) != nil {
+            workspace.terminals.open(shellKey, client: client)
+            return
+        }
         if await workspace.shells.refresh(client: client), workspace.shells.shell(for: shellKey) == nil {
             workspace.terminalEnded(shellKey)
             return
         }
-        if let stream, stream.clientIdentity == ObjectIdentifier(client) { return }
-        stream?.stop()
-        let next = RemoteTerminalStream(sessionKey: shellKey, client: client)
-        stream = next
-        next.start()
+        let next = workspace.terminals.open(shellKey, client: client)
         #if DEBUG
-        inspectTypingIfRequested(next)
+        inspectTypingIfRequested(next.stream)
         #endif
     }
 

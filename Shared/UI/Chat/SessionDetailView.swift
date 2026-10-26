@@ -29,6 +29,7 @@ struct SessionDetailView: View {
         composerFocusRequest: Int = 0,
         onComposerFocusChange: ((Bool) -> Void)? = nil,
         scrollRequest: ChatScrollRequest? = nil,
+        externalScrollToLatestRequest: Int = 0,
         onDidCreateSession: ((SessionSummary) -> Void)? = nil
     ) {
         self.injectedStore = injectedStore
@@ -36,6 +37,7 @@ struct SessionDetailView: View {
         self.composerFocusRequest = composerFocusRequest
         self.onComposerFocusChange = onComposerFocusChange
         self.scrollRequest = scrollRequest
+        self.externalScrollToLatestRequest = externalScrollToLatestRequest
         fallbackSession = session
         sessionKey = session.key
         self.metadataStore = metadataStore
@@ -53,6 +55,9 @@ struct SessionDetailView: View {
     var onComposerFocusChange: ((Bool) -> Void)? = nil
     /// Mac prompts panel: scroll the conversation to one message.
     var scrollRequest: ChatScrollRequest? = nil
+    /// Mac prompts card's last row: an owned counter that returns the pane to
+    /// the latest position. iOS keeps its chat-level button (owner 2026-10-25).
+    var externalScrollToLatestRequest = 0
     /// 复制/接力成功后的新会话：列表页负责落盘并推进，详情页只上报。
     var onDidCreateSession: ((SessionSummary) -> Void)? = nil
     @State private var pane: SessionDetailMode = .chat
@@ -424,7 +429,7 @@ struct SessionDetailView: View {
                 sessionMarker: SessionPresentation.activityMarker(for: session),
                 isConnected: isHostReady,
                 isSending: isSending || isActionBusy,
-                scrollToLatestRequest: scrollToLatestRequest,
+                scrollToLatestRequest: scrollToLatestRequest + externalScrollToLatestRequest,
                 loadEarlierPullProgress: $loadEarlierPullProgress,
                 scrollToMessageID: $scrollToMessageID,
                 blockedQuestionRequestID: blockedQuestionRequestID,

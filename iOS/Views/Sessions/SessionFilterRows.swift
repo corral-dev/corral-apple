@@ -71,26 +71,26 @@ struct SessionPrincipalHeader: View {
 /// Intrinsic-width runtime chips keep each official logo and name on one line.
 /// Horizontal scrolling handles narrow screens and larger text without tiles.
 struct SessionRuntimeFilterRow: View {
-    @Binding var activeOnly: Bool
-    /// Sessions showing a status dot.
-    let activeCount: Int
+    @Binding var attentionOnly: Bool
+    /// Sessions in the Focus filter (host `needs_attention`).
+    let attentionCount: Int
     @Binding var selected: Set<SessionRuntimeFilter>
 
     var body: some View {
         SessionFilterScrollView {
             HStack(spacing: SessionFilterStyle.chipSpacing) {
                 // Its own dimension, intersected with the assistant choices.
-                SessionFilterChip(selected: activeOnly) {
-                    Text("sessions.filter.active")
-                    Text(verbatim: activeCount.formatted())
+                SessionFilterChip(selected: attentionOnly) {
+                    Text("sessions.filter.attention")
+                    Text(verbatim: attentionCount.formatted())
                         .monospacedDigit()
                         .opacity(0.75)
                 } action: {
-                    activeOnly.toggle()
+                    attentionOnly.toggle()
                     HapticFeedback.shared.emit(.selection)
                 }
-                .accessibilityLabel(Text("sessions.filter.active"))
-                .accessibilityValue(Text(verbatim: activeCount.formatted()))
+                .accessibilityLabel(Text("sessions.filter.attention"))
+                .accessibilityValue(Text(verbatim: attentionCount.formatted()))
                 Divider()
                     .frame(height: 20)
                 // No All chip: an empty selection already means every assistant.
@@ -119,7 +119,7 @@ struct SessionRuntimeFilterRow: View {
         #if DEBUG
         .task {
             if ProcessInfo.processInfo.arguments.contains("-CorralInspectSelectedFilters") {
-                activeOnly = true
+                attentionOnly = true
                 selected = [.codex]
             } else if ProcessInfo.processInfo.arguments.contains("-CorralInspectMultiFilters") {
                 selected = [.claude, .codex]

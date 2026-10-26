@@ -59,7 +59,7 @@ struct SessionListView: View {
     /// in the navigation stack, so state is host-scoped) and survive pushing
     /// a conversation and returning. Live updates, refreshes, and reconnects
     /// never reset them; only leaving this host's page discards them.
-    @State private var activeOnly = false
+    @State private var attentionOnly = false
     @State private var runtimeFilter: Set<SessionRuntimeFilter> = []
     @State private var projectFilter: Set<SessionProjectFilter> = []
     @State private var showProjectPicker = false
@@ -74,8 +74,8 @@ struct SessionListView: View {
     var body: some View {
         VStack(spacing: 0) {
             SessionRuntimeFilterRow(
-                activeOnly: $activeOnly,
-                activeCount: SessionListFiltering.activeCount(sessions: windowSessions),
+                attentionOnly: $attentionOnly,
+                attentionCount: SessionListFiltering.attentionCount(sessions: windowSessions),
                 selected: $runtimeFilter
             )
                 .padding(.top, Space.xs)
@@ -428,7 +428,7 @@ struct SessionListView: View {
             sessions: rows.map(\.session),
             runtimes: runtimeFilter,
             projects: projectFilter,
-            activeOnly: activeOnly
+            attentionOnly: attentionOnly
         ).map(\.key))
         return rows.filter { kept.contains($0.session.key) }
     }
@@ -451,7 +451,7 @@ struct SessionListView: View {
             ProgressView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if rows.isEmpty {
-            if activeOnly || !runtimeFilter.isEmpty || !projectFilter.isEmpty {
+            if attentionOnly || !runtimeFilter.isEmpty || !projectFilter.isEmpty {
                 ContentUnavailableView {
                     Label("sessions.filter.empty.title", systemImage: "magnifyingglass")
                 } description: {
@@ -525,7 +525,7 @@ struct SessionListView: View {
             to: listStore.sections,
             runtimes: runtimeFilter,
             projects: projectFilter,
-            activeOnly: activeOnly
+            attentionOnly: attentionOnly
         )
     }
 
@@ -548,7 +548,7 @@ struct SessionListView: View {
 
     /// Any narrowing: a filter dimension or text search.
     private var hasActiveScope: Bool {
-        activeOnly || !runtimeFilter.isEmpty || !projectFilter.isEmpty || isSearching
+        attentionOnly || !runtimeFilter.isEmpty || !projectFilter.isEmpty || isSearching
     }
 
     /// Human-readable filtered scope for the empty-results description:
@@ -574,8 +574,8 @@ struct SessionListView: View {
         }.sorted()
         let projectName = projectNames.isEmpty ? all : projectNames.joined(separator: ", ")
         var scope = "\(runtimeName) · \(projectName)"
-        if activeOnly {
-            scope = String(localized: String.LocalizationValue("sessions.filter.active")) + " · " + scope
+        if attentionOnly {
+            scope = String(localized: String.LocalizationValue("sessions.filter.attention")) + " · " + scope
         }
         let query = listStore.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         if !query.isEmpty {
@@ -585,7 +585,7 @@ struct SessionListView: View {
     }
 
     private func clearFilters() {
-        activeOnly = false
+        attentionOnly = false
         runtimeFilter.removeAll()
         projectFilter.removeAll()
         listStore.searchQuery = ""

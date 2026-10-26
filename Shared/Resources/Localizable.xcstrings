@@ -1346,6 +1346,23 @@
         }
       }
     },
+    "connection.keychain_failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keychain access failed. Reopen Corral."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "钥匙串访问失败，请重新打开 Corral。"
+          }
+        }
+      }
+    },
     "connection.reconnecting": {
       "extractionState": "manual",
       "localizations": {
@@ -2292,6 +2309,27 @@
             "value": "切到第 %lld 格"
           }
         }
+      }
+    },
+    "mac.pane.move_left": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Move Pane Left" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "向左移动分屏" } }
+      }
+    },
+    "mac.pane.move_right": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Move Pane Right" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "向右移动分屏" } }
+      }
+    },
+    "mac.pane.reorder": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Drag to reorder panes" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "拖动调整分屏位置" } }
       }
     },
     "mac.pane.terminal": {
@@ -4098,6 +4136,23 @@
         }
       }
     },
+    "session.detail.user_prompts.jump_latest": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Back to latest message"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "回到最新消息"
+          }
+        }
+      }
+    },
     "session.detail.user_prompts.open_hint": {
       "extractionState": "manual",
       "localizations": {
@@ -4741,23 +4796,6 @@
         }
       }
     },
-    "sessions.filter.active": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Active"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "活跃"
-          }
-        }
-      }
-    },
     "sessions.filter.all": {
       "extractionState": "manual",
       "localizations": {
@@ -4771,6 +4809,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "全部"
+          }
+        }
+      }
+    },
+    "sessions.filter.attention": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Focus"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "关注"
           }
         }
       }

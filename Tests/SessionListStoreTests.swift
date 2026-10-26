@@ -735,6 +735,19 @@ final class SessionListStoreTests: XCTestCase {
         XCTAssertEqual(SessionPresentation.statusMarker(for: store.session(for: "claude:g")!), .working)
     }
 
+    func testClearingRedKeepsTheHostFocusDecision() {
+        let store = SessionListStore()
+        store.updateSessions([
+            SessionSummary(key: "claude:u", mtime: 100, attention: .unread, marker: "unread", needsAttention: true),
+        ])
+        XCTAssertTrue(store.markReadLocally(key: "claude:u"))
+        let read = store.session(for: "claude:u")!
+        XCTAssertFalse(SessionPresentation.hasUnread(for: read))
+        // Opening restarts the host's half-hour window; the row stays in Focus.
+        XCTAssertEqual(read.needsAttention, true)
+        XCTAssertTrue(SessionListFiltering.needsAttention(read))
+    }
+
     func testClearingRedPreservesActivityBehindIt() {
         let store = SessionListStore()
         store.updateSessions([
@@ -747,7 +760,7 @@ final class SessionListStoreTests: XCTestCase {
         XCTAssertEqual(dual.marker, "")
         XCTAssertEqual(SessionPresentation.activityMarker(for: dual), .working)
         XCTAssertFalse(SessionPresentation.hasUnread(for: dual))
-        XCTAssertTrue(SessionListFiltering.isActive(dual))
+        XCTAssertTrue(SessionListFiltering.needsAttention(dual))
         // The same host echo (same activity time) must not repaint red…
         store.applySessionEvent(SessionSummary(key: "claude:d", mtime: 100, attention: .working, marker: "unread"))
         XCTAssertFalse(SessionPresentation.hasUnread(for: store.session(for: "claude:d")!))

@@ -7,29 +7,38 @@ struct MacTerminalPane: View {
     @Environment(\.interfaceScale) private var interfaceScale
     @Environment(AppModel.self) private var appModel
     @Environment(MacWorkspace.self) private var workspace
-    @Environment(\.macPaneLifetime) private var lifetime
     let session: SessionSummary
     let isFocused: Bool
     let isPresented: Bool
     var promptRequest: TerminalPromptRequest? = nil
+    /// The prompts card's last row: return the terminal viewport to live output.
+    var latestRequest: Int = 0
     /// Reports how a prompt request ended, for the clicked row's status.
     var onPromptOutcome: (UUID, TerminalPromptOutcome) -> Void = { _, _ in }
 
-    @State private var stream: RemoteTerminalStream?
     @State private var isStarting = false
     @State private var startAttempted = false
     @State private var startError: String?
-    @State private var sawLive = false
     @State private var handledPromptRequest: UUID?
+
+    /// The window's long-lived terminal for this session, if one is open
+    /// (see `MacTerminalSessions`): returning to it draws its current screen.
+    private var terminal: MacTerminalSessions.Terminal? {
+        workspace.terminals.terminal(for: session.key, client: appModel.client)
+    }
+    private var stream: RemoteTerminalStream? { terminal?.stream }
+    private var sawLive: Bool { stream?.hasBeenLive ?? false }
+    /// The emulator already shows a screen (possibly from an earlier stream).
+    private var hasScreen: Bool { sawLive || terminal?.view.hasScreen == true }
 
     var body: some View {
         // The emulator keeps one structural position for its whole life and
         // hides natively while chat or another session is shown; SwiftUI
         // chrome is drawn only while presented, so nothing covers the chat.
         ZStack {
-            if let stream, showsEmulator(stream) {
+            if let terminal, showsEmulator(terminal.stream) {
                 // Clicks focus the pane through the window's click monitor (MacRootView).
-                TerminalEmulator(stream: stream, isFocusedPane: isFocused,
+                TerminalEmulator(host: terminal.view, isFocusedPane: isFocused,
                                  isPresented: isPresented)
                     .chatReadableColumn()
             }
@@ -52,12 +61,9 @@ struct MacTerminalPane: View {
                 await start()
             }
         }
-        .onChange(of: stream?.phase) { _, phase in
-            if phase == .live { sawLive = true }
-        }
         .task(id: PaneConnectionKey(sessionKey: session.key, client: appModel.clientIdentity, ready: isPresented && isReady && session.hosted)) {
             guard isPresented, isReady, session.hosted else { return }
-            startIfNeeded()
+            openTerminal()
             #if DEBUG
             if let stream {
                 MacTerminalReturnInspection.runIfRequested(
@@ -79,11 +85,11 @@ struct MacTerminalPane: View {
             if !Task.isCancelled { handledPromptRequest = request.id }
             onPromptOutcome(request.id, outcome)
         }
-        .onDisappear {
-            stream?.stop()
-        }
-        .onChange(of: isPresented) { _, presented in
-            if !presented { stream?.stop() }
+        .onChange(of: latestRequest) { _, _ in
+            // Chat is untouched; only a presented terminal has live output to
+            // return to (owner requirement 2026-10-25).
+            guard isPresented, let terminal, showsEmulator(terminal.stream) else { return }
+            terminal.view.scrollToLiveOutput()
         }
     }
 
@@ -135,7 +141,7 @@ struct MacTerminalPane: View {
                 } actions: {
                     Button("action.retry") { stream.retry() }
                 }
-            } else if (stream.phase == .connecting && (!sawLive || !isReady)) || Self.inspectWaiting {
+            } else if (stream.phase == .connecting && (!hasScreen || !isReady)) || Self.inspectWaiting {
                 waitingIndicator
             }
         } else {
@@ -150,8 +156,8 @@ struct MacTerminalPane: View {
     private static let inspectWaiting = false
     #endif
 
-    /// Shown before the first frame or during a real host reconnection. A
-    /// returning, still-connected terminal keeps its last drawn screen.
+    /// Shown before the first screen or during a real host reconnection. A
+    /// returning, still-connected terminal keeps its current screen.
     private var waitingIndicator: some View {
         ProgressView {
             Text(appModel.connectionState == .reconnecting ? "connection.reconnecting" : "connection.connecting")
@@ -222,10 +228,7 @@ struct MacTerminalPane: View {
             startAttempted = false
             return
         }
-        stream?.stop()
-        stream = nil
-        sawLive = false
-        if isPresented { startIfNeeded() }
+        if let client = appModel.client { workspace.terminals.restart(session.key, client: client) }
         #if DEBUG
         debugTrace("terminal started session; phase=\(String(describing: stream?.phase))")
         #endif
@@ -233,21 +236,10 @@ struct MacTerminalPane: View {
 
     private var isReady: Bool { appModel.connectionState == .connected && appModel.client != nil }
 
-    private func startIfNeeded() {
+    /// Opens (or marks as shown) this session's long-lived terminal.
+    private func openTerminal() {
         guard let client = appModel.client else { return }
-        if let stream, stream.clientIdentity != ObjectIdentifier(client) {
-            stream.stop()
-            self.stream = nil
-            sawLive = false
-        }
-        if stream == nil {
-            stream = RemoteTerminalStream(sessionKey: session.key, client: client)
-        }
-        if let stream {
-            lifetime?.bindTerminal(start: { [weak stream] in stream?.start() },
-                                   stop: { [weak stream] in stream?.stop() })
-        }
-        stream?.start()
+        workspace.terminals.open(session.key, client: client)
     }
 
     #if DEBUG

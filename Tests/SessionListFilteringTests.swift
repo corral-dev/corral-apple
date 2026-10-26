@@ -472,35 +472,63 @@ final class SessionListFilteringTests: XCTestCase {
         XCTAssertFalse(outside.label.isEmpty)
     }
 
-    func testActiveIsTheActivityDotSetUnreadAloneIsNotActive() {
-        func marked(_ key: String, _ marker: String, runtime: String = "codex") -> SessionSummary {
-            SessionSummary(key: key, runtime: runtime, mtime: 1, hosted: marker == "recent", marker: marker)
-        }
+    func testFocusUsesTheHostDecisionWhenPresent() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let old = now.timeIntervalSince1970 - 86_400
         let sessions = [
-            marked("codex:wait", "waiting"),
-            marked("claude:work", "working", runtime: "claude"),
-            marked("codex:unread", "unread"),
-            marked("codex:recent", "recent"),
-            marked("codex:idle", ""),
-            marked("codex:open", ""),
-            marked("kimi:wait", "waiting", runtime: "kimi"),
-            // Red unread overlay over a working activity behind it: still active.
-            SessionSummary(key: "codex:dual", runtime: "codex", mtime: 1, attention: .working, marker: "unread"),
+            // Host says yes even for an old idle row (e.g. opened a minute ago).
+            SessionSummary(key: "codex:viewed", runtime: "codex", mtime: old, marker: "", needsAttention: true),
+            // Host says no even with a fresh timestamp: the host is authoritative.
+            SessionSummary(key: "codex:no", runtime: "codex", mtime: now.timeIntervalSince1970,
+                           marker: "", needsAttention: false),
+            SessionSummary(key: "claude:work", runtime: "claude", mtime: old, marker: "working", needsAttention: true),
+            SessionSummary(key: "kimi:wait", runtime: "kimi", mtime: old, marker: "waiting", needsAttention: true),
         ]
-        // Pure red is only an unread explanation, not activity.
-        XCTAssertFalse(SessionListFiltering.isActive(sessions[2]))
-        XCTAssertTrue(SessionListFiltering.isActive(sessions[7]))
+        XCTAssertTrue(SessionListFiltering.needsAttention(sessions[0], now: now))
+        XCTAssertFalse(SessionListFiltering.needsAttention(sessions[1], now: now))
         XCTAssertEqual(
-            SessionListFiltering.apply(sessions: sessions, runtimes: [], projects: [], activeOnly: true).map(\.key),
-            ["codex:wait", "claude:work", "codex:recent", "codex:dual"]
+            SessionListFiltering.apply(sessions: sessions, runtimes: [], projects: [], attentionOnly: true).map(\.key),
+            ["codex:viewed", "claude:work"]
         )
         XCTAssertEqual(
-            SessionListFiltering.apply(sessions: sessions, runtimes: [.codex], projects: [], activeOnly: true).map(\.key),
-            ["codex:wait", "codex:recent", "codex:dual"]
+            SessionListFiltering.apply(sessions: sessions, runtimes: [.codex], projects: [], attentionOnly: true).map(\.key),
+            ["codex:viewed"]
         )
-        XCTAssertEqual(SessionListFiltering.activeCount(sessions: sessions), 4)
-        XCTAssertEqual(SessionListFiltering.activeCount(sessions: [sessions[2], sessions[5]]), 0)
-        XCTAssertEqual(SessionListFiltering.apply(sessions: sessions, runtimes: [], projects: []).count, 7)
+        XCTAssertEqual(SessionListFiltering.attentionCount(sessions: sessions, now: now), 2)
+        XCTAssertEqual(SessionListFiltering.apply(sessions: sessions, runtimes: [], projects: []).count, 3)
+    }
+
+    func testFocusFallbackForHostsWithoutTheField() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        func row(_ key: String, age: Double, marker: String, attention: AttentionKind = .none) -> SessionSummary {
+            SessionSummary(key: key, runtime: "codex", mtime: now.timeIntervalSince1970 - age,
+                           attention: attention, marker: marker)
+        }
+        let recentUnread = row("codex:unread", age: 6 * 86_400, marker: "unread")
+        let staleUnread = row("codex:stale-unread", age: 8 * 86_400, marker: "unread")
+        let justEnded = row("codex:ended", age: 20 * 60, marker: "")
+        let longEnded = row("codex:old", age: 40 * 60, marker: "")
+        let working = row("codex:work", age: 86_400, marker: "working")
+        // Red over working activity stays in through the activity.
+        let dual = row("codex:dual", age: 86_400, marker: "unread", attention: .working)
+        XCTAssertTrue(SessionListFiltering.needsAttention(recentUnread, now: now))
+        XCTAssertFalse(SessionListFiltering.needsAttention(staleUnread, now: now))
+        XCTAssertTrue(SessionListFiltering.needsAttention(justEnded, now: now))
+        XCTAssertFalse(SessionListFiltering.needsAttention(longEnded, now: now))
+        XCTAssertTrue(SessionListFiltering.needsAttention(working, now: now))
+        XCTAssertTrue(SessionListFiltering.needsAttention(dual, now: now))
+        XCTAssertFalse(SessionListFiltering.needsAttention(SessionSummary(key: "codex:none", marker: ""), now: now))
+    }
+
+    func testNeedsAttentionDecodesAndPersists() throws {
+        let data = Data(#"{"key":"codex:a","needs_attention":true}"#.utf8)
+        let decoded = try JSONDecoder().decode(SessionSummary.self, from: data)
+        XCTAssertEqual(decoded.needsAttention, true)
+        let legacy = try JSONDecoder().decode(SessionSummary.self, from: Data(#"{"key":"codex:b"}"#.utf8))
+        XCTAssertNil(legacy.needsAttention)
+        let roundTrip = try JSONDecoder().decode(SessionSummary.self, from: JSONEncoder().encode(decoded))
+        XCTAssertEqual(roundTrip.needsAttention, true)
+        XCTAssertEqual(decoded.replacingKey("codex:c").needsAttention, true)
     }
 
     func testExtraQuickChoicesAppendAndNeverMoveOnDeselection() {

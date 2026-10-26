@@ -19,14 +19,20 @@ enum ChatImageReferenceCache {
     nonisolated(unsafe) private static let cache: NSCache<NSString, Box> = {
         let cache = NSCache<NSString, Box>()
         cache.countLimit = 512
+        cache.totalCostLimit = 1024 * 1024
         return cache
     }()
+
+    /// Drop parsed references under system memory pressure; text re-parses.
+    static func purge() {
+        cache.removeAllObjects()
+    }
 
     static func references(in text: String) -> [ChatImageReference] {
         let key = text as NSString
         if let hit = cache.object(forKey: key) { return hit.references }
         let parsed = ChatImageReference.references(in: text)
-        cache.setObject(Box(parsed), forKey: key)
+        cache.setObject(Box(parsed), forKey: key, cost: max(64, text.utf8.count * 2))
         return parsed
     }
 }

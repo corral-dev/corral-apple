@@ -56,6 +56,7 @@ let package = Package(
                 "ChatHistoryPullTests.swift",
                 "ChatImageReferenceTests.swift",
                 "ConversationProvisionalWorkingTests.swift",
+                "ConversationRetentionTests.swift",
                 "ConversationSendCoordinatorTests.swift",
                 "ComposerDraftStoreTests.swift",
                 "ConversationTailCacheTests.swift",
@@ -90,6 +91,7 @@ let package = Package(
                 "DesktopSidebarProjectionTests.swift",
                 "SessionUserPromptsTests.swift",
                 "ComposerHistoryTests.swift",
+                "ConnectionFailureTextTests.swift",
                 "TerminalInputPassiveTests.swift",
             ],
             swiftSettings: [
