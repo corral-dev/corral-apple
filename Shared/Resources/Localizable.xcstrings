@@ -1,6 +1,18 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "chat.diagram.title": {
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Diagram" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "图表" } }
+      }
+    },
+    "chat.diagram.source": {
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Source" } },
+        "zh-Hans": { "stringUnit": { "state": "translated", "value": "源码" } }
+      }
+    },
     "": {},
     "%@": {},
     "%@. %@": {

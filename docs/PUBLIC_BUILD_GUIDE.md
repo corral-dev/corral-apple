@@ -1,5 +1,7 @@
 # Public client builds
 
+[Changelog](../CHANGELOG.md): bilingual changes in the shipped Mac and iPhone clients.
+
 The public Apple repository is `corral-dev/corral-apple`. It contains both clients and their shared code, with a fresh current-source history. The original private repository is not its Git parent and its maintainer-only history is not distributed.
 
 ## Requirements

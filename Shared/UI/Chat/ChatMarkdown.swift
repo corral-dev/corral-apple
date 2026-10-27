@@ -22,8 +22,10 @@ nonisolated enum ChatMarkdown: Sendable {
 
     private final class CacheBox: NSObject {
         let value: AttributedString
-        init(_ value: AttributedString) {
+        let diagrams: [ChatDiagramBlock]
+        init(_ value: AttributedString, diagrams: [ChatDiagramBlock] = []) {
             self.value = value
+            self.diagrams = diagrams
         }
     }
 
@@ -56,10 +58,18 @@ nonisolated enum ChatMarkdown: Sendable {
             return cached.value
         }
 
-        let result = trimmed(style(parse(source)))
+        let parsed = parse(source)
+        let result = trimmed(style(parsed))
+        let diagrams = ChatDiagramBlock.candidates(source: source, parsed: parsed)
         // Four bytes per source byte is a conservative rendered-size estimate.
-        cache.setObject(CacheBox(result), forKey: key, cost: max(64, source.utf8.count * 4))
+        cache.setObject(CacheBox(result, diagrams: diagrams), forKey: key, cost: max(64, source.utf8.count * 4))
         return result
+    }
+
+    static func diagrams(in source: String) -> [ChatDiagramBlock] {
+        let source = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        _ = attributed(source)
+        return cache.object(forKey: source as NSString)?.diagrams ?? []
     }
 
     private static func trimmed(_ text: AttributedString) -> AttributedString {
@@ -107,6 +117,7 @@ nonisolated enum ChatMarkdown: Sendable {
         var options = AttributedString.MarkdownParsingOptions()
         options.interpretedSyntax = .full
         options.failurePolicy = .returnPartiallyParsedIfPossible
+        options.appliesSourcePositionAttributes = true
         if let parsed = try? AttributedString(markdown: source, options: options) {
             return parsed
         }

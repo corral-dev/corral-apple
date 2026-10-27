@@ -15,6 +15,7 @@ sources = [
     "Shared/UI/Design/InterfaceScale.swift", "Shared/UI/Design/Typography.swift",
     "Shared/UI/Design/SessionTextSize.swift", "Shared/UI/Design/Space.swift",
     "Shared/UI/Platform/PlatformSupport.swift", "Shared/UI/Platform/NativeOverlayScrollers.swift",
+    "Shared/UI/Platform/MacSessionContextMenu.swift",
     "Shared/Core/Conversation/ChatHistoryPullState.swift", "Shared/UI/Chat/ChatScrollView.swift",
     "Shared/UI/Chat/MacConversationTextDocument.swift", "Shared/UI/Chat/SelectableAttributedText.swift",
     "macOS/Design/MacMotion.swift", "scripts/mac-sidebar-resize/Support.swift",

@@ -251,7 +251,12 @@ struct ChatView: View {
                     if case .message(let message) = item { return message }
                     return nil
                 },
-                documentOverride: textDocument
+                documentOverride: textDocument,
+                renderText: { imageLoader?.diagrams.attributed(text: $0, dark: colorScheme == .dark) ?? ChatMarkdown.attributed($0) },
+                mediaRevisions: Dictionary(items.compactMap { item -> (Int, Int)? in
+                    guard case .message(let message) = item else { return nil }
+                    return (message.seq, mediaRevision(item))
+                }, uniquingKeysWith: { _, latest in latest })
             ))
         #else
         // The activity cue renders below the question card, so it is the true bottom.
@@ -309,6 +314,13 @@ struct ChatView: View {
             .interfaceFrame(maxWidth: .infinity)
     }
 
+    @Environment(\.chatImageLoader) private var imageLoader
+
+    private func mediaRevision(_ item: ConversationTimelineItem) -> Int {
+        guard case .message(let message) = item, let text = message.text else { return 0 }
+        return imageLoader?.diagrams.revision(text: text, dark: colorScheme == .dark) ?? 0
+    }
+
     private func timelineRow(_ item: ConversationTimelineItem, separator: Date?, gap: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             if let separator {
@@ -324,7 +336,8 @@ struct ChatView: View {
                     sessionTextScale: sessionTextScale,
                     colorScheme: colorScheme,
                     bubbleTextCap: MessageBubbleLayout.defaultBubbleCap,
-                    selectionDocumentID: textDocumentID
+                    selectionDocumentID: textDocumentID,
+                    mediaRevision: mediaRevision(item)
                 )
             case .toolGroup(_, let sourceSeqs, let tools):
                 ToolActivityView(
@@ -386,7 +399,7 @@ struct ChatView: View {
             rows.append(MacConversationRow(id: item.id, value: .timeline(
                 item, separator: separators[item.id],
                 gap: ChatTimelineRhythm.leadingGap(before: index, in: items)
-            )))
+            ), mediaRevision: mediaRevision(item)))
         }
         if !store.prompts.isEmpty {
             rows.append(MacConversationRow(id: "prompts", value: .prompts(promptsState)))
@@ -419,7 +432,8 @@ struct ChatView: View {
             rows: macRows(items: items, separators: separators, activity: activity),
             renderKey: MacConversationRenderKey(
                 interfaceScale: interfaceScale, sessionTextScale: sessionTextScale,
-                colorScheme: colorScheme, runtimeID: runtimeID, document: textDocumentID
+                colorScheme: colorScheme, runtimeID: runtimeID, document: textDocumentID,
+                imageLoader: imageLoader.map(ObjectIdentifier.init), mediaAvailable: imageLoader?.isAvailable == true
             ),
             rowContent: { AnyView(macRowContent($0)) },
             scrollToLatestRequest: scrollToLatestRequest + promptSubmission,

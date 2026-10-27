@@ -1,12 +1,24 @@
 # Chat diagram rendering
 
-Status: proposed design with a working rendering study (2026-10-24). No production implementation, installed-client acceptance or iPhone performance is claimed. The owner approved design work; the implementation choices below are the resulting proposal.
+Status: implemented in the shared chat surface on 2026-10-26 after the owner requested images, Mermaid and PlantUML. The 2026-10-24 study alone did not implement production rendering. Component and live-host acceptance are recorded below; installed Mac/iPhone acceptance is recorded separately so a Debug fixture is never presented as shipped behavior.
 
 Review the [offline preview](../../design/chat-diagrams/preview.html), [light study](../../design/chat-diagrams/light.png), [dark study](../../design/chat-diagrams/dark.png), [Mermaid study](../../design/chat-diagrams/mermaid.png), [corrected mindmap](../../design/chat-diagrams/mindmap.png) and [study evidence](../../design/chat-diagrams/evidence.json). The preview contains real pre-rendered engine output, source text, appearance/sample/text-size controls and a drawing/source viewer. Its study controls are outside the proposed chat UI.
 
+## Delivery implementation (2026-10-26)
+
+The production chat surface now recognizes fenced Mermaid/PlantUML and safe whole-message diagram source in `ChatMarkdown`, stores the candidates with the parsed message, and renders them as native `NSTextAttachment`s in the existing selectable text network. The pinned Mermaid 12.0.0, PlantUML 1.2026.8, DOMPurify 3.4.16 and C4 2.13.0 assets are bundled under `Shared/Resources/ChatDiagrams`; rendering is local, serialized and credential-free. Invalid or unsafe source remains ordinary selectable source.
+
+The inline attachment is a transparent canvas PNG rendered from the sanitized SVG. On macOS the same drawing also gets a PDF page for the native viewer. PDFKit paints an opaque white page behind transparent PDF content, and WebKit's print PDF paper is also opaque; the viewer PDF therefore uses the resolved light/dark window surface as its page color, and the viewer uses the same surface color. This is an implementation constraint, not a claim that WebKit or PDFKit can export a transparent page through public API. The original source remains the only copy/selection representation.
+
+Mac row identity includes the image-loader identity/capability and a per-message media revision, so a table realized before the loader exists refreshes without discarding row anchors. The iPhone observes the same store and updates the native text attachment directly. Drawings are cached in memory and on disk by host, engine versions, appearance and source hash; the PNG cache is separate from the viewer PDF so a cached inline drawing stays transparent.
+
+Component acceptance on 2026-10-26 (Mac Debug, production `ChatView`/table): both light and dark fixtures produced two native attachments, preserved adjacent selectable text and source copy, and rendered 11 Mermaid/PlantUML types in both appearances with two unsafe/invalid sources rejected. The live host-backed fixture loaded the cited image from this session's history (`imagesLoaded=1`, 80 messages) and displayed it in a conversation row. The PDF viewer and source picker were captured in both appearances. Installed Mac/iPhone acceptance and physical-device performance remain separate below.
+
+Installed delivery (2026-10-26): Mac 0.3.155 (159) is at `/Applications/Corral.app`, Developer ID signature and executable hash verified, local transport ready with data attached, and no Debug copy left running. iPhone 1.0.199 (210) is installed and launched on the paired iPhone; `ios-deliver` verified the install, uploaded release 364 to the [install shelf](the private install shelf), and the device reports the same version/build. The installed Mac window was captured at the session list; opening the target conversation, scrolling to the cited image and the Diagram/Source sheet still requires the owner's click because pointer automation is prohibited. The iPhone screen was captured at its existing conversation; a diagram-bearing message opened by touch remains a physical acceptance step. No gesture or pinch-zoom performance is claimed.
+
 ## Product requirements
 
-The owner requested Mermaid and PlantUML rendering in Corral clients on 2026-10-24 and approved continuing the design after reviewing the WaterfallNotes requirements. This document owns Corral's adaptation; proposed implementation details remain distinguishable from confirmed requirements.
+The owner requested Mermaid and PlantUML rendering in Corral clients on 2026-10-24 and explicitly requested implementation of images and both diagram formats on 2026-10-26. Render actual diagrams, not only syntax-highlighted source. Finish with a reply containing a Markdown image and both diagram fences so the owner can inspect the real conversation. This document owns Corral's adaptation; performance targets remain distinct from measured results.
 
 - Render diagrams in iPhone and native Mac chat content. Preserve the assistant's original terminal output in terminal mode and the TUI.
 - Recognize explicit diagram code fences and safely recognize unlabelled complete diagram source without misclassifying ordinary prose.
@@ -98,6 +110,8 @@ Store both original source range/fence and the engine-input projection. Unicode,
 - Queue once per content/style key, not once per token, geometry callback or view body evaluation. A stable earlier diagram in a streaming message is not redrawn when prose below it changes.
 
 ## Rendering architecture
+
+Implementation correction (2026-10-26): the shipped inline attachment is a transparent canvas PNG, and the Diagram sheet uses a raster PDF of that PNG over the resolved surface color. The vector-PDF proposal below was not used because WebKit's print PDF and PDFKit's page backing are opaque, while `NSImage`'s SVG-to-PDF path misrendered complex Mermaid markers. See [Delivery implementation](#delivery-implementation-2026-10-26).
 
 The proposed first implementation bundles Mermaid, PlantUML's JavaScript engine, its Graphviz runtime and the permitted C4 bundle inside both apps. Rendering stays on the device. There is no new JVM, localhost daemon, cloud service, relay message or dependency on a reachable paired host. A host/server renderer remains a future measured alternative only if the physical-phone budget below fails; it is not an automatic fallback or a reason to send source to a public service.
 

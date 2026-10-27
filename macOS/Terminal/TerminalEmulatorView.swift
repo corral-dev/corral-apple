@@ -25,7 +25,13 @@ struct TerminalEmulator: NSViewRepresentable {
     }
 
     private func update(_ slot: TerminalSlot) {
-        if host.superview !== slot { slot.adopt(host) }
+        // Only a presented pane takes the terminal. A dormant pane it has left
+        // (the same session under its provisional key) must neither pull it
+        // back nor hide it.
+        if host.superview !== slot {
+            guard isPresented else { return }
+            slot.adopt(host)
+        }
         host.onManualScroll = acknowledgeRead
         host.updateInterfaceScale(interfaceScale)
         host.setPresented(isPresented)

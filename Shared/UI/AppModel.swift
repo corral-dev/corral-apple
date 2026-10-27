@@ -460,6 +460,7 @@ final class AppModel {
     }
 
     func removeHost(_ host: HostInfo) {
+        ChatDiagramRenderer.shared.forget(host: host.hostID)
         hostStore.removeHost(hostID: host.hostID)
         refreshHosts()
         if connectedHostID == host.hostID || inFlightHostID == host.hostID {

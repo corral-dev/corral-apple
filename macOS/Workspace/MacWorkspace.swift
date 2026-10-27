@@ -230,8 +230,13 @@ final class MacWorkspace {
     }
 
     /// A new session's provisional key becomes canonical after its first
-    /// prompt; its chosen view must survive the rename.
-    func carryMode(from oldKey: String, to newKey: String) {
+    /// prompt; its chosen view and its open terminal must survive the rename.
+    func sessionMigrated(from oldKey: String, to newKey: String) {
+        carryMode(from: oldKey, to: newKey)
+        terminals.migrate(from: oldKey, to: newKey)
+    }
+
+    private func carryMode(from oldKey: String, to newKey: String) {
         let old = "\(hostID ?? ""):\(oldKey)"
         guard let stored = modes.removeValue(forKey: old) else { return }
         let new = modeKey(newKey)

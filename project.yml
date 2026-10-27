@@ -32,8 +32,8 @@ settings:
     SWIFT_APPROACHABLE_CONCURRENCY: YES
     GENERATE_ASSET_SYMBOL_EXTENSIONS: YES
     ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: YES
-    MARKETING_VERSION: "1.0.198"
-    CURRENT_PROJECT_VERSION: "209"
+    MARKETING_VERSION: "1.0.200"
+    CURRENT_PROJECT_VERSION: "211"
     CODE_SIGN_STYLE: Automatic
 
 configFiles:
@@ -51,6 +51,10 @@ targets:
       - path: Shared
         excludes:
           - "**/.DS_Store"
+          - Resources/ChatDiagrams
+      - path: Shared/Resources/ChatDiagrams
+        type: folder
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.example.corral
@@ -67,9 +71,9 @@ targets:
     info:
       path: iOS/Info.plist
       properties:
+        CorralKeychainAccessGroup: $(AppIdentifierPrefix)$(CORRAL_KEYCHAIN_GROUP)
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
-        CorralKeychainAccessGroup: $(AppIdentifierPrefix)$(CORRAL_KEYCHAIN_GROUP)
         NSBonjourServices:
           - _corral._tcp.
         CFBundleURLTypes:
@@ -161,6 +165,10 @@ targets:
       - path: Shared
         excludes:
           - "**/.DS_Store"
+          - Resources/ChatDiagrams
+      - path: Shared/Resources/ChatDiagrams
+        type: folder
+        buildPhase: resources
     dependencies:
       - package: SwiftTerm
       - package: Sparkle
@@ -168,8 +176,8 @@ targets:
       base:
         PRODUCT_NAME: Corral
         PRODUCT_BUNDLE_IDENTIFIER: com.example.corral
-        MARKETING_VERSION: "0.3.154"
-        CURRENT_PROJECT_VERSION: "158"
+        MARKETING_VERSION: "0.3.156"
+        CURRENT_PROJECT_VERSION: "160"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         ENABLE_HARDENED_RUNTIME: YES

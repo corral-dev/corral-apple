@@ -101,6 +101,7 @@ struct RuntimeEntry: Decodable { var id: String; var isActive: Bool { true } }
 @MainActor final class MacTerminalSessions {
     func reset() {}
     func close(_ key: String) {}
+    func migrate(from oldKey: String, to newKey: String) {}
 }
 
 // This transport-only harness has no mounted views. Native reading restoration

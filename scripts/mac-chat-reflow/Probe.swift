@@ -147,14 +147,20 @@ struct ReflowProbe {
                 // Reveal it before testing every point, including its edges.
                 button.scrollToVisible(button.bounds)
                 pump(host)
-                let frame = button.convert(button.bounds, to: host)
-                precondition(button.visibleRect.contains(button.bounds), "Capsule fixture is still clipped")
+                // Scrolling can recycle the lazy row that owned the original
+                // button. Test the currently realized capsule, not a detached
+                // view whose visibleRect has already become empty.
+                guard let capsule = descendants(host).compactMap({ $0 as? NSButton })
+                    .first(where: { !$0.visibleRect.isEmpty && $0.bounds.height < 50 }) else { continue }
+                let frame = capsule.convert(capsule.bounds, to: host)
+                precondition(capsule.visibleRect.contains(capsule.bounds),
+                             "Capsule fixture is still clipped: visible=\(capsule.visibleRect) bounds=\(capsule.bounds) count=\(count) width=\(width) scale=\(scale)")
                 for x in [0.1, 0.5, 0.9] {
                     for y in [0.1, 0.5, 0.9] {
                         let point = NSPoint(x: frame.minX + frame.width * x, y: frame.minY + frame.height * y)
                         guard host.bounds.contains(point) else { continue }
                         let hit = host.hitTest(host.convert(point, to: host.superview))
-                        precondition(hit === button || hit?.isDescendant(of: button) == true,
+                        precondition(hit === capsule || hit?.isDescendant(of: capsule) == true,
                                      "Capsule point \(point) frame=\(frame) hit=\(String(describing: hit)) at \(count) messages / \(scale) / \(width)")
                         checkedButtons += 1
                     }

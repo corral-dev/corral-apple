@@ -527,7 +527,7 @@ struct MacRootView: View {
         feedClientIdentity = nil
         feed = current
         workspace.feed = current
-        current.onSessionMigrated = { [weak workspace] old, new in workspace?.carryMode(from: old, to: new) }
+        current.onSessionMigrated = { [weak workspace] old, new in workspace?.sessionMigrated(from: old, to: new) }
         current.onListChanged = { [weak current] in
             if let current { await notifications.resolvePending(feed: current, workspace: workspace) }
         }

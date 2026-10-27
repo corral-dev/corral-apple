@@ -6,7 +6,19 @@ next version's section. A `Release: minor` or `Release: major` line requests a
 larger version step; `Release: hold <reason>` keeps the changes unreleased until
 the named acceptance is done.
 
-## Unreleased
+## Mac 0.3.156 (160) / iPhone 1.0.200 (211)
+
+### English
+
+- Chat now displays cited images and locally rendered Mermaid/PlantUML diagrams. Open a drawing in the native viewer or inspect its original source; invalid or unsafe diagrams remain readable source.
+- Mac keeps one live terminal stream when a newly created session receives its permanent identity, preventing the terminal grid from repeatedly disappearing and returning.
+- Refined Mac pane reordering and aligned sidebar date counts with session content.
+
+### 简体中文
+
+- 聊天支持引用图片，以及在本地绘制 Mermaid/PlantUML 图表。可用原生查看器打开图表或查看原始源码；无效或不安全的图表保留为可读源码。
+- Mac 新建会话获得正式身份时保留同一条实时终端流，避免终端格子反复消失、重现。
+- 优化 Mac 分屏拖动排序，并将侧栏日期计数与会话内容对齐。
 
 ## 0.3.154 — 2026-10-26
 

@@ -1,6 +1,13 @@
 #if os(macOS)
 import AppKit
 
+/// Optional media behavior; the text network does not own engine/cache policy.
+@MainActor protocol MacMessageMediaAttachment {
+    var original: String { get }
+    var selectionLength: Int { get }
+    func open()
+}
+
 #if DEBUG
 /// Warm-switch diagnostics: do lazy text rows actually re-realize their native
 /// views when returning to a retained pane, or only re-measure? Reset before
@@ -62,6 +69,13 @@ final class MacDirectMessageTextView: NSTextView {
     /// blocks. Word/paragraph clicks, modified clicks and links keep native
     /// handling.
     override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 1, isText(at: event), let storage = textStorage {
+            let index = characterIndexForInsertion(at: convert(event.locationInWindow, from: nil))
+            if index < storage.length, let diagram = storage.attribute(.attachment, at: index, effectiveRange: nil) as? any MacMessageMediaAttachment {
+                diagram.open()
+                return
+            }
+        }
         guard event.clickCount == 1,
               event.modifierFlags.intersection([.shift, .command, .option, .control]).isEmpty,
               let document = layoutManager?.delegate as? MacConversationTextDocument,
@@ -70,6 +84,21 @@ final class MacDirectMessageTextView: NSTextView {
             return
         }
         document.trackSelection(from: self, mouseDown: event)
+    }
+
+    override func writeSelection(to pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        if type == .string, let storage = textStorage, NSMaxRange(selectedRange()) <= storage.length {
+            let selected = NSMutableAttributedString(attributedString: storage.attributedSubstring(from: selectedRange()))
+            var sources: [(NSRange, String)] = []
+            selected.enumerateAttribute(.attachment, in: NSRange(location: 0, length: selected.length)) { value, range, _ in
+                if let media = value as? any MacMessageMediaAttachment { sources.append((range, media.original)) }
+            }
+            if !sources.isEmpty {
+                for (range, source) in sources.reversed() { selected.replaceCharacters(in: range, with: source) }
+                return pboard.setString(selected.string, forType: type)
+            }
+        }
+        return super.writeSelection(to: pboard, type: type)
     }
 
     private func isLink(at event: NSEvent) -> Bool {
@@ -134,6 +163,7 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
         let id: Int
         let text: String
         let isUser: Bool
+        var mediaRevision: Int = 0
     }
 
     struct Style: Equatable {
@@ -523,12 +553,36 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
         guard let block = blocks.first(where: { index >= $0.range.location && index <= NSMaxRange($0.range) }) else {
             return nil
         }
-        return Position(id: block.source.id, offset: index - block.range.location)
+        let offset = min(index - block.range.location, block.text.length)
+        var sourceOffset = offset
+        block.text.enumerateAttribute(.attachment, in: NSRange(location: 0, length: offset)) { value, range, _ in
+            if let media = value as? any MacMessageMediaAttachment {
+                sourceOffset += media.selectionLength - range.length
+            }
+        }
+        return Position(id: block.source.id, offset: sourceOffset)
     }
 
     private func index(of position: Position) -> Int? {
         guard let block = byID[position.id] else { return nil }
-        return block.range.location + min(position.offset, block.range.length)
+        var nativeOffset = position.offset
+        var sourceCursor = 0
+        var nativeCursor = 0
+        block.text.enumerateAttribute(.attachment, in: NSRange(location: 0, length: block.text.length)) { value, range, stop in
+            guard let media = value as? any MacMessageMediaAttachment else { return }
+            sourceCursor += range.location - nativeCursor
+            let length = media.selectionLength
+            if position.offset <= sourceCursor { stop.pointee = true; return }
+            if position.offset < sourceCursor + length {
+                nativeOffset = range.location
+                stop.pointee = true
+                return
+            }
+            nativeOffset -= length - range.length
+            sourceCursor += length
+            nativeCursor = NSMaxRange(range)
+        }
+        return block.range.location + min(max(0, nativeOffset), block.range.length)
     }
 }
 

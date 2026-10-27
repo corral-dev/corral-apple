@@ -437,6 +437,9 @@ struct SessionDetailView: View {
                 onRetryMessage: retryFailedMessage
             )
             .environment(\.chatImageLoader, imageLoader)
+            .sheet(item: Binding(get: { imageLoader?.diagrams.inspection }, set: { imageLoader?.diagrams.inspection = $0 })) { inspection in
+                ChatDiagramViewer(inspection: inspection)
+            }
             .environment(\.conversationScrollReadAction, acknowledgeScrollRead)
         } else {
             ProgressView()

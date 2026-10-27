@@ -81,6 +81,8 @@ struct MessageBubbleView: View, Equatable {
     /// elsewhere). A replaced network must re-resolve even when the messages
     /// are identical.
     var selectionDocumentID: ObjectIdentifier? = nil
+    var mediaRevision: Int = 0
+    @Environment(\.chatImageLoader) private var imageLoader
 
     /// `onRetry` is excluded: its behavior is fully determined by `message`.
     static func == (lhs: MessageBubbleView, rhs: MessageBubbleView) -> Bool {
@@ -91,6 +93,7 @@ struct MessageBubbleView: View, Equatable {
             && lhs.colorScheme == rhs.colorScheme
             && lhs.bubbleTextCap == rhs.bubbleTextCap
             && lhs.selectionDocumentID == rhs.selectionDocumentID
+            && lhs.mediaRevision == rhs.mediaRevision
     }
 
     /// Capped text still has hidden lines below its fade.
@@ -175,7 +178,7 @@ struct MessageBubbleView: View, Equatable {
         if let text = message.text, !text.allSatisfy(\.isWhitespace) {
             VStack(alignment: isUser ? .trailing : .leading, spacing: Space.sm * interfaceScale) {
                 SelectableAttributedText(
-                    attributed: ChatMarkdown.attributed(text),
+                    attributed: imageLoader?.diagrams.attributed(text: text, dark: colorScheme == .dark) ?? ChatMarkdown.attributed(text),
                     foreground: isUser ? userForeground : Color.primary,
                     // Match links and selection handles to the bubble's contrast pair.
                     tint: isUser ? userForeground : Palette.accent,
@@ -208,6 +211,9 @@ struct MessageBubbleView: View, Equatable {
                 alignment: isUser ? .trailing : .leading
             )
             .background(hasBubble ? bubbleFill : Color.clear, in: bubbleShape)
+            .task(id: "\(imageLoader.map(ObjectIdentifier.init).map(String.init(describing:)) ?? "")|\(colorScheme)|\(text)") {
+                await imageLoader?.diagrams.prepare(text: text, dark: colorScheme == .dark)
+            }
         }
     }
 

@@ -92,6 +92,7 @@ struct CorralMacApp: App {
                 .modifier(MacUpdateInspection())
                 #endif
                 .task { await MacResizeInspection.runIfRequested() }
+                .task { await MacChatMediaInspection.runIfRequested(model: appModel) }
                 #endif
         }
         .defaultSize(width: 1180, height: 760)

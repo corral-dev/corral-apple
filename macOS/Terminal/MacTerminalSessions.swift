@@ -15,7 +15,7 @@ final class MacTerminalSessions {
     @MainActor
     @Observable
     final class Terminal {
-        let key: String
+        fileprivate(set) var key: String
         @ObservationIgnored let view: TerminalHostView
         private(set) var stream: RemoteTerminalStream
         @ObservationIgnored fileprivate var lastShown: UInt64 = 0
@@ -88,6 +88,20 @@ final class MacTerminalSessions {
 
     func close(_ key: String) {
         terminals.removeValue(forKey: key)?.close()
+    }
+
+    /// A provisional session key became canonical: the same terminal goes on
+    /// under the new key. Its stream keeps the old key, which the host still
+    /// resolves to the same tmux pane; a second stream would renew a second,
+    /// stale size vote from this window and the agent grid would flap.
+    func migrate(from oldKey: String, to newKey: String) {
+        guard oldKey != newKey, let terminal = terminals.removeValue(forKey: oldKey) else { return }
+        if terminals[newKey] != nil {
+            terminal.close()
+            return
+        }
+        terminal.key = newKey
+        terminals[newKey] = terminal
     }
 
     /// Another machine: none of these terminals belong to it.

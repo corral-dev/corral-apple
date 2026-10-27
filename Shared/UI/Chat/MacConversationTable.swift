@@ -17,6 +17,7 @@ enum MacConversationRowValue: Equatable {
 struct MacConversationRow: Equatable, Identifiable {
     let id: String
     let value: MacConversationRowValue
+    var mediaRevision: Int = 0
 }
 
 /// Inputs that change every row's rendering and size.
@@ -26,6 +27,8 @@ struct MacConversationRenderKey: Equatable {
     var colorScheme: ColorScheme
     var runtimeID: String?
     var document: ObjectIdentifier?
+    var imageLoader: ObjectIdentifier? = nil
+    var mediaAvailable: Bool = false
 }
 
 /// Row heights measured for one conversation document. The document outlives
@@ -197,6 +200,7 @@ struct MacConversationTable: NSViewRepresentable {
         /// Everything a row's rendering depends on besides its width.
         fileprivate struct ContentKey: Equatable {
             var value: MacConversationRowValue
+            var mediaRevision: Int = 0
             var isFirst: Bool
             var render: MacConversationRenderKey
         }
@@ -394,7 +398,7 @@ struct MacConversationTable: NSViewRepresentable {
                 needsRemeasure = true
                 return heights.measured[item.id]?.height ?? 1
             }
-            let key = HeightKey(content: ContentKey(value: item.value, isFirst: row == 0, render: renderKey),
+            let key = HeightKey(content: ContentKey(value: item.value, mediaRevision: item.mediaRevision, isFirst: row == 0, render: renderKey),
                                 width: width)
             if let cached = heights.measured[item.id], cached.key == key { return cached.height }
             let height = measure(item, isFirst: row == 0, width: width)
@@ -493,7 +497,7 @@ struct MacConversationTable: NSViewRepresentable {
 
         private func content(for row: MacConversationRow, isFirst: Bool, measuring: Bool) -> AnyView {
             let base = rowContent?(row) ?? AnyView(EmptyView())
-            let contentKey = renderKey.map { ContentKey(value: row.value, isFirst: isFirst, render: $0) }
+            let contentKey = renderKey.map { ContentKey(value: row.value, mediaRevision: row.mediaRevision, isFirst: isFirst, render: $0) }
             let content = base
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .chatReadableColumn()

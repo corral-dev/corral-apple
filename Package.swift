@@ -50,6 +50,7 @@ let package = Package(
                 "SessionTextSizeTests.swift",
             ],
             sources: [
+                "ChatDiagramBlockTests.swift",
                 "ChatComposerPolicyTests.swift",
                 "SessionRestartTrackerTests.swift",
                 "HapticFeedbackPolicyTests.swift",

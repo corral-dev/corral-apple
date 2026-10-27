@@ -292,6 +292,8 @@ struct MacSidebar: View {
                                 .fixedSize()
                         }
                         .interfaceFrame(height: MacSidebarMetrics.sectionHeight)
+                        // Native headers extend 14 pt beyond session content, independent of text zoom.
+                        .padding(.trailing, 14)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .contentShape(Rectangle())
                     }

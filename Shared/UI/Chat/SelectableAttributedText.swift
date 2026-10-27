@@ -12,6 +12,17 @@ private final class EdgeFadeTextView: UITextView {
     var onMoreBelowChange: ((Bool) -> Void)?
     private var reportedMoreBelow: Bool?
 
+    override func copy(_ sender: Any?) {
+        if let plain = ChatDiagramAttachment.plainText(attributedText, range: selectedRange) {
+            // Keep the native rich/image representations alongside source text.
+            super.copy(sender)
+            var items = UIPasteboard.general.items
+            if items.isEmpty { items = [[:]] }
+            items[0]["public.utf8-plain-text"] = plain
+            UIPasteboard.general.items = items
+        } else { super.copy(sender) }
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
         refreshEdgeFade()
@@ -316,6 +327,12 @@ private struct SelectableTextView: UIViewRepresentable {
         var sizes: [CGFloat: CGSize] = [:]
         /// Last scroll mode queued for the live view; nil until the first measurement.
         var scheduledScrollMode: Bool?
+
+        func textView(_ textView: UITextView, primaryActionFor textItem: UITextItem, defaultAction: UIAction) -> UIAction? {
+            guard case .textAttachment(let attachment) = textItem.content,
+                  let diagram = attachment as? ChatDiagramAttachment else { return defaultAction }
+            return UIAction { _ in diagram.open() }
+        }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
             (scrollView as? EdgeFadeTextView)?.refreshEdgeFade()
@@ -757,6 +774,8 @@ struct MacConversationTextSelection: ViewModifier {
     /// Retained document from the pane cache. Nil outside Mac panes (previews,
     /// layout tests), where the modifier keeps owning a private one.
     var documentOverride: MacConversationTextDocument? = nil
+    var renderText: ((String) -> AttributedString)? = nil
+    var mediaRevisions: [Int: Int] = [:]
     @Environment(\.sessionTextScale) private var sessionTextScale
     @Environment(\.interfaceScale) private var interfaceScale
     @State private var document = MacConversationTextDocument()
@@ -764,7 +783,8 @@ struct MacConversationTextSelection: ViewModifier {
     func body(content: Content) -> some View {
         let sources = messages.compactMap { message -> MacConversationTextDocument.Source? in
             guard let text = message.text, !text.allSatisfy(\.isWhitespace) else { return nil }
-            return .init(id: message.seq, text: text, isUser: message.role.lowercased() == "user")
+            return .init(id: message.seq, text: text, isUser: message.role.lowercased() == "user",
+                         mediaRevision: mediaRevisions[message.seq] ?? 0)
         }
         let font = Typography.sessionUIFont(.bubbleBody, scale: sessionTextScale * interfaceScale)
         let style = MacConversationTextDocument.Style(
@@ -775,7 +795,7 @@ struct MacConversationTextSelection: ViewModifier {
         // identity/source/style gate makes ordinary view updates a no-op.
         document.update(identity: identity, sources: sources, style: style) { source in
             MacMessageTextRenderer.convert(
-                ChatMarkdown.attributed(source.text), font: font,
+                renderText?(source.text) ?? ChatMarkdown.attributed(source.text), font: font,
                 foreground: source.isUser ? style.userForeground : style.foreground
             )
         }

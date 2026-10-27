@@ -53,6 +53,7 @@ final class ChatImageLoader {
         case failed
     }
 
+    let diagrams: ChatDiagramStore
     private let hostID: String
     private let sessionKey: String
     private weak var client: RemoteClient?
@@ -71,6 +72,7 @@ final class ChatImageLoader {
 
     init(client: RemoteClient?, hostID: String, sessionKey: String) {
         self.client = client
+        diagrams = ChatDiagramStore(hostID: hostID)
         self.hostID = hostID
         self.sessionKey = sessionKey
     }
