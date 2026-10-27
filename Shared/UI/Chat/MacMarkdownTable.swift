@@ -1,49 +1,21 @@
-#if os(macOS)
-import AppKit
+import Foundation
 
-/// Mac bubbles draw Markdown tables as native AppKit text tables (design:
-/// Markdown tables). `ChatMarkdown` leaves each table cell as its own run; this
-/// pass rebuilds every table as `NSTextTableBlock` cell paragraphs, so the
-/// bubble's TextKit 1 view lays out aligned columns while selection, Copy and
-/// links keep working. The phone keeps the flat `cell | cell` rows.
-@MainActor
-enum MacMarkdownTable {
-    /// Horizontal cell padding; the first column starts flush with body text.
-    private static let cellPadding: CGFloat = 10
-    private static let rowPadding: CGFloat = 5
-    /// A long column wraps at this width so short columns keep their content width.
-    private static let maxNaturalColumnWidth: CGFloat = 400
-    private static let spacingAround: CGFloat = 8
-
-    private struct Cell {
+/// Shared native Markdown table coordinates; no second source parser is used.
+nonisolated enum MarkdownTableProjection {
+    struct Cell {
         let row: Int
         let column: Int
         var range: NSRange
     }
 
-    private struct Layout {
+    struct Layout {
         let id: Int
         var range: NSRange
         let alignments: [PresentationIntent.TableColumn.Alignment]
         var cells: [Cell]
     }
 
-    /// `text` must be the UTF-16-preserving conversion of `source` (fonts may differ).
-    static func apply(to text: NSMutableAttributedString, source: AttributedString, bodyFont: NSFont) {
-        let tables = layouts(in: source)
-        let string = text.string as NSString
-        for (index, table) in tables.enumerated().reversed() where NSMaxRange(table.range) <= text.length {
-            // Two tables separated only by a blank line need their own gap.
-            let followsTable = index > 0 && {
-                let previousEnd = NSMaxRange(tables[index - 1].range)
-                let gap = NSRange(location: previousEnd, length: max(table.range.location - previousEnd, 0))
-                return string.substring(with: gap).allSatisfy(\.isNewline)
-            }()
-            replace(table, in: text, bodyFont: bodyFont, followsTable: followsTable)
-        }
-    }
-
-    private static func layouts(in source: AttributedString) -> [Layout] {
+    static func layouts(in source: AttributedString) -> [Layout] {
         var tables: [Layout] = []
         for (intent, range) in source.runs[\.presentationIntent] {
             guard let intent else { continue }
@@ -68,17 +40,49 @@ enum MacMarkdownTable {
             if tables.last?.id == tableID {
                 let t = tables.count - 1
                 tables[t].range = NSUnionRange(tables[t].range, nsRange)
-                // Inline styles split one cell into several runs.
                 if let last = tables[t].cells.last, last.row == row, last.column == column {
                     tables[t].cells[tables[t].cells.count - 1].range = NSUnionRange(last.range, nsRange)
-                } else {
-                    tables[t].cells.append(cell)
-                }
+                } else { tables[t].cells.append(cell) }
             } else {
                 tables.append(Layout(id: tableID, range: nsRange, alignments: alignments, cells: [cell]))
             }
         }
         return tables
+    }
+}
+
+#if os(macOS)
+import AppKit
+
+/// Mac bubbles draw Markdown tables as native AppKit text tables (design:
+/// Markdown tables). `ChatMarkdown` leaves each table cell as its own run; this
+/// pass rebuilds every table as `NSTextTableBlock` cell paragraphs, so the
+/// bubble's TextKit 1 view lays out aligned columns while selection, Copy and
+/// links keep working. The phone reuses the projection with UIKit text tables.
+@MainActor
+enum MacMarkdownTable {
+    /// Horizontal cell padding; the first column starts flush with body text.
+    private static let cellPadding: CGFloat = 10
+    private static let rowPadding: CGFloat = 5
+    /// A long column wraps at this width so short columns keep their content width.
+    private static let maxNaturalColumnWidth: CGFloat = 400
+    private static let spacingAround: CGFloat = 8
+
+    private typealias Layout = MarkdownTableProjection.Layout
+
+    /// `text` must be the UTF-16-preserving conversion of `source` (fonts may differ).
+    static func apply(to text: NSMutableAttributedString, source: AttributedString, bodyFont: NSFont) {
+        let tables = MarkdownTableProjection.layouts(in: source)
+        let string = text.string as NSString
+        for (index, table) in tables.enumerated().reversed() where NSMaxRange(table.range) <= text.length {
+            // Two tables separated only by a blank line need their own gap.
+            let followsTable = index > 0 && {
+                let previousEnd = NSMaxRange(tables[index - 1].range)
+                let gap = NSRange(location: previousEnd, length: max(table.range.location - previousEnd, 0))
+                return string.substring(with: gap).allSatisfy(\.isNewline)
+            }()
+            replace(table, in: text, bodyFont: bodyFont, followsTable: followsTable)
+        }
     }
 
     private static func replace(

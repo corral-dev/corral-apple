@@ -6,6 +6,36 @@ next version's section. A `Release: minor` or `Release: major` line requests a
 larger version step; `Release: hold <reason>` keeps the changes unreleased until
 the named acceptance is done.
 
+## Mac 0.3.159 (164) / iPhone 1.0.205 (217)
+
+### English
+
+- Stabilized scrolling inside long iPhone and iPad messages: unchanged content no longer resets the native text layout, the scroll range stays consistent, and image-size changes preserve the reading position. Native text selection and the half-screen bubble cap remain intact.
+- Cited images appear at their Markdown position inside the message, retain their aspect ratio and open in the full-quality viewer. Mermaid and PlantUML still render locally; leaving a message mid-render no longer prevents the same drawing from loading on return.
+- Wide iPhone and iPad tables become row lists with labeled cells, avoiding horizontal scrolling. Mac keeps native tables and correctly retains list markers at the beginning of a message.
+
+### 简体中文
+
+- 优化 iPhone 和 iPad 长消息内部滚动：内容不变时不再重置原生文本排版，滚动范围保持稳定，图片尺寸变化时保留阅读位置。原生文本选择和半屏气泡高度上限保持不变。
+- 引用图片显示在消息正文的 Markdown 引用位置，保持比例并可打开原图。Mermaid 和 PlantUML 仍在本地绘制；绘制途中离开消息，返回后同一图表仍可正常加载。
+- iPhone 和 iPad 的宽表格改为带字段标签的逐行列表，无需左右滚动。Mac 保留原生表格，并正确显示消息开头的列表标记。
+
+## Mac 0.3.158 (162) / iPhone 1.0.204 (215)
+
+### English
+
+- Cited Markdown images render inside the message at the position they are referenced, not in a fixed strip below the text. The image keeps its aspect ratio, loads asynchronously with a neutral placeholder, opens the full-quality preview on tap, and the following prose stays after it; bare path mentions keep the existing tile row.
+- iPhone and iPad fall back from Markdown tables to a row list: each row is a bullet item titled by its first cell, and the remaining cells become labeled `Header: value` lines. Empty cells are omitted, so a wide table needs no horizontal scrolling.
+- Leaving a conversation while a Mermaid or PlantUML drawing is still rendering no longer marks that source invalid; returning to the same message renders it normally. Copying a message with a drawing or table still yields the original text.
+- Mac keeps its native table rendering through the shared Markdown table projection. Image, Mermaid and PlantUML rendering in the Mac conversation is unchanged.
+
+### 简体中文
+
+- 引用图片现在显示在消息正文中 Markdown 引用它的位置，不再固定在文字底部。图片保持比例，加载时显示中性占位，点击可看原图；后面的文字仍在图片之后。单纯提到路径的图片仍保留原来的底部缩略图。
+- iPhone 和 iPad 的 Markdown 表格改为按行铺开的列表：每行一条，第一列做标题，其余列显示成「表头: 内容」，空单元格省略；宽表也不需要左右滑动。
+- 图表还在绘制时离开会话，不会再把该源码记成无效；回到同一条消息会正常绘制。复制带图表或表格的消息仍能得到原始文字。
+- Mac 通过共用表格投影继续使用原生表格渲染；Mac 对话中的图片、Mermaid 与 PlantUML 渲染保持不变。
+
 ## Mac 0.3.156 (160) / iPhone 1.0.200 (211)
 
 ### English

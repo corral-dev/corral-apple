@@ -252,7 +252,9 @@ struct ChatView: View {
                     return nil
                 },
                 documentOverride: textDocument,
-                renderText: { imageLoader?.diagrams.attributed(text: $0, dark: colorScheme == .dark) ?? ChatMarkdown.attributed($0) },
+                renderText: { text, seq in
+                    imageLoader?.rendered(text: text, dark: colorScheme == .dark, seq: seq) ?? ChatMarkdown.attributed(text)
+                },
                 mediaRevisions: Dictionary(items.compactMap { item -> (Int, Int)? in
                     guard case .message(let message) = item else { return nil }
                     return (message.seq, mediaRevision(item))
@@ -318,7 +320,11 @@ struct ChatView: View {
 
     private func mediaRevision(_ item: ConversationTimelineItem) -> Int {
         guard case .message(let message) = item, let text = message.text else { return 0 }
-        return imageLoader?.diagrams.revision(text: text, dark: colorScheme == .dark) ?? 0
+        let diagrams = imageLoader?.diagrams.revision(text: text, dark: colorScheme == .dark) ?? 0
+        // Only messages with explicit images need to re-render when a preview
+        // arrives; a global image revision must not rebuild the whole chat.
+        let hasImage = ChatImageReferenceCache.references(in: text).contains { $0.kind == .explicit }
+        return diagrams &+ (hasImage ? (imageLoader?.revision ?? 0) : 0)
     }
 
     private func timelineRow(_ item: ConversationTimelineItem, separator: Date?, gap: CGFloat) -> some View {

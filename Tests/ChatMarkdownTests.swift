@@ -55,7 +55,11 @@ final class ChatMarkdownTests: XCTestCase {
         XCTAssertTrue(text.contains("•"), "unordered lists need visible bullets")
         XCTAssertTrue(text.contains("打开旧会话时"))
         XCTAssertTrue(text.contains("换网重连"))
-        XCTAssertTrue(text.contains(" | "), "table cells need readable separators")
+        XCTAssertFalse(text.contains(" | "), "table cells must not become pipe-separated prose")
+        let tables = MarkdownTableProjection.layouts(in: attributed)
+        XCTAssertEqual(tables.count, 1)
+        XCTAssertEqual(tables.first?.alignments.count, 3)
+        XCTAssertEqual(tables.first?.cells.count, 9)
         XCTAssertTrue(text.contains("开发机"))
         XCTAssertTrue(text.contains("0.24.177"))
         XCTAssertTrue(text.contains("the paired iPhone"))
@@ -67,6 +71,70 @@ final class ChatMarkdownTests: XCTestCase {
             5,
             "headings, bullets, and table rows need line breaks: \(text)"
         )
+    }
+
+    func testMobileTableFallsBackToRowList() {
+        let source = """
+        | 名称 | 状态 | 备注 |
+        |:---|:---:|:---|
+        | Auth | 已完成 | 支持 JWT 与 OAuth2 |
+        | Payment | 进行中 | 正在对接 Stripe |
+        | | | |
+        """
+        let attributed = ChatMarkdown.attributed(source)
+        let font = UIFont.systemFont(ofSize: 17)
+        let text = NSMutableAttributedString(attributedString: NSAttributedString(attributed))
+        text.addAttribute(.font, value: font, range: NSRange(location: 0, length: text.length))
+        MobileMarkdownTable.apply(to: text, source: attributed, bodyFont: font, foreground: .label)
+        let rendered = text.string
+        XCTAssertTrue(rendered.contains("• Auth"), rendered)
+        XCTAssertTrue(rendered.contains("  状态: 已完成"), rendered)
+        XCTAssertTrue(rendered.contains("  备注: 支持 JWT 与 OAuth2"), rendered)
+        XCTAssertTrue(rendered.contains("• Payment"), rendered)
+        XCTAssertFalse(rendered.contains("|"), "table pipes must be gone: \(rendered)")
+        XCTAssertFalse(rendered.contains("Auth  已完成"), "cells must become labeled lines: \(rendered)")
+        XCTAssertEqual(rendered.components(separatedBy: "•").count - 1, 2, "empty rows are dropped: \(rendered)")
+        XCTAssertEqual(rendered.components(separatedBy: "备注:").count - 1, 2, "empty cells are omitted: \(rendered)")
+        var attachments = 0
+        text.enumerateAttribute(.attachment, in: NSRange(location: 0, length: text.length)) { value, _, _ in
+            if value != nil { attachments += 1 }
+        }
+        XCTAssertEqual(attachments, 0, "the fallback is plain list text")
+    }
+
+    func testMarkdownImageKeepsItsReferenceRun() {
+        let source = """
+        before
+
+        ![图片渲染检查](apple/Assets/Image.png)
+
+        after
+        """
+        let attributed = ChatMarkdown.attributed(source)
+        let images = attributed.runs.compactMap { run -> (URL, String)? in
+            guard let url = run.imageURL else { return nil }
+            return (url, String(attributed[run.range].characters))
+        }
+        XCTAssertEqual(images.count, 1, String(attributed.characters))
+        XCTAssertEqual(images.first?.0.absoluteString, "apple/Assets/Image.png")
+        XCTAssertEqual(images.first?.1.trimmingCharacters(in: .whitespacesAndNewlines), "图片渲染检查")
+    }
+
+    func testSingleColumnTableBecomesBulletList() {
+        let source = """
+        | 名称 |
+        |---|
+        | Auth |
+        | Payment |
+        """
+        let attributed = ChatMarkdown.attributed(source)
+        let font = UIFont.systemFont(ofSize: 17)
+        let text = NSMutableAttributedString(attributedString: NSAttributedString(attributed))
+        text.addAttribute(.font, value: font, range: NSRange(location: 0, length: text.length))
+        MobileMarkdownTable.apply(to: text, source: attributed, bodyFont: font, foreground: .label)
+        XCTAssertTrue(text.string.contains("• Auth"), text.string)
+        XCTAssertTrue(text.string.contains("• Payment"), text.string)
+        XCTAssertFalse(text.string.contains("|"), text.string)
     }
 
     func testOversizedTextSkipsMarkdownParser() {

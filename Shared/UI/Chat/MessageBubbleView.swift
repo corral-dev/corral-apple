@@ -178,7 +178,9 @@ struct MessageBubbleView: View, Equatable {
         if let text = message.text, !text.allSatisfy(\.isWhitespace) {
             VStack(alignment: isUser ? .trailing : .leading, spacing: Space.sm * interfaceScale) {
                 SelectableAttributedText(
-                    attributed: imageLoader?.diagrams.attributed(text: text, dark: colorScheme == .dark) ?? ChatMarkdown.attributed(text),
+                    attributed: message.seq > 0
+                        ? (imageLoader?.rendered(text: text, dark: colorScheme == .dark, seq: message.seq) ?? ChatMarkdown.attributed(text))
+                        : ChatMarkdown.attributed(text),
                     foreground: isUser ? userForeground : Color.primary,
                     // Match links and selection handles to the bubble's contrast pair.
                     tint: isUser ? userForeground : Palette.accent,
@@ -192,9 +194,10 @@ struct MessageBubbleView: View, Equatable {
                 .overlay(alignment: .bottom) {
                     if hasMoreBelow { scrollMoreHint }
                 }
-                // Host previews need the official seq; local echoes wait for it.
+                // Bare path mentions keep the tile row; explicit Markdown images
+                // are inline attachments at their own position in the text.
                 if message.seq > 0 {
-                    let images = ChatImageReferenceCache.references(in: text)
+                    let images = ChatImageReferenceCache.references(in: text).filter { $0.kind == .mention }
                     if !images.isEmpty {
                         MessageImagesView(
                             seq: message.seq, references: images, isUser: isUser,
@@ -213,6 +216,9 @@ struct MessageBubbleView: View, Equatable {
             .background(hasBubble ? bubbleFill : Color.clear, in: bubbleShape)
             .task(id: "\(imageLoader.map(ObjectIdentifier.init).map(String.init(describing:)) ?? "")|\(colorScheme)|\(text)") {
                 await imageLoader?.diagrams.prepare(text: text, dark: colorScheme == .dark)
+                if message.seq > 0 {
+                    await imageLoader?.prepareImages(in: text, seq: message.seq)
+                }
             }
         }
     }

@@ -6,6 +6,84 @@ import XCTest
 
 @MainActor
 final class MessageBubbleLayoutTests: XCTestCase {
+    func testCappedMediaTextKeepsItsOffsetAcrossUnchangedRefreshes() async throws {
+        let loader = ChatImageLoader(client: nil, hostID: "scroll-fixture", sessionKey: "fixture")
+        loader.localPreview = UIGraphicsImageRenderer(size: CGSize(width: 600, height: 400)).image { context in
+            UIColor.systemGreen.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 600, height: 400))
+        }
+        let ref = "corral-preview://scroll.png"
+        _ = await loader.load(seq: 1, ref: ref, tier: loader.inlineTier())
+        let paragraph = "### Reading position 中文\n\nThis is a long message with **formatted text**, links and native selection.\n\n"
+        var source = String(repeating: paragraph, count: 18) + "![Inline preview](\(ref))\n\n" + String(repeating: paragraph, count: 18)
+        func content() -> SelectableAttributedText {
+            SelectableAttributedText(attributed: loader.rendered(text: source, dark: false, seq: 1), maxHeight: 280)
+        }
+        let host = UIHostingController(rootView: content())
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 340, height: 500))
+        window.rootViewController = host
+        window.isHidden = false
+        defer { window.isHidden = true }
+        let size = host.sizeThatFits(in: CGSize(width: 320, height: 2000))
+        host.view.frame = CGRect(origin: .zero, size: size)
+        host.view.layoutIfNeeded()
+        let view = try XCTUnwrap(Self.descendants(of: host.view).compactMap { $0 as? UITextView }.first)
+        for _ in 0..<30 where !view.isScrollEnabled { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(view.isScrollEnabled)
+        XCTAssertNil(view.textLayoutManager, "Capped text must share its exact TextKit 1 sizing engine")
+        XCTAssertLessThanOrEqual(view.bounds.height, 281)
+        view.layoutIfNeeded()
+        view.setContentOffset(CGPoint(x: 0, y: 440), animated: false)
+        let before = view.contentOffset.y
+        let height = view.contentSize.height
+        for _ in 0..<6 {
+            host.rootView = content()
+            host.view.setNeedsLayout()
+            host.view.layoutIfNeeded()
+            try await Task.sleep(for: .milliseconds(30))
+            XCTAssertEqual(view.contentOffset.y, before, accuracy: 1, "Unchanged media refresh jumped the inner viewport")
+            XCTAssertEqual(view.contentSize.height, height, accuracy: 1, "Unchanged media refresh changed the inner scroll range")
+        }
+        for step in (0...24).map({ $0 * 30 }) + (0...24).reversed().map({ $0 * 30 }) {
+            view.setContentOffset(CGPoint(x: 0, y: step), animated: false)
+            host.view.layoutIfNeeded()
+            try await Task.sleep(for: .milliseconds(5))
+            XCTAssertEqual(view.contentOffset.y, CGFloat(step), accuracy: 1, "Up/down native scrolling jumped")
+            XCTAssertEqual(view.contentSize.height, height, accuracy: 1, "Scrolling changed the native scroll range")
+        }
+        view.setContentOffset(CGPoint(x: 0, y: height * 0.7), animated: false)
+        let layout = view.layoutManager
+        let glyph = layout.glyphIndex(for: CGPoint(x: 0, y: view.contentOffset.y), in: view.textContainer)
+        let character = layout.characterIndexForGlyph(at: glyph)
+        let oldRect = layout.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: view.textContainer)
+        let oldRelativeY = oldRect.minY - view.contentOffset.y
+        loader.localPreview = UIGraphicsImageRenderer(size: CGSize(width: 600, height: 1200)).image { context in
+            UIColor.systemBlue.setFill(); context.fill(CGRect(x: 0, y: 0, width: 600, height: 1200))
+        }
+        let larger = "corral-preview://larger.png"
+        _ = await loader.load(seq: 1, ref: larger, tier: loader.inlineTier())
+        source = source.replacingOccurrences(of: ref, with: larger)
+        host.rootView = content()
+        host.view.setNeedsLayout()
+        host.view.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(40))
+        let newGlyph = layout.glyphRange(forCharacterRange: NSRange(location: character, length: 1), actualCharacterRange: nil)
+        let newRect = layout.boundingRect(forGlyphRange: newGlyph, in: view.textContainer)
+        XCTAssertEqual(newRect.minY - view.contentOffset.y, oldRelativeY, accuracy: 1, "Image reflow displaced the visible reading anchor")
+    }
+
+    func testMediaPresentationEqualityKeepsActualAttributeChanges() {
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 60, height: 40)).image { _ in UIColor.systemGreen.setFill() }
+        func value(ref: String = "image.png", foreground: UIColor = .label) -> AttributedString {
+            let text = NSMutableAttributedString(string: "Before\n", attributes: [.foregroundColor: foreground])
+            text.append(NSAttributedString(attachment: ChatImageAttachment(ref: ref, alt: "Image", image: image, displayScale: 1, open: {})))
+            return AttributedString(text)
+        }
+        XCTAssertTrue(ChatTextPresentation.matches(value(), value()))
+        XCTAssertFalse(ChatTextPresentation.matches(value(), value(ref: "other.png")))
+        XCTAssertFalse(ChatTextPresentation.matches(value(), value(foreground: .systemRed)))
+    }
+
     func testSameCharactersUpdateNativeLinkAttributes() throws {
         let text = "Unchanged words with new link"
         let host = UIHostingController(rootView: SelectableAttributedText(attributed: AttributedString(text)))

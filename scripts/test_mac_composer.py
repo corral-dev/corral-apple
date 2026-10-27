@@ -11,7 +11,8 @@ SOURCES = [
     "Shared/UI/Composer/DraftImagePreview.swift", "Shared/UI/Composer/DraftImageInspection.swift", "Shared/UI/Design/Space.swift",
     "Shared/UI/Design/InterfaceScale.swift", "Shared/UI/Design/SessionTextSize.swift",
     "Shared/UI/Design/Typography.swift", "Shared/UI/Design/PressableButtonStyle.swift",
-    "Shared/UI/Platform/PlatformSupport.swift", "Shared/Core/Conversation/ChatComposerPolicy.swift",
+    "Shared/UI/Platform/PlatformSupport.swift", "Shared/UI/Platform/MacSessionContextMenu.swift",
+    "Shared/Core/Conversation/ChatComposerPolicy.swift",
     "Shared/Core/Conversation/ComposerHistory.swift", "Shared/UI/Chat/MacConversationTextDocument.swift",
     "scripts/mac-composer/Support.swift", "scripts/mac-composer/Probe.swift",
 ]

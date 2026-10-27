@@ -23,6 +23,33 @@ private final class EdgeFadeTextView: UITextView {
         } else { super.copy(sender) }
     }
 
+    /// Media may change height without changing the message characters. Keep
+    /// the first visible native glyph at the same viewport offset, not an old
+    /// absolute y that points at different text after the attachment reflows.
+    func replaceContent(_ text: NSAttributedString) {
+        var anchor: (index: Int, offset: CGFloat)?
+        if attributedText?.string == text.string, !text.string.isEmpty {
+            let layout = layoutManager
+            let container = textContainer
+            let point = CGPoint(x: 0, y: contentOffset.y + textContainerInset.top)
+            let glyph = layout.glyphIndex(for: point, in: container)
+            if glyph < layout.numberOfGlyphs {
+                let rect = layout.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: container)
+                anchor = (layout.characterIndexForGlyph(at: glyph), rect.minY - contentOffset.y)
+            }
+        }
+        let previous = selectedRange
+        attributedText = text
+        if previous.length > 0, NSMaxRange(previous) <= text.length { selectedRange = previous }
+        if let anchor, anchor.index < text.length {
+            layoutManager.ensureLayout(for: textContainer)
+            let glyphs = layoutManager.glyphRange(forCharacterRange: NSRange(location: anchor.index, length: 1), actualCharacterRange: nil)
+            let rect = layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer)
+            let maximum = max(0, contentSize.height - bounds.height)
+            setContentOffset(CGPoint(x: contentOffset.x, y: min(maximum, max(0, rect.minY - anchor.offset))), animated: false)
+        }
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
         refreshEdgeFade()
@@ -123,7 +150,10 @@ private struct SelectableTextView: UIViewRepresentable {
     }
 
     func makeUIView(context: Context) -> UITextView {
-        let view = EdgeFadeTextView()
+        // Match the detached sizer's native TextKit 1 layout. Viewport-based
+        // estimated heights in TextKit 2 change a capped bubble's scroll range
+        // while the reader moves through long mixed Markdown/media content.
+        let view = EdgeFadeTextView(usingTextLayoutManager: false)
         view.delegate = context.coordinator
         view.backgroundColor = .clear
         view.isEditable = false
@@ -198,11 +228,8 @@ private struct SelectableTextView: UIViewRepresentable {
     private func apply(to view: UITextView, coordinator: Coordinator) {
         let ns = converted(coordinator)
         if coordinator.appliedText !== ns {
-            let previous = view.selectedRange
-            view.attributedText = ns
-            if previous.length > 0, NSMaxRange(previous) <= ns.length {
-                view.selectedRange = previous
-            }
+            if let stable = view as? EdgeFadeTextView { stable.replaceContent(ns) }
+            else { view.attributedText = ns }
             coordinator.appliedText = ns
         }
         view.linkTextAttributes = [
@@ -244,16 +271,18 @@ private struct SelectableTextView: UIViewRepresentable {
             options: [.usesLineFragmentOrigin, .usesFontLeading],
             context: nil
         )
-        let sizer = UITextView()
+        let sizer = UITextView(usingTextLayoutManager: false)
         sizer.backgroundColor = .clear
         sizer.isEditable = false
         sizer.isSelectable = false
         sizer.isScrollEnabled = false
         sizer.textContainerInset = .zero
         sizer.textContainer.lineFragmentPadding = 0
-        sizer.textContainer.widthTracksTextView = true
+        sizer.textContainer.widthTracksTextView = false
+        sizer.textContainer.size = CGSize(width: proposalWidth, height: .greatestFiniteMagnitude)
         sizer.attributedText = ns
         let fittedWidth = min(ceil(max(used.maxX, 1)), proposalWidth)
+        sizer.textContainer.size = CGSize(width: fittedWidth, height: .greatestFiniteMagnitude)
         let fitted = sizer.sizeThatFits(CGSize(width: fittedWidth, height: .greatestFiniteMagnitude))
         return CGSize(width: fittedWidth, height: ceil(max(fitted.height, font.lineHeight)))
     }
@@ -265,14 +294,14 @@ private struct SelectableTextView: UIViewRepresentable {
         if coordinator.source == source, let converted = coordinator.converted {
             return converted
         }
-        let ns = nsAttributedString()
+        let ns = nsAttributedString(coordinator)
         coordinator.source = source
         coordinator.converted = ns
         coordinator.sizes.removeAll()
         return ns
     }
 
-    private func nsAttributedString() -> NSAttributedString {
+    private func nsAttributedString(_ coordinator: Coordinator) -> NSAttributedString {
         let mutable = NSMutableAttributedString(attributedString: NSAttributedString(attributed))
         let full = NSRange(location: 0, length: mutable.length)
         guard full.length > 0 else { return mutable }
@@ -295,6 +324,7 @@ private struct SelectableTextView: UIViewRepresentable {
             }
             mutable.setAttributes(next, range: range)
         }
+        MobileMarkdownTable.apply(to: mutable, source: attributed, bodyFont: font, foreground: foreground)
         return mutable
     }
 
@@ -330,8 +360,8 @@ private struct SelectableTextView: UIViewRepresentable {
 
         func textView(_ textView: UITextView, primaryActionFor textItem: UITextItem, defaultAction: UIAction) -> UIAction? {
             guard case .textAttachment(let attachment) = textItem.content,
-                  let diagram = attachment as? ChatDiagramAttachment else { return defaultAction }
-            return UIAction { _ in diagram.open() }
+                  let openable = attachment as? any ChatTextAttachmentOpening else { return defaultAction }
+            return UIAction { _ in openable.open() }
         }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
@@ -343,6 +373,11 @@ private struct SelectableTextView: UIViewRepresentable {
         let attributed: AttributedString
         let fontSize: CGFloat
         let foreground: UIColor
+
+        static func == (lhs: Source, rhs: Source) -> Bool {
+            lhs.fontSize == rhs.fontSize && lhs.foreground == rhs.foreground
+                && ChatTextPresentation.matches(lhs.attributed, rhs.attributed)
+        }
     }
 }
 #elseif os(macOS)
@@ -774,7 +809,7 @@ struct MacConversationTextSelection: ViewModifier {
     /// Retained document from the pane cache. Nil outside Mac panes (previews,
     /// layout tests), where the modifier keeps owning a private one.
     var documentOverride: MacConversationTextDocument? = nil
-    var renderText: ((String) -> AttributedString)? = nil
+    var renderText: ((String, Int) -> AttributedString)? = nil
     var mediaRevisions: [Int: Int] = [:]
     @Environment(\.sessionTextScale) private var sessionTextScale
     @Environment(\.interfaceScale) private var interfaceScale
@@ -795,7 +830,7 @@ struct MacConversationTextSelection: ViewModifier {
         // identity/source/style gate makes ordinary view updates a no-op.
         document.update(identity: identity, sources: sources, style: style) { source in
             MacMessageTextRenderer.convert(
-                renderText?(source.text) ?? ChatMarkdown.attributed(source.text), font: font,
+                renderText?(source.text, source.id) ?? ChatMarkdown.attributed(source.text), font: font,
                 foreground: source.isUser ? style.userForeground : style.foreground
             )
         }

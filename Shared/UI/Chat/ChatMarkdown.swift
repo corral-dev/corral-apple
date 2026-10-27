@@ -204,24 +204,15 @@ nonisolated enum ChatMarkdown: Sendable {
                 }
             }
 
-            if let column = tableColumn {
+            if tableColumn != nil {
                 if isTableHeader {
                     text[intentRange].font = PlatformFont.systemFont(ofSize: bodySize, weight: .semibold)
                 }
-                #if os(macOS)
-                // One paragraph per cell; the Mac bubble lays them out as a
-                // native text table (MacMarkdownTable).
+                // Both native table renderers consume the same cell runs.
+                // Keep one paragraph per cell, never pipe-separated prose.
                 if intentRange.lowerBound != text.startIndex {
                     text.characters.insert(contentsOf: "\n", at: intentRange.lowerBound)
                 }
-                #else
-                // The phone is too narrow for a grid: flat `cell | cell` rows.
-                if column > 0 {
-                    text.characters.insert(contentsOf: " | ", at: intentRange.lowerBound)
-                } else if intentRange.lowerBound != text.startIndex {
-                    text.characters.insert(contentsOf: "\n", at: intentRange.lowerBound)
-                }
-                #endif
                 previousListID = 0
                 continue
             }

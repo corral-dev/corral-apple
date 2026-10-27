@@ -174,6 +174,18 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
 
     static let initialCanvasHeight: CGFloat = 100_000
 
+    /// TextKit lays a container's first line out as a continuation of the
+    /// container break, so it applies `headIndent` and ignores
+    /// `firstLineHeadIndent`. Ordinary paragraphs hide this because their
+    /// indents agree; a list does not. Its marker would move to the hanging
+    /// indent and the marker tab (whose only stop is that same indent) would
+    /// eject the item text onto the next line, one line taller than the row's
+    /// detached measurement (owner capture 2026-10-27). A near-zero paragraph
+    /// break after each container break gives the next block a real paragraph
+    /// start without visible height. See
+    /// docs/troubleshooting/2026-10-27-mac-message-first-line-list-indent.md.
+    private static let paragraphStartFont = NSFont.systemFont(ofSize: 0.1)
+
     private final class Block {
         // AppKit ignores explicit container breaks with a near-infinite height.
         // Use a finite canvas; the representable grows it for unusually tall text.
@@ -261,12 +273,17 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
         // ordinary newline on the pasteboard, with no private marker to strip.
         let combined = NSMutableAttributedString(string: "")
         breaks.removeAll(keepingCapacity: true)
+        var startsParagraph = false
         for (index, block) in next.enumerated() {
+            if startsParagraph {
+                combined.append(NSAttributedString(string: "\n", attributes: [.font: Self.paragraphStartFont]))
+            }
             block.range = NSRange(location: combined.length, length: block.text.length)
             combined.append(block.text)
             if index < next.count - 1 {
                 breaks.insert(combined.length)
                 combined.append(NSAttributedString(string: "\n", attributes: [.font: style.font]))
+                startsParagraph = true
             }
         }
 

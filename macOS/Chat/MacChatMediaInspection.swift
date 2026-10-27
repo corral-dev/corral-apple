@@ -11,6 +11,10 @@ enum MacChatMediaInspection {
     static func runIfRequested(model: AppModel) async {
         guard ProcessInfo.processInfo.arguments.contains("-CorralInspectChatMedia"), !started else { return }
         started = true
+        if ProcessInfo.processInfo.arguments.contains("-CorralInspectMediaCancellation") {
+            await inspectCancellation()
+            return
+        }
         if ProcessInfo.processInfo.arguments.contains("-CorralInspectMediaLive") {
             await inspectLive(model: model)
             return
@@ -28,6 +32,11 @@ enum MacChatMediaInspection {
         ```
 
         Between the two drawings: selectable native text.
+
+        | 内容 | 状态 | 位置 |
+        |:---|:---:|---:|
+        | **图片** | 支持 | 消息内 |
+        | Mermaid | 支持 | 本地 |
 
         ```plantuml
         @startuml
@@ -78,7 +87,11 @@ enum MacChatMediaInspection {
             if let attachment = value as? ChatDiagramAttachment { attachments.append(attachment) }
         }
         let copied = ChatDiagramAttachment.plainText(native, range: NSRange(location: 0, length: native.length)) ?? ""
-        var report: [String: Any] = ["attachments": attachments.count,
+        var tableCells = 0
+        native.enumerateAttribute(.paragraphStyle, in: NSRange(location: 0, length: native.length)) { value, _, _ in
+            if let style = value as? NSParagraphStyle, !style.textBlocks.isEmpty { tableCells += 1 }
+        }
+        var report: [String: Any] = ["attachments": attachments.count, "tableCells": tableCells,
             "sourceCopy": blocks.allSatisfy { copied.contains($0.original) },
             "adjacentText": copied.contains("Between the two drawings"),
             "revision": loader.diagrams.revision(text: text, dark: dark), "dark": dark]
@@ -132,6 +145,41 @@ enum MacChatMediaInspection {
         print("[chat-media] attachments=\(attachments.count) sourceCopy=\(report["sourceCopy"] ?? false)")
     }
 
+    private static func inspectCancellation() async {
+        let renderer = ChatDiagramRenderer.shared
+        let host = "media-cancellation-\(UUID().uuidString)"
+        let source = "flowchart LR\nA[Cancelled consumer] --> B[Render on revisit]"
+        let text = "Before\n\n```mermaid\n\(source)\n```\n\nAfter"
+        guard let block = ChatMarkdown.diagrams(in: text).first else { return }
+        let store = ChatDiagramStore(hostID: host)
+        // Same task the chat bubble owns: leaving the conversation cancels it.
+        let pending = Task { await store.prepare(text: text, dark: false) }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while !renderer.inspectionHasActiveWork, ContinuousClock.now < deadline { await Task.yield() }
+        let admitted = renderer.inspectionHasActiveWork
+        pending.cancel()
+        await pending.value
+        let afterCancel = attachmentCount(store.attributed(text: text, dark: false))
+        // Revisiting must render the same source; cancellation is not rejection.
+        await store.prepare(text: text, dark: false)
+        let afterRevisit = attachmentCount(store.attributed(text: text, dark: false))
+        let cached = renderer.cached(host: host, block: block, dark: false)
+        renderer.forget(host: host)
+        save(["cancelledBeforeReady": admitted && afterCancel == 0, "activeBeforeCancellation": admitted,
+              "revisitedSameSource": afterRevisit == 1 && cached != nil,
+              "attachmentsAfterCancel": afterCancel, "attachmentsAfterRevisit": afterRevisit,
+              "unpairedCacheRemoved": renderer.cached(host: host, block: block, dark: false) == nil])
+    }
+
+    private static func attachmentCount(_ text: AttributedString) -> Int {
+        let native = NSAttributedString(text)
+        var count = 0
+        native.enumerateAttribute(.attachment, in: NSRange(location: 0, length: native.length)) { value, _, _ in
+            if value is ChatDiagramAttachment { count += 1 }
+        }
+        return count
+    }
+
     private static func inspectLive(model: AppModel) async {
         for _ in 0..<150 where model.client?.supportsMediaImage != true {
             try? await Task.sleep(for: .milliseconds(200))
@@ -141,9 +189,9 @@ enum MacChatMediaInspection {
         guard let client = model.client, client.supportsMediaImage,
               let key = ProcessInfo.processInfo.environment["CORRAL_MEDIA_SESSION"] else { return }
         do {
-            // The handoff session's cited image sits beyond the newest 20
+            // The handoff session's cited image can sit far beyond the newest
             // entries; keep the fixture window wide enough to cover it.
-            let snapshot = try await client.call(WireProtocol.mSessionMessages, params: ["key": key, "limit": 80], as: SessionMessagesResponse.self)
+            let snapshot = try await client.call(WireProtocol.mSessionMessages, params: ["key": key, "limit": 400], as: SessionMessagesResponse.self)
             let host = model.connectedHostID ?? model.selectedHost?.hostID ?? ""
             let loader = ChatImageLoader(client: client, hostID: host, sessionKey: key)
             let store = ConversationStore(sessionKey: key, client: client, live: true)
@@ -173,6 +221,14 @@ enum MacChatMediaInspection {
             window.orderBack(nil)
             self.window = window
             try? await Task.sleep(for: .seconds(2))
+            var imageCount = 0
+            document.storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: document.storage.length)) { value, range, _ in
+                if let image = value as? ChatImageAttachment {
+                    imageCount += 1
+                    report["imageAttachment"] = ["range": NSStringFromRange(range), "bounds": NSStringFromRect(image.bounds), "placeholder": image.isPlaceholder]
+                }
+            }
+            report["imageCount"] = imageCount
         } catch { report["failed"] = true }
     }
 

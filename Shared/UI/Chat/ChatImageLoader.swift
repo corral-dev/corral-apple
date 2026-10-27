@@ -5,6 +5,8 @@ import Network
 import Observation
 #if canImport(UIKit)
 import UIKit
+#else
+import AppKit
 #endif
 
 /// System network path facts for choosing preview quality (Low Data Mode, cellular).
@@ -44,6 +46,7 @@ final class ChatNetworkConditions {
 /// One loader per open conversation; the host only resolves references the
 /// message actually contains.
 @MainActor
+@Observable
 final class ChatImageLoader {
     enum Outcome: Sendable {
         case image(PlatformImage)
@@ -69,6 +72,17 @@ final class ChatImageLoader {
     }()
     private var inFlight: [String: Task<Outcome, Never>] = [:]
     private var missing: Set<String> = []
+    /// Bumped when an inline image arrives or definitively fails, so the
+    /// bubble can replace its placeholder or drop the attachment.
+    private(set) var revision = 0
+    /// Quick Look target opened from an inline image attachment.
+    var previewURL: URL?
+    private var failedRefs: Set<String> = []
+    #if DEBUG
+    /// Inspection-only local bitmap for the production chat path; Release and
+    /// ordinary conversations never set it.
+    var localPreview: PlatformImage?
+    #endif
 
     init(client: RemoteClient?, hostID: String, sessionKey: String) {
         self.client = client
@@ -140,9 +154,83 @@ final class ChatImageLoader {
         }
     }
 
+    /// Bubble text with diagrams and inline images at their Markdown positions.
+    /// Reading `revision` here registers Observation for image completion.
+    func rendered(text: String, dark: Bool, seq: Int) -> AttributedString {
+        _ = revision
+        return inlineImages(in: diagrams.attributed(text: text, dark: dark), seq: seq)
+    }
+
+    /// Start inline previews for every explicit Markdown image in the message.
+    func prepareImages(in text: String, seq: Int) async {
+        for run in ChatMarkdown.attributed(text).runs {
+            guard let url = run.imageURL else { continue }
+            _ = await load(seq: seq, ref: url.absoluteString, tier: inlineTier())
+        }
+    }
+
+    /// Replace each Markdown image run with a block attachment after its alt
+    /// text, so the image sits in the message's reading order instead of a
+    /// fixed strip at the bottom.
+    private func inlineImages(in base: AttributedString, seq: Int) -> AttributedString {
+        let images = base.runs.compactMap { run -> (Range<AttributedString.Index>, URL, String)? in
+            guard let url = run.imageURL else { return nil }
+            return (run.range, url, String(base[run.range].characters))
+        }
+        guard !images.isEmpty else { return base }
+        let output = NSMutableAttributedString(attributedString: NSAttributedString(base))
+        for (range, url, alt) in images.reversed() {
+            let ref = url.absoluteString
+            guard !failedRefs.contains("\(seq)|\(ref)") else { continue }
+            let nsRange = NSRange(range, in: base)
+            let hit = cachedImage(seq: seq, ref: ref, tier: inlineTier())
+            let attachment = ChatImageAttachment(
+                ref: ref, alt: alt,
+                image: hit,
+                displayScale: Self.displayScale
+            ) { [weak self] in
+                self?.openFullImage(seq: seq, ref: ref, name: alt.isEmpty ? (ref as NSString).lastPathComponent : alt)
+            }
+            let insertion = NSMutableAttributedString()
+            let string = output.string as NSString
+            let at = NSMaxRange(nsRange)
+            if at > 0, string.substring(with: NSRange(location: at - 1, length: 1)) != "\n" {
+                insertion.append(NSAttributedString(string: "\n"))
+            }
+            insertion.append(NSAttributedString(attachment: attachment))
+            if at < string.length, string.substring(with: NSRange(location: at, length: 1)) != "\n" {
+                insertion.append(NSAttributedString(string: "\n"))
+            }
+            output.insert(insertion, at: at)
+        }
+        return AttributedString(output)
+    }
+
+    func openFullImage(seq: Int, ref: String, name: String) {
+        Task { [weak self] in
+            guard let self else { return }
+            self.previewURL = await self.fullImageFile(seq: seq, ref: ref, name: name)
+        }
+    }
+
+    private static var displayScale: CGFloat {
+        #if canImport(UIKit)
+        UIScreen.main.scale
+        #else
+        NSScreen.main?.backingScaleFactor ?? 2
+        #endif
+    }
+
     // MARK: - Private
 
     private func fetch(seq: Int, ref: String, tier: ChatImageTier, key: String) async -> Outcome {
+        #if DEBUG
+        if ref.hasPrefix("corral-preview://"), let localPreview {
+            Self.memory.setObject(localPreview, forKey: key as NSString, cost: Self.cost(of: localPreview))
+            revision &+= 1
+            return .image(localPreview)
+        }
+        #endif
         guard let client, client.supportsMediaImage else { return .failed }
         let started = Date()
         let payload: Any
@@ -155,18 +243,25 @@ final class ChatImageLoader {
                 "quality": tier.quality,
             ])
         } catch let error as RemoteCallError where error.code == WireProtocol.eNotFound {
+            failedRefs.insert("\(seq)|\(ref)")
+            revision &+= 1
             return .missing
         } catch {
+            failedRefs.insert("\(seq)|\(ref)")
+            revision &+= 1
             return .failed
         }
         guard let dict = payload as? [String: Any],
               let encoded = dict["data"] as? String,
               let data = Data(base64Encoded: encoded),
               let image = Self.decode(data) else {
+            failedRefs.insert("\(seq)|\(ref)")
+            revision &+= 1
             return .failed
         }
         ChatNetworkConditions.shared.record(bytes: data.count, seconds: Date().timeIntervalSince(started))
         Self.memory.setObject(image, forKey: key as NSString, cost: Self.cost(of: image))
+        revision &+= 1
         let url = diskURL(key)
         try? FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),

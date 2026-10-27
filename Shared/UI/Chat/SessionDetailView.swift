@@ -440,6 +440,10 @@ struct SessionDetailView: View {
             .sheet(item: Binding(get: { imageLoader?.diagrams.inspection }, set: { imageLoader?.diagrams.inspection = $0 })) { inspection in
                 ChatDiagramViewer(inspection: inspection)
             }
+            .quickLookPreview(Binding(
+                get: { imageLoader?.previewURL },
+                set: { imageLoader?.previewURL = $0 }
+            ))
             .environment(\.conversationScrollReadAction, acknowledgeScrollRead)
         } else {
             ProgressView()

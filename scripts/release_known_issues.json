@@ -1,0 +1,55 @@
+{
+  "_about": "Assessed Apple build diagnostics that do not block the CLI repository's scripts/release.py. Detailed assessments: docs/PERFORMANCE_KNOWLEDGE_BASE.md#compiler-diagnostics-2026-10-07. Unlisted warnings block publication.",
+  "warnings": [
+    {
+      "id": "chat-markdown-nsfont-sendable",
+      "scopes": ["apple"],
+      "match": "^ChatMarkdown\\.swift: conformance of 'NSFont' to 'Sendable' is unavailable",
+      "origin": "Typed attributed-string font assignments in ChatMarkdown",
+      "reason": "Existing typed attributed-string API; font values are immutable",
+      "risk": "Relies on fonts never being mutated after assignment",
+      "follow_up": "Revisit when the SDK marks the attribute scopes Sendable",
+      "recorded": "2026-10-07"
+    },
+    {
+      "id": "chat-markdown-paragraph-style-sendable",
+      "scopes": ["apple"],
+      "match": "^ChatMarkdown\\.swift: conformance of 'NSParagraphStyle' to 'Sendable' is unavailable",
+      "origin": "Paragraph-style assignments in ChatMarkdown (macOS and the shared iOS branches)",
+      "reason": "Each style is built locally and never mutated after assignment; no concurrent writer",
+      "risk": "Relies on styles staying local and immutable",
+      "follow_up": "Revisit with the SDK's Sendable annotations",
+      "recorded": "2026-10-07"
+    },
+    {
+      "id": "pairing-scanner-capture-session",
+      "scopes": ["apple"],
+      "match": "^PairingScannerView\\.swift: (capture of 'session' with non-Sendable type 'AVCaptureSession'|add '@preconcurrency' to treat 'Sendable'-related errors from module 'AVFoundation')",
+      "origin": "CaptureSessionRunner start/stop on its private serial queue",
+      "reason": "All configuration/start/stop run on the same serial queue after viewDidLoad configuration",
+      "risk": "Ownership relies on that lifecycle order",
+      "follow_up": "Move the session into an actor-isolated owner when touching the scanner",
+      "recorded": "2026-10-07"
+    },
+    {
+      "id": "app-intents-metadata-skipped",
+      "scopes": ["apple"],
+      "match": "^appintentsmetadataprocessor: Metadata extraction skipped, no AppIntents.framework dependency found",
+      "origin": "Xcode App Intents metadata tool",
+      "reason": "Corral declares no App Intents and does not link the framework",
+      "risk": "None; no Siri/Shortcuts metadata is produced",
+      "follow_up": "None until App Intents are adopted",
+      "recorded": "2026-10-07"
+    },
+    {
+      "id": "xcodebuild-multiple-destinations",
+      "scopes": ["apple"],
+      "match": "^xcodebuild: Using the first of multiple matching destinations",
+      "origin": "Selecting the host macOS destination with both architectures",
+      "reason": "Release deliberately builds arm64 and x86_64; the first host selection does not narrow the binary",
+      "risk": "None; the universal binary is read back",
+      "follow_up": "Use an explicit host destination when changing the build recipe",
+      "recorded": "2026-10-07"
+    }
+  ]
+}

@@ -142,7 +142,7 @@ final class ChatDiagramRenderer: NSObject, WKNavigationDelegate, WKURLSchemeHand
         guard !Task.isCancelled, !blockedHosts.contains(host) else { return nil }
         if let hit = cached(host: host, block: block, dark: dark) { return hit }
         let key = key(host: host, block: block, dark: dark)
-        guard !failed.contains(key), queue.count < 16 else { return nil }
+        guard !failed.contains(key), active?.key == key || queue.contains(where: { $0.key == key }) || queue.count < 16 else { return nil }
         let id = UUID()
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
@@ -169,14 +169,14 @@ final class ChatDiagramRenderer: NSObject, WKNavigationDelegate, WKURLSchemeHand
         let removed = queue.filter { $0.host == host }
         queue.removeAll { $0.host == host }
         removed.forEach { $0.waiters.values.forEach { $0.resume(returning: nil) } }
-        if active?.host == host { finish(nil) }
+        if active?.host == host { finish(nil, rememberFailure: false) }
         try? FileManager.default.removeItem(at: diskURL(host: host, key: "").deletingLastPathComponent())
     }
 
     private func cancel(_ id: UUID) {
         if let waiter = active?.waiters.removeValue(forKey: id) {
             waiter.resume(returning: nil)
-            if active?.waiters.isEmpty == true { finish(nil) }
+            if active?.waiters.isEmpty == true { finish(nil, rememberFailure: false) }
             return
         }
         for index in queue.indices {
@@ -187,6 +187,10 @@ final class ChatDiagramRenderer: NSObject, WKNavigationDelegate, WKURLSchemeHand
             }
         }
     }
+
+    #if DEBUG
+    var inspectionHasActiveWork: Bool { active != nil }
+    #endif
 
     private func pump() {
         guard active == nil, !queue.isEmpty else { return }
@@ -252,7 +256,7 @@ final class ChatDiagramRenderer: NSObject, WKNavigationDelegate, WKURLSchemeHand
         }
     }
 
-    private func finish(_ drawing: ChatDiagramDrawing?) {
+    private func finish(_ drawing: ChatDiagramDrawing?, rememberFailure: Bool = true) {
         guard let job = active else { return }
         watchdog?.cancel()
         watchdog = nil
@@ -266,8 +270,10 @@ final class ChatDiagramRenderer: NSObject, WKNavigationDelegate, WKURLSchemeHand
             if let png = drawing.png { try? png.write(to: pngURL(host: job.host, key: job.key), options: .atomic) }
             pruneDisk()
         } else {
-            failed.insert(job.key)
-            if failed.count > 512 { failed = [job.key] }
+            if rememberFailure {
+                failed.insert(job.key)
+                if failed.count > 512 { failed = [job.key] }
+            }
             retireBrowser()
         }
         job.waiters.values.forEach { $0.resume(returning: drawing) }
@@ -284,7 +290,7 @@ final class ChatDiagramRenderer: NSObject, WKNavigationDelegate, WKURLSchemeHand
         let pending = queue
         queue.removeAll()
         pending.forEach { $0.waiters.values.forEach { $0.resume(returning: nil) } }
-        if active != nil { finish(nil) }
+        if active != nil { finish(nil, rememberFailure: false) }
         retireBrowser()
     }
 

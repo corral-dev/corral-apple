@@ -9,6 +9,7 @@ Product overview and cross-component rules live in the terminal repository: `htt
 Read the documents whose described content is relevant before deciding or editing.
 
 - [Task routing](docs/AGENT_TASK_ROUTING_GUIDE.md): Detailed domain preconditions, symptom routes and exceptions.
+- [Release runbook](https://github.com/corral-dev/corral/blob/main/docs/RELEASE_RUNBOOK.md): Maintainer CLI, Mac and iPhone release entry, gates, known issues and recovery; signing and publisher configuration remain private.
 - [Session header design](docs/design/SESSION_HEADER_DESIGN.md): read before completing the adopted conversation-header redesign.
 - [Haptic feedback design](docs/design/HAPTIC_FEEDBACK_DESIGN.md): Implemented user-action and outcome feedback, quiet reading/streaming rules, foreground deduplication, default behavior without settings, evidence-gated arrival/completion cues.
 - [iPad and Mac client adaptation](docs/design/MULTIPLATFORM_CLIENT_DESIGN.md): Product positioning and core selling points of the native Apple client (performance, many agents, developer-first, split panes, chat/terminal switching) and its open-source state.
@@ -81,6 +82,8 @@ One-command public build: `bash scripts/build-public-client.sh mac`. It preserve
 
 - SwiftTerm ships a build plugin; command-line builds must pass `-skipPackagePluginValidation` or they stall on plugin trust. If the first build reports a missing Metal toolchain, run `xcodebuild -downloadComponent MetalToolchain`.
 - Design (desktop-first: TUI-style split panes and shared session groups, chat/terminal switching), per-round scope and Debug acceptance launch arguments: [Native macOS client design](docs/design/MACOS_CLIENT_DESIGN.md#desktop-first-redesign-owner-requirement-2026-10-04-round-2). Same pointer rule: open the screen with launch arguments, then verify with a window capture.
+
+Official Mac and iPhone releases run through the terminal repository's [release runbook](https://github.com/corral-dev/corral/blob/main/docs/RELEASE_RUNBOOK.md) and `scripts/release.py`; do not replace that workflow with a one-off publisher or installation script. The public local-build commands above remain available to contributors without maintainer signing or publication configuration. Store builds must exclude the direct-download updater; a Store target is not exposed yet.
 
 ## Hard constraints (product behavior)
 

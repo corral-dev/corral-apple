@@ -31,7 +31,9 @@ struct CorralApp: App {
         WindowGroup {
             Group {
                 #if DEBUG
-                if ProcessInfo.processInfo.arguments.contains("-CorralInspectDeletion") {
+                if ProcessInfo.processInfo.arguments.contains("-CorralInspectMarkdownTables") {
+                    MarkdownTableInspection()
+                } else if ProcessInfo.processInfo.arguments.contains("-CorralInspectDeletion") {
                     SessionDeletionInspection()
                 } else {
                     NavigationStack(path: $navigationPath) { HostListView() }

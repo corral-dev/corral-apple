@@ -63,8 +63,13 @@ struct TextSelectionProbe {
                 forGlyphRange: document.layout.glyphRange(for: container), actualGlyphRange: nil
             )
             let expected = require(document.range(for: source.id), "missing message range")
-            check(drawn.location == expected.location, "message starts in a preceding container")
-            check(drawn.length == expected.length + (source.id == 4 ? 0 : 1), "message \(source.id) spilled: drawn \(drawn), expected \(expected)")
+            // Every message after the first opens its container with a
+            // near-zero paragraph break; the container range starts there.
+            let leading = source.id == sources.first?.id ? 0 : 1
+            let trailing = source.id == sources.last?.id ? 0 : 1
+            check(drawn.location == expected.location - leading, "message container start drifted")
+            check(drawn.length == expected.length + leading + trailing,
+                  "message \(source.id) spilled: drawn \(drawn), expected \(expected)")
         }
 
         let lower = 6
@@ -141,7 +146,9 @@ struct TextSelectionProbe {
             let range = tableDocument.layout.characterRange(
                 forGlyphRange: tableDocument.layout.glyphRange(for: container), actualGlyphRange: nil
             )
-            check(range.location == require(tableDocument.range(for: id), "missing table range").location, "table broke message boundaries")
+            let expected = require(tableDocument.range(for: id), "missing table range")
+            let leading = id == 10 ? 0 : 1
+            check(range.location == expected.location - leading, "table broke message boundaries")
         }
         // Exercise actual deallocation; retaining retired views masks native
         // selection/input-context lifetime defects. Keep another row alive.

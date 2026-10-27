@@ -7,6 +7,10 @@ import UIKit
 import AppKit
 #endif
 
+nonisolated protocol ChatSourceAttachment {
+    var original: String { get }
+}
+
 @MainActor
 @Observable
 final class ChatDiagramStore {
@@ -85,7 +89,7 @@ final class ChatDiagramStore {
     }
 }
 
-nonisolated final class ChatDiagramAttachment: NSTextAttachment {
+nonisolated final class ChatDiagramAttachment: NSTextAttachment, ChatSourceAttachment, ChatTextAttachmentOpening {
     let original: String
     let selectionLength: Int
     private let naturalSize: CGSize
@@ -116,6 +120,16 @@ nonisolated final class ChatDiagramAttachment: NSTextAttachment {
         return CGRect(x: 0, y: 0, width: naturalSize.width * scale, height: naturalSize.height * scale)
     }
 
+    #if canImport(UIKit)
+    override func attachmentBounds(for attributes: [NSAttributedString.Key: Any], location: any NSTextLocation,
+                                   textContainer: NSTextContainer?, proposedLineFragment: CGRect, position: CGPoint) -> CGRect {
+        let font = attributes[.font] as? UIFont
+        let available = max(1, proposedLineFragment.width - 16)
+        let scale = min((font?.pointSize ?? 17) / 16, available / naturalSize.width)
+        return CGRect(x: 0, y: 0, width: naturalSize.width * scale, height: naturalSize.height * scale)
+    }
+    #endif
+
     /// Expand only selected attachment positions; adjacent prose retains its
     /// existing native plain-text representation, including multi-message Copy.
     static func plainText(_ text: NSAttributedString, range: NSRange) -> String? {
@@ -123,7 +137,7 @@ nonisolated final class ChatDiagramAttachment: NSTextAttachment {
         let selected = NSMutableAttributedString(attributedString: text.attributedSubstring(from: range))
         var replacements: [(NSRange, String)] = []
         selected.enumerateAttribute(.attachment, in: NSRange(location: 0, length: selected.length)) { value, range, _ in
-            if let diagram = value as? ChatDiagramAttachment { replacements.append((range, diagram.original)) }
+            if let source = value as? any ChatSourceAttachment { replacements.append((range, source.original)) }
         }
         guard !replacements.isEmpty else { return nil }
         for (range, source) in replacements.reversed() { selected.replaceCharacters(in: range, with: source) }
