@@ -411,6 +411,98 @@ Follow-up: correlate terminal attach acknowledgement and initial-snapshot receiv
 bounded diagnostics without recording payloads, so a future transport incident can be
 attributed without inferring loss from a spinner.
 
+#### Running terminal replaced by timeout (investigation, 2026-10-29)
+
+Symptom: a working agent TUI is replaced by "Couldn't load terminal / The computer
+didn't respond in time / Retry". This is Corral's stream failure presentation, not
+native agent output, and does not establish that the agent exited. It differs from
+the missing-first-frame case above: the stream may already have been live.
+
+Confirmed defects in `Shared/Core/Terminal/RemoteTerminalStream.swift`:
+- `requestResync()` guards a failed reply by connection generation only. A sequence
+  gap can start a resync, a newer snapshot can restore `.live`, and the still-pending
+  resync can then time out and overwrite that healthy state with `.failed` in the
+  **same generation**. Subsequent sequential output still reaches the sink but never
+  restores `.live`. `MacTerminalPane.showsEmulator` consequently hides the emulator.
+- `resize()` also sets `.failed` after its fourth failed RPC without checking whether
+  newer snapshots/output already establish a healthy stream. A size-control failure
+  can therefore replace a functioning terminal with the same load-failure page.
+
+Verification: an isolated Swift fixture compiled the actual production stream with
+existing `scripts/mac-lifecycle/Probe.swift` transport doubles (no compiler diagnostics).
+The gap -> newer snapshot -> late timeout -> hidden-but-receiving-output path reproduced
+with all five runtime key prefixes; these are shared-component tests, not five live
+agent runs. A separate four-attempt resize fixture reproduced the second defect. Retry
+plus a snapshot restored `.live` without input or `session.resume`. No user session,
+app process or product source was changed. Private reproduction sources and full output
+are retained under `~/.config/corral/development/terminal-timeout-20261029/`.
+
+Scope: the installed Mac 0.3.159 (164) and current checkout have identical stream/pane
+source. iPhone agent terminals and both platforms' project shells use this same stream
+and expose its failed phase; physical-phone reproduction was not performed. The TUI
+uses direct tmux capture, not this receiver, so this particular defect does not apply.
+A fresh isolated-window capture showed the installed Mac displaying an OpenCode terminal
+and local connected state; it did not capture the originally failing Pi pane. The session
+was locked, so the capture is static evidence only. Native tmux inspection found 18 Pi
+panes, none marked dead, without identifying which pane produced the owner's crop.
+
+Attribution limit: the active client's bounded diagnostics retain 81 subscriber gaps,
+150 slow requests and a maximum 54.4-second wait; retained events include 27.7/21.9-second
+waits and a data-plane receive failure/rebind at 10:15:31. There is no terminal method,
+session, request or snapshot correlation, so these establish transport/consumer pressure,
+not the original crop's exact trigger or its upstream cause. A future fix needs
+same-generation stale-completion protection and bounded recovery of an established
+stream, plus payload-free method/request/snapshot correlation. The earlier first-frame
+fix does not cover this path. These were confirmed before the repair below.
+
+##### Established-stream recovery design (owner-approved repair, 2026-10-29)
+
+Keep stream synchronization separate from control-RPC acknowledgement. A valid snapshot
+is stronger evidence than a late attach/resync/resize failure. One cancellable recovery
+operation owns each synchronization loss, including first frame, sequence gaps, subscriber
+overflow and font/backlog refresh. Coalesce duplicate requests, request a snapshot
+immediately for an established stream, make at most two resync calls within the existing
+three-second snapshot waits and bounded RPC deadlines, then expose the existing Retry state only if
+no complete screen arrived. Acknowledged resync without a snapshot is not recovery.
+Snapshot, ended, stop and reconnect invalidate the operation; every completion rechecks
+cancellation and connection generation, including same-generation snapshot races.
+
+Size acknowledgement is independent: keep a healthy terminal mounted after resize RPC
+failure, retain the desired size and retry after three seconds. A matching snapshot
+settles the pending size; newer fits, end and stop invalidate old work. Do not replay
+terminal input, resume/restart agents, fabricate missing bytes or suppress genuine missing
+screen failures. A data-only connection rebind must notify the retained subscribers to
+re-establish their host state, just as control reconnection does.
+
+Reuse the inspected production `RemoteTerminalStream`, `MacTerminalPane`, iPhone
+`AgentTerminalPane` and project-shell presentation. No new controls, settings or visual
+construction: native `ProgressView`, `ContentUnavailableView` and Retry remain intact;
+Mac keeps its cached screen mounted during bounded synchronization recovery. Add bounded,
+payload-free diagnostics for terminal operation, opaque stream identity, request identity,
+attempt, snapshot revision and duration so future transport pressure can be attributed
+without recording session keys, paths or text.
+
+Public API: [Task.cancel](https://developer.apple.com/documentation/swift/task/cancel())
+is cooperative, so cancellation alone is not a stale-completion guard. Recheck it after
+awaiting even a transport that ignores cancellation. Reuse the existing `Task.sleep(for:)`
+implementation, compiled against installed Swift 6.4/Xcode 27.2; no new platform API is
+required. Acceptance must force late failures after newer snapshots, newer gaps while an
+old cancelled RPC is pending, silent successful resync, transient recovery, resize
+convergence, ended/stop/reconnect retirement, and no agent input/resume across all five
+runtime key prefixes. Installed Mac pixels and phone delivery are separate evidence.
+The connection-model fixture must link the real `ConnectionFailureMessage` adapter;
+its unrelated diagram-cache cleanup is a UI test double, matching its existing Markdown
+double. Otherwise newer AppModel dependencies prevent this connection probe from compiling.
+
+Delivery (2026-10-29, source `b0b31dd`): 467 portable Core tests with 0 failures,
+lifecycle probe all PASS including the established-terminal five-runtime/stale-RPC case,
+and mounted-recovery fault injection all true with no agent input. Installed Mac
+0.3.159 (164) in `/Applications/Corral.app` matches this source, verifies under
+Developer ID Team `the maintainer team`, runs as the sole GUI process, and `client_diag verify`
+reports fresh/ready with attached data. iPhone Release-device build succeeded and the
+same source is uploaded to AppShelf release 381; direct install is unverified because
+the paired iPhone reports `unavailable`.
+
 ### Adaptive agent-terminal margins (owner decision, 2026-10-15)
 
 The Mac agent TUI uses a centered readable column like Chat. Its horizontal margins depend on the individual pane width, not the whole window or the number of splits: a wide pane leaves more space on both sides; narrowing it continuously reclaims that space until only the existing minimum terminal inset remains. Use the Chat readable-width token and interface scale. Do not add a mode, preference, border or background card. Vertical spacing stays unchanged. Project shells keep their full-width terminal layout; this decision is about the agent TUI that switches with Chat.
@@ -768,6 +860,8 @@ Owner report on Mac 0.3.149: switching between sessions shown as agent TUIs stil
 - **Honest states remain:** a terminal never opened in this window shows the waiting indicator until its first snapshot; a host reconnect shows Reconnecting over the last screen; an ended session shows its restart prompt.
 - **Pane surfaces released under memory pressure** while still in the retained roster are rebuilt in their existing mount (`MacPaneSurface.updateNSView`). Before this, the `823758f` pressure handler left such a pane empty when its session was shown again.
 - **One terminal per hosted pane across key migration (owner report 2026-10-26).** A session created on the Mac starts under a provisional key; when the host announces `old_key → new_key`, the open terminal continues under the new key as the same object (same emulator and same stream; the host still resolves the old key to the same tmux pane). The Mac must never hold a second stream for that pane. Two streams from one connection vote as one viewer, and the host's per-stream renewals alternated the stale and current votes about once a second. The agent grid flipped between the pane's width and 40 columns, or between full and partial height (the input row lifted off the bottom). If a terminal already exists under the new key, the provisional one closes.
+- **One pane per session across key migration (owner report 2026-10-28).** Pane identity is the canonical session key. When the host promotes a provisional key (`old_key → new_key` event, or an alias learned from a list reply or the per-host list cache), the workspace renames that pane in place, keeps its slot and focus, and drops a duplicate if the canonical key is already shown. Opening, adding, restoring and grouping compare canonical keys, and the split never mounts two visible or retained hosts that resolve to one session. Two such mounts share one native pane surface (keyed by the session's canonical key); whichever updates last hides it, so the visible slot drew nothing, not even its header. Owner's case on Mac 0.3.159: Pi → Continue with Claude created `claude:46e947ff`, promoted to `claude:173ff007…`; clicking the sidebar row rebuilt the split with the canonical key while the provisional key remained a retained dormant host, and the Claude slot went blank.
+  - Evidence and verification (2026-10-28, source `752d7da`): before the fix, the owner's live window showed two split slots, and the accessibility tree had a header, conversation and composer only in the left one; the right slot had no children. The client's per-host list cache held `claude:46e947ff → claude:173ff007…`, and `MacWorkspace.replaceKey` had no caller. `scripts/test_mac_lifecycle.py` now covers the production rename paths: a sidebar open after a list-learned alias, a migration event, an alias plus canonical key on screen, restoration and Add Pane. The pane-reordering and session-switch probes, including the native surface stale-lease cases, still pass. The changed files compile with no warning, and the Release archive retains only the assessed Markdown/App Intents diagnostics. The same-source Debug build with `-CorralInspectConversation` and keys `claude:46e947ff,claude:173ff007…` runs `open` with the alias and then `addPane` with the canonical key. Before the fix, that sequence produced two slots sharing one native surface; it now shows the host group `[pi:ab0bbd67, claude:173ff007…]` with both panes drawn (Pi as chat, Claude in its remembered terminal view) and leaves the host group unchanged. The Developer ID Release export was installed at `/Applications/Corral.app` without a version bump. Physical sidebar clicking was not driven. Cross-client: iPhone shows one detail at a time and has no split or retained pane hosts; the TUI builds splits from the host layout, which already stores the canonical key.
 
 Verification (2026-10-25, Release-optimized build with inspection hooks, real host, `-CorralInspectTerminalSwitch`, `/tmp/corral-terminal-switch.json`): three running hosted agents opened once each (cold attach 235–370 ms), then 36–180 warm switches, half of them right after `ClientMemoryPressure.purge()` released every dormant pane. Every reveal showed the terminal with zero host attaches, the same emulator view and stream, phase live and no waiting indicator. Main-thread reveal stall median 100 ms (warm 70–100 ms; after a purge, pane rebuilds reach about 650 ms). A sample attributes the remaining cost to the sidebar List reconfiguring rows on each focus change (about 25 ms), one full CoreGraphics draw of the revealed terminal (about 17 ms) and general SwiftUI layout, not to the terminal stream. The per-row split tooltip had filtered the whole window list for each row; it now looks members up by key. Wheel: in a disposable project shell with SGR mouse tracking on, `cat -v` echoed the up and down reports SwiftTerm's own wheel handler produced (`^[[<64;…`, `^[[<65;…`). Stored view modes were byte-identical before and after the inspection runs. Not verified here: physical wheel/trackpad and click in an agent TUI (pointer driving is not allowed on this Mac).
 

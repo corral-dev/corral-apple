@@ -204,7 +204,7 @@ final class HostSessionFeed {
         let revision = refreshRevision
         if showLoading { isLoading = true }
         do {
-            var params: [String: Any] = [:]
+            var params: [String: Any] = ["retained_keys": listStore.retainedSessionKeys]
             if !listStore.version.isEmpty {
                 params["since_version"] = listStore.version
             }

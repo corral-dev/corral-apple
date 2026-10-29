@@ -122,6 +122,7 @@ final class SessionListStore {
             return
         }
         version = cached.version
+        aliasByKey = cached.aliases ?? [:]
         listKeys = Self.uniqueKeys(cached.sessions.map(\.key))
         revealedKeys = Array(Self.uniqueKeys(cached.revealedKeys ?? []).suffix(Self.maxRevealedSessions))
         for session in cached.sessions where ActiveRuntimeVisibility.isListVisible(session) {
@@ -140,14 +141,23 @@ final class SessionListStore {
 
     func applyListResponse(_ response: SessionsListResponse, persist: Bool = true) {
         refreshCalendar()
-        // Aliases are idempotent and must run even for `unchanged`: a visit key
-        // retained while the detail was open follows the host's promotion, and
-        // the window version does not change when only that key was retired.
+        // Ordering covers the entire reply, including aliases and retirement.
+        // A delayed unchanged reply must not mutate a newer metadata epoch.
+        if let revision = response.revision, revision < acceptedRevision { return }
+        if let revision = response.revision { acceptedRevision = revision }
+        // Install canonical evidence before migration, otherwise an old green
+        // placeholder is copied to an out-of-window canonical identity.
+        for session in response.retainedSessions ?? [] { merge(session, revision: response.revision) }
         applyAliases(response.aliases)
+        for key in response.missingKeys ?? [] where revealedKeys.contains(key) {
+            removeSession(key: key, confirmedDeletion: false)
+        }
         if response.unchanged {
             if let next = response.version, !next.isEmpty {
                 version = next
             }
+            if persist { persistIfNeeded() }
+            rebuildSections()
             return
         }
         replaceWindow(response.sessions, version: response.version, revision: response.revision, persist: persist)
@@ -206,11 +216,13 @@ final class SessionListStore {
         }
     }
 
-    func removeSession(key: String) {
+    func removeSession(key: String, confirmedDeletion: Bool = true) {
         let resolved = resolvedKey(key)
-        deletedKeys.formUnion([key, resolved])
-        for (alias, target) in aliasByKey where target == key || target == resolved {
-            deletedKeys.insert(alias)
+        if confirmedDeletion {
+            deletedKeys.formUnion([key, resolved])
+            for (alias, target) in aliasByKey where target == key || target == resolved {
+                deletedKeys.insert(alias)
+            }
         }
         listKeys.removeAll { $0 == key || $0 == resolved }
         searchKeys?.removeAll { $0 == key || $0 == resolved }
@@ -341,6 +353,9 @@ final class SessionListStore {
 
     private var browsableKeys: [String] { Self.uniqueKeys(listKeys + revealedKeys) }
 
+    /// Explicit visits need separate reconciliation; window absence is not deletion.
+    var retainedSessionKeys: [String] { Self.uniqueKeys(revealedKeys.map { resolvedKey($0) }) }
+
     var filteredSessions: [SessionSummary] {
         let needle = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         let sourceKeys: [String]
@@ -398,7 +413,8 @@ final class SessionListStore {
             snapshot: SessionListSnapshot(
                 version: version,
                 sessions: browsableKeys.compactMap { recordsByKey[$0] },
-                revealedKeys: revealedKeys
+                revealedKeys: revealedKeys,
+                aliases: aliasByKey
             )
         )
     }

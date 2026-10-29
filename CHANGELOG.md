@@ -6,6 +6,18 @@ next version's section. A `Release: minor` or `Release: major` line requests a
 larger version step; `Release: hold <reason>` keeps the changes unreleased until
 the named acceptance is done.
 
+## Mac 0.3.160 (165) / iPhone 1.0.206 (218)
+
+### English
+
+- Mac and iPhone terminals now recover missing live screens automatically. Late control-request timeouts no longer replace an already recovered terminal with a load error, failed size updates retain live output and retry, and data-connection replacement restores terminal subscriptions without restarting the assistant or replaying input.
+- Mac: a session started from the Mac (for example Continue with another assistant) no longer turns its pane blank after the host gives it a permanent identity. The pane follows the new identity in place, and reopening it from the sidebar shows the conversation instead of an empty split slot.
+
+### 简体中文
+
+- Mac 与 iPhone 终端现在会自动恢复缺失的实时画面。迟到的控制请求超时不再把已经恢复的终端替换成加载错误；尺寸更新失败时保留实时输出并重试；数据连接重建后自动恢复终端订阅，不重启助手，也不重放输入。
+- Mac：在 Mac 上新建的会话（例如用另一个助手继续）在开发机给出正式编号后，所在分屏不再变成空白。分屏原地跟随新编号，从侧栏再次打开时正常显示对话，不再出现空的分屏格。
+
 ## Mac 0.3.159 (164) / iPhone 1.0.205 (217)
 
 ### English

@@ -29,6 +29,29 @@ struct TerminalTheme: Equatable, Sendable {
     let foreground: String
 }
 
+/// Closed, payload-free correlation for terminal control and complete screens.
+nonisolated enum TerminalDiagnosticOperation: String, Codable, Sendable {
+    case attach, resize, resync
+
+    @MainActor var method: String {
+        switch self {
+        case .attach: WireProtocol.mTerminalAttach
+        case .resize: WireProtocol.mTerminalResize
+        case .resync: WireProtocol.mTerminalResync
+        }
+    }
+}
+
+nonisolated struct TerminalDiagnosticContext: Codable, Sendable {
+    enum Result: String, Codable, Sendable { case started, acknowledged, failed, snapshot, exhausted }
+    let streamID: UUID
+    let operation: TerminalDiagnosticOperation?
+    let requestID: UUID?
+    let result: Result
+    let attempt: Int
+    let snapshotRevision: Int
+}
+
 /// One raw terminal stream from the host (`terminal.*`, channel `term:<key>`):
 /// an agent pane (Mac terminal view) or a project shell (`shell:<id>`, Mac
 /// panel and iPhone). A snapshot comes first, then output in sequence. A
@@ -64,7 +87,8 @@ final class RemoteTerminalStream {
     @ObservationIgnored private var lastSeq = 0
     @ObservationIgnored private var snapshotRevision = 0
     @ObservationIgnored private var synced = false
-    @ObservationIgnored private var resyncing = false
+    @ObservationIgnored private var receivedSnapshot = false
+    @ObservationIgnored private let diagnosticID = UUID()
     /// Snapshot plus later output that arrived before the view existed.
     @ObservationIgnored private var backlog: (grid: TerminalGrid, data: [Data])?
     @ObservationIgnored private var backlogBytes = 0
@@ -102,6 +126,9 @@ final class RemoteTerminalStream {
     static weak var inspectionStream: RemoteTerminalStream?
     var inspectionAcknowledgedGrid: TerminalGrid? { sentGrid }
     var inspectionEpoch: UUID { generation }
+    var inspectionSnapshotRevision: Int { snapshotRevision }
+    /// Delays only a control reply in the mounted fault-injection probe.
+    var inspectionReply: (@MainActor (TerminalDiagnosticOperation) async throws -> Void)?
     /// Retained raw output while no view is attached, and whether the ceiling
     /// already discarded it in favour of a fresh snapshot.
     var inspectionBacklogBytes: Int { backlogBytes }
@@ -359,7 +386,7 @@ final class RemoteTerminalStream {
         attached = false
         sentGrid = nil
         synced = false
-        resyncing = false
+        receivedSnapshot = false
         lastSeq = 0
         backlog = nil
         backlogBytes = 0
@@ -393,72 +420,85 @@ final class RemoteTerminalStream {
         Self.inspectionAttachCalls += 1
         #endif
         for attempt in 0..<4 {
-            guard let client, isCurrent(mine) else { return }
+            guard client != nil, isCurrent(mine), phase != .ended else { return }
+            let attachTheme = theme
             do {
-                let attachTheme = theme
-                _ = try await client.call(WireProtocol.mTerminalAttach, params: params(grid).merging(themeParams) { $1 })
-                guard isCurrent(mine) else { return }
-                attached = true
-                sentGrid = grid
-                recoverMissingSnapshot()
-                debugTrace("terminal attached with theme \(attachTheme?.background ?? "none")")
-                if theme != attachTheme { sendTheme() }
-                if let latest = wanted, latest != grid { scheduleResize() }
-                return
+                try await terminalCall(.attach, params: params(grid).merging(themeParams) { $1 }, attempt: attempt + 1)
             } catch {
-                guard isCurrent(mine) else { return }
-                if attempt == 3 {
-                    phase = .failed(error.localizedDescription)
-                    return
+                guard isCurrent(mine), phase != .ended else { return }
+                // A complete screen proves this attachment works even if its
+                // acknowledgement was lost. Never let that older failure win.
+                if !receivedSnapshot {
+                    if attempt == 3 {
+                        phase = .failed(error.localizedDescription)
+                        return
+                    }
+                    try? await Task.sleep(for: .milliseconds(400 * (attempt + 1)))
+                    continue
                 }
-                try? await Task.sleep(for: .milliseconds(400 * (attempt + 1)))
             }
+            guard isCurrent(mine), phase != .ended else { return }
+            attached = true
+            sentGrid = grid
+            recoverSnapshot()
+            debugTrace("terminal attached with theme \(attachTheme?.background ?? "none")")
+            if theme != attachTheme { sendTheme() }
+            if let latest = wanted, latest != grid { scheduleResize() }
+            return
         }
     }
 
-    private func scheduleResize() {
+    private func scheduleResize(after delay: Duration = .milliseconds(150)) {
         resizeTask?.cancel()
         resizeGeneration = UUID()
         let mine = generation, resize = resizeGeneration
         resizeTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(150))
+            do { try await Task.sleep(for: delay) }
+            catch { return }
             guard !Task.isCancelled, let self, self.isCurrent(mine), self.attached,
-                  let grid = self.wanted, grid != self.sentGrid, let client = self.client else { return }
+                  self.phase != .ended, let grid = self.wanted, grid != self.sentGrid,
+                  let client = self.client else { return }
             let operation = TerminalLifecycleQueue.enqueue(client: client, key: self.sessionKey) { [weak self] in
                 await self?.resize(grid, generation: mine, request: resize)
             }
             await operation.value
-            if self.resizeGeneration == resize { self.resizeTask = nil }
+            guard !Task.isCancelled, self.isCurrent(mine), self.resizeGeneration == resize,
+                  self.phase != .ended else { return }
+            self.resizeTask = nil
+            if self.wanted != self.sentGrid { self.scheduleResize(after: .seconds(3)) }
         }
     }
 
-    /// Attach acknowledges the subscription, not the first screen. A lost
-    /// snapshot must not leave an otherwise connected terminal spinning forever.
-    private func recoverMissingSnapshot() {
-        guard !synced, phase == .connecting, snapshotRecovery == nil, let client else { return }
-        let mine = generation, key = sessionKey
+    /// One recovery owns a missing complete screen, before or after first live.
+    /// RPC acknowledgement alone never settles it; only a snapshot does.
+    private func recoverSnapshot(immediately: Bool = false) {
+        guard events != nil, !synced, phase != .ended, snapshotRecovery == nil, client != nil else { return }
+        phase = .connecting
+        let mine = generation
         snapshotRecovery = Task { [weak self] in
+            var failure = String(localized: String.LocalizationValue("error.host_timeout"))
             for attempt in 0...2 {
-                do { try await Task.sleep(for: .seconds(3)) }
-                catch { return }
+                if attempt > 0 || !immediately {
+                    do { try await Task.sleep(for: .seconds(3)) }
+                    catch { return }
+                }
                 guard let self, !Task.isCancelled, self.isCurrent(mine),
                       !self.synced, self.phase == .connecting else { return }
                 if attempt == 2 {
                     self.snapshotRecovery = nil
-                    self.phase = .failed(String(localized: String.LocalizationValue("error.host_timeout")))
+                    self.traceTerminal(.exhausted, operation: .resync, attempt: attempt)
+                    self.phase = .failed(failure)
                     return
                 }
                 do {
-                    _ = try await client.call(WireProtocol.mTerminalResync, params: ["key": key])
+                    try await self.terminalCall(.resync, params: ["key": self.sessionKey], attempt: attempt + 1)
                 } catch {
-                    // A snapshot/reconnect/stop can win while this RPC is in
-                    // flight, including transports that ignore cancellation.
-                    guard !Task.isCancelled, self.isCurrent(mine),
-                          !self.synced, self.phase == .connecting else { return }
-                    self.snapshotRecovery = nil
-                    self.phase = .failed(error.localizedDescription)
-                    return
+                    failure = error.localizedDescription
                 }
+                // Cancellation is cooperative: a snapshot may have cancelled
+                // this task and started another gap while the RPC was pending.
+                guard !Task.isCancelled, self.isCurrent(mine),
+                      !self.synced, self.phase == .connecting else { return }
             }
         }
     }
@@ -469,40 +509,49 @@ final class RemoteTerminalStream {
     }
 
     private func resize(_ grid: TerminalGrid, generation mine: UUID, request resize: UUID) async {
-        guard let client else { return }
         for attempt in 0..<4 {
-            guard isCurrent(mine), wanted == grid, resizeGeneration == resize else { return }
+            guard isCurrent(mine), phase != .ended, wanted == grid, resizeGeneration == resize else { return }
             do {
-                _ = try await client.call(WireProtocol.mTerminalResize, params: params(grid))
-                guard isCurrent(mine), wanted == grid, resizeGeneration == resize else { return }
+                try await terminalCall(.resize, params: params(grid), attempt: attempt + 1)
+                guard isCurrent(mine), phase != .ended, wanted == grid, resizeGeneration == resize else { return }
                 sentGrid = grid
                 return
             } catch {
-                guard isCurrent(mine), wanted == grid, resizeGeneration == resize else { return }
-                if attempt == 3 {
-                    phase = .failed(error.localizedDescription)
-                    return
-                }
+                guard isCurrent(mine), phase != .ended, wanted == grid, resizeGeneration == resize else { return }
+                // Size control is not screen liveness. The scheduler retains
+                // the desired grid and retries later without hiding output.
+                if attempt == 3 { return }
                 try? await Task.sleep(for: .milliseconds(300 * (attempt + 1)))
             }
         }
     }
 
-    private func requestResync() {
-        guard !resyncing, let client else { return }
-        resyncing = true
-        let mine = generation, key = sessionKey
-        Task { [weak self] in
-            guard self?.isCurrent(mine) == true else { return }
-            do {
-                _ = try await client.call(WireProtocol.mTerminalResync, params: ["key": key])
-            } catch {
-                guard let self, self.isCurrent(mine) else { return }
-                self.phase = .failed(error.localizedDescription)
-            }
-            guard let self, self.isCurrent(mine) else { return }
-            self.resyncing = false
+    private func requestResync() { recoverSnapshot(immediately: true) }
+
+    private func terminalCall(_ operation: TerminalDiagnosticOperation, params: [String: Any], attempt: Int) async throws {
+        guard let client else { throw CancellationError() }
+        let request = UUID(), start = ContinuousClock.now
+        traceTerminal(.started, operation: operation, request: request, attempt: attempt)
+        do {
+            _ = try await client.call(operation.method, params: params)
+            #if DEBUG
+            try await inspectionReply?(operation)
+            #endif
+            traceTerminal(.acknowledged, operation: operation, request: request, attempt: attempt, start: start)
+        } catch {
+            traceTerminal(.failed, operation: operation, request: request, attempt: attempt, start: start, error: error)
+            throw error
         }
+    }
+
+    private func traceTerminal(_ result: TerminalDiagnosticContext.Result, operation: TerminalDiagnosticOperation? = nil,
+                               request: UUID? = nil, attempt: Int = 0, start: ContinuousClock.Instant? = nil,
+                               error: (any Error)? = nil) {
+        let duration = start.map { $0.duration(to: .now).components }
+        let ms = duration.map { Double($0.seconds) * 1_000 + Double($0.attoseconds) / 1e15 }
+        client?.traceTerminal(TerminalDiagnosticContext(streamID: diagnosticID, operation: operation,
+            requestID: request, result: result, attempt: attempt, snapshotRevision: snapshotRevision),
+            durationMs: ms, error: error)
     }
 
     private func params(_ grid: TerminalGrid) -> [String: Any] {
@@ -512,6 +561,7 @@ final class RemoteTerminalStream {
     // MARK: - Events
 
     private func handle(_ payload: [String: Any]) {
+        guard phase != .ended else { return }
         // A bounded subscriber that fell behind reports one coalesced gap: raw
         // bytes are missing, so only a fresh host snapshot may restore the screen.
         if payload["resync"] as? Bool == true {
@@ -530,10 +580,18 @@ final class RemoteTerminalStream {
             cancelSnapshotRecovery()
             lastSeq = seq
             snapshotRevision += 1
+            receivedSnapshot = true
             synced = true
             phase = .live
             if !hasBeenLive { hasBeenLive = true }
             let grid = TerminalGrid(cols: cols, rows: rows)
+            traceTerminal(.snapshot)
+            if attached, wanted == grid {
+                sentGrid = grid
+                resizeGeneration = UUID()
+                resizeTask?.cancel()
+                resizeTask = nil
+            }
             if let sink {
                 sink.terminalReset(grid: grid, data: data)
             } else {
@@ -556,6 +614,9 @@ final class RemoteTerminalStream {
             }
         case "ended":
             cancelSnapshotRecovery()
+            resizeGeneration = UUID()
+            resizeTask?.cancel()
+            resizeTask = nil
             lastSeq = seq
             phase = .ended
         default:

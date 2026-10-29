@@ -23,6 +23,7 @@ final class TerminalInputPassiveTests: XCTestCase {
         defer { client.disconnect() }
         let stream = RemoteTerminalStream(sessionKey: "codex:fixture", client: client)
         stream.start()
+        defer { stream.stop() }
         stream.inspectionHandle(snapshot(seq: 1, bytes: 32))
         XCTAssertGreaterThan(stream.inspectionBacklogBytes, 0)
         XCTAssertEqual(stream.phase, .live)
@@ -30,11 +31,20 @@ final class TerminalInputPassiveTests: XCTestCase {
         stream.inspectionHandle(["resync": true, "dropped": 7])
         XCTAssertEqual(stream.inspectionBacklogBytes, 0,
                        "A truncated stream must not be replayed as if it were complete")
-        XCTAssertEqual(stream.phase, .live, "The last screen stays until the fresh snapshot arrives")
-        try await Task.sleep(for: .milliseconds(100))
-        if case .failed = stream.phase {} else {
-            XCTFail("Without a connection the resync request reports the transport failure")
+        XCTAssertEqual(stream.phase, .connecting, "Missing bytes require a complete screen before returning live")
+        XCTAssertTrue(stream.hasBeenLive, "Recovery retains the cached-screen presentation contract")
+        let deadline = ContinuousClock.now + .seconds(8)
+        while stream.phase == .connecting, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
         }
+        if case .failed = stream.phase {} else {
+            XCTFail("An unavailable transport must reach the bounded Retry state, not spin forever")
+        }
+        let requests = client.diagnostics.events.compactMap(\.terminal)
+            .filter { $0.operation == .resync && $0.result == .started }
+        XCTAssertEqual(requests.count, 2, "A transient failure retries, but never starts an unbounded RPC loop")
+        stream.inspectionHandle(snapshot(seq: 4, bytes: 32))
+        XCTAssertEqual(stream.phase, .live, "A late complete screen also repairs the exhausted recovery")
     }
 
     @MainActor

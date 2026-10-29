@@ -68,6 +68,7 @@ struct MacTerminalPane: View {
             if let stream {
                 MacTerminalReturnInspection.runIfRequested(
                     workspace: workspace, session: session, stream: stream)
+                MacTerminalRecoveryInspection.runIfRequested(stream: stream, client: appModel.client)
             }
             await inspectAppearanceFlipIfRequested()
             await inspectTypingIfRequested()

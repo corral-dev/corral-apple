@@ -20,6 +20,7 @@ SOURCES = [
     'macOS/Workspace/MacWorkspace.swift',
     'macOS/Sidebar/MacSessionBatch.swift',
     'scripts/mac-lifecycle/SessionBatchProbe.swift',
+    'scripts/mac-lifecycle/TerminalRecoveryProbe.swift',
     'macOS/Design/MacMotion.swift',
     'Shared/Core/Terminal/RemoteTerminalStream.swift',
     'Shared/Core/Terminal/ProjectShellStore.swift',

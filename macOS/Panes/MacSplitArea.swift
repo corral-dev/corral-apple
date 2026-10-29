@@ -15,9 +15,7 @@ struct MacSplitArea: View {
     var body: some View {
         // Closed panes stay drawn in their slots while they fade out. Terminal
         // panes (`shell:` keys) sit in the split like session panes.
-        let keys = workspace.drawnPaneKeys.filter {
-            ProjectShell.isShellKey($0) || feed.listStore.session(for: $0) != nil
-        }
+        let keys = Self.drawnKeys(workspace.drawnPaneKeys, store: feed.listStore)
         MacRetainedPanes(keys: keys, feed: feed, autoFocusKey: autoFocusKey)
             .id(workspace.hostID)
         .environment(\.macVisiblePaneKeys, keys.filter { workspace.leavingPanes[$0] == nil })
@@ -28,6 +26,28 @@ struct MacSplitArea: View {
     }
 
     nonisolated static let paneMinimum: CGFloat = MacSidebarSizing.paneMinimum
+
+    /// One slot per session. Keys that resolve to the same session (a
+    /// provisional key and its canonical key) share one native surface, so a
+    /// second slot would draw nothing (design: One pane per session across
+    /// key migration).
+    static func drawnKeys(_ keys: [String], store: SessionListStore) -> [String] {
+        var sessions: Set<String> = []
+        return keys.filter { key in
+            if ProjectShell.isShellKey(key) { return true }
+            guard let session = store.session(for: key) else { return false }
+            return sessions.insert(session.key).inserted
+        }
+    }
+
+    /// Only a canonical key whose session is not on screen may stay warm;
+    /// an alias would mount a second host over the visible pane's surface.
+    static func canRetain(_ key: String, visible: [String], store: SessionListStore) -> Bool {
+        guard !ProjectShell.isShellKey(key), let session = store.session(for: key), session.key == key else {
+            return false
+        }
+        return !visible.contains { store.session(for: $0)?.key == key }
+    }
 
     /// The window must hold the sidebar plus every pane at its minimum while
     /// the sidebar is shown; a narrower window would push the split out of both
@@ -52,7 +72,7 @@ private struct MacRetainedPanes: View {
 
     var body: some View {
         let roster = workspace.paneSurfaces.retainedKeys(visible: keys, previous: recent) {
-            !ProjectShell.isShellKey($0) && feed.listStore.session(for: $0) != nil
+            MacSplitArea.canRetain($0, visible: keys, store: feed.listStore)
         }
         MacRetainedPaneLayout(visibleKeys: keys) {
             // Visible order is supplied by the layout, not this retained roster.
@@ -81,7 +101,7 @@ private struct MacRetainedPanes: View {
         }
         .onChange(of: keys, initial: true) { _, _ in
             let retained = workspace.paneSurfaces.retainedKeys(visible: keys, previous: recent) {
-                !ProjectShell.isShellKey($0) && feed.listStore.session(for: $0) != nil
+                MacSplitArea.canRetain($0, visible: keys, store: feed.listStore)
             }
             for key in recent where !retained.contains(key) {
                 workspace.paneSurfaces.evict(key)

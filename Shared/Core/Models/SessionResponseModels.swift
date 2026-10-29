@@ -14,6 +14,9 @@ nonisolated struct SessionsListResponse: Codable, Sendable {
     /// reply (including `unchanged`) so a visit key retained without the list
     /// feed can still follow the promoted session.
     let aliases: [String: String]?
+    /// Exact host reconciliation of explicit visits outside its bounded window.
+    let retainedSessions: [SessionSummary]?
+    let missingKeys: [String]?
 
     enum CodingKeys: String, CodingKey {
         case sessions, version, unchanged
@@ -21,6 +24,8 @@ nonisolated struct SessionsListResponse: Codable, Sendable {
         case total
         case revision, epoch
         case aliases
+        case retainedSessions = "retained_sessions"
+        case missingKeys = "missing_keys"
     }
 
     init(
@@ -30,7 +35,9 @@ nonisolated struct SessionsListResponse: Codable, Sendable {
         hasMore: Bool? = nil,
         total: Int? = nil,
         revision: UInt64? = nil,
-        aliases: [String: String]? = nil
+        aliases: [String: String]? = nil,
+        retainedSessions: [SessionSummary]? = nil,
+        missingKeys: [String]? = nil
     ) {
         self.sessions = sessions
         self.version = version
@@ -39,6 +46,8 @@ nonisolated struct SessionsListResponse: Codable, Sendable {
         self.total = total
         self.revision = revision
         self.aliases = aliases
+        self.retainedSessions = retainedSessions
+        self.missingKeys = missingKeys
     }
 
     init(from decoder: Decoder) throws {
@@ -60,6 +69,10 @@ nonisolated struct SessionsListResponse: Codable, Sendable {
         }
         // Hosts repeat aliases on every reply, including `unchanged`.
         aliases = (try? container.decodeIfPresent([String: String].self, forKey: .aliases)) ?? nil
+        retainedSessions = (try? container.decodeIfPresent(
+            [FailableDecodable<SessionSummary>].self, forKey: .retainedSessions
+        ))?.compactMap(\.value)
+        missingKeys = try? container.decodeIfPresent([String].self, forKey: .missingKeys)
         if unchanged {
             sessions = []
             return
@@ -84,6 +97,8 @@ nonisolated struct SessionsListResponse: Codable, Sendable {
         try container.encodeIfPresent(total, forKey: .total)
         try container.encodeIfPresent(revision, forKey: .revision)
         try container.encodeIfPresent(aliases, forKey: .aliases)
+        try container.encodeIfPresent(retainedSessions, forKey: .retainedSessions)
+        try container.encodeIfPresent(missingKeys, forKey: .missingKeys)
     }
 }
 

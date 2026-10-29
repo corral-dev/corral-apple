@@ -2,6 +2,10 @@ import Foundation
 
 // UI dependencies are irrelevant to the connection owner under test.
 enum ChatMarkdown { static func prewarm() {} }
+struct ChatDiagramRenderer {
+    static let shared = ChatDiagramRenderer()
+    func forget(host: String) {}
+}
 enum SessionTextSize: String { case standard; static let storageKey = "corral.sessionTextSize"; static func resolve(stored: String?) -> Self { .standard } }
 
 @main @MainActor

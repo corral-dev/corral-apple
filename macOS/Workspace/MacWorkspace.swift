@@ -234,6 +234,23 @@ final class MacWorkspace {
     func sessionMigrated(from oldKey: String, to newKey: String) {
         carryMode(from: oldKey, to: newKey)
         terminals.migrate(from: oldKey, to: newKey)
+        canonicalizePaneKeys()
+    }
+
+    /// Pane identity is the canonical session key (design: One pane per
+    /// session across key migration). Shell keys have no aliases.
+    func canonicalPaneKey(_ key: String) -> String {
+        ProjectShell.isShellKey(key) ? key : feed?.listStore.resolvedKey(key) ?? key
+    }
+
+    /// Rename panes still holding a promoted provisional key. Aliases also
+    /// arrive with list replies and the cached list, not only as migration
+    /// events, so list changes and every navigation entry call this too.
+    func canonicalizePaneKeys() {
+        for key in paneKeys {
+            let canonical = canonicalPaneKey(key)
+            if canonical != key { replaceKey(key, with: canonical) }
+        }
     }
 
     private func carryMode(from oldKey: String, to newKey: String) {
@@ -273,6 +290,8 @@ final class MacWorkspace {
     /// into the opened pane, arrow-key browsing keeps focus in the sidebar.
     func open(_ key: String, sessions: [SessionSummary], takeKeys: Bool? = nil) {
         if !pendingEntrances.isEmpty { pendingEntrances = [] }
+        canonicalizePaneKeys()
+        let key = canonicalPaneKey(key)
         defer { if takeKeys ?? Self.selectionCameFromPointer { requestKeyFocus(key) } }
         if paneKeys.contains(key) {
             focus(key)
@@ -366,7 +385,7 @@ final class MacWorkspace {
         pendingEntrances = []
         cancelSplitMotion()
         var unique: [String] = []
-        for key in keys where !unique.contains(key) {
+        for key in keys.map(canonicalPaneKey) where !unique.contains(key) {
             if !ProjectShell.isShellKey(key), let agentProject,
                let session = feed?.listStore.session(for: key),
                Self.projectIdentity(session.cwd) != Self.projectIdentity(agentProject) {
@@ -391,6 +410,8 @@ final class MacWorkspace {
 
     /// Split: add a session as another pane (replaces the focused pane when full).
     func addPane(_ key: String, project: String) {
+        canonicalizePaneKeys()
+        let key = canonicalPaneKey(key)
         if paneKeys.contains(key) {
             focus(key)
             return
@@ -717,14 +738,29 @@ final class MacWorkspace {
         }
     }
 
-    /// The sidebar reflects the focused pane.
+    /// Follow a promoted session key: history, reading position, search
+    /// selection and the pane itself (its slot, focus and native host).
     func replaceKey(_ old: String, with new: String) {
         navigation.host.history.replace(old, with: new)
         if let position = navigation.host.reading.removeValue(forKey: old) {
             navigation.host.reading[new] = position
         }
         if navigation.host.search.selection == old { navigation.host.search.selection = new }
-        if let index = paneKeys.firstIndex(of: old) { paneKeys[index] = new }
+        if let index = paneKeys.firstIndex(of: old) {
+            // The renamed pane keeps its native host; a pane already showing
+            // the canonical session wins and the duplicate leaves the split.
+            cancelSplitMotion()
+            if paneKeys.contains(new) {
+                paneKeys.remove(at: index)
+            } else {
+                paneKeys[index] = new
+                paneSurfaces.rename(old, to: new)
+            }
+            pendingEntrances.remove(old)
+            if let open = promptsOpen.removeValue(forKey: old), promptsOpen[new] == nil { promptsOpen[new] = open }
+            paneFrames[old] = nil
+            if keyFocusTarget == old { keyFocusTarget = new }
+        }
         if focusedKey == old { focusedKey = new }
     }
 

@@ -7,6 +7,10 @@ import os
 @MainActor
 final class RemoteClient {
     var calls: [(String, [String: Any])] = []
+    var terminalTraces: [TerminalDiagnosticContext] = []
+    func traceTerminal(_ context: TerminalDiagnosticContext, durationMs: Double?, error: (any Error)?) {
+        terminalTraces.append(context)
+    }
     struct Capabilities {
         var sessionCreateReceipts = false
         var desktopLayout = true
@@ -83,15 +87,19 @@ struct RuntimeEntry: Decodable { var id: String; var isActive: Bool { true } }
     func rememberOpened(_ session: SessionSummary) { opened.insert(session.key) }
     func revealSession(_ session: SessionSummary) { rememberOpened(session); patchSession(session) }
     func isDeleted(_ key: String) -> Bool { false }
-    func session(for key: String) -> SessionSummary? { sessions[key] }
-    func resolvedKey(_ key: String) -> String { key }
+    /// Provisional → canonical keys, resolved like the production store.
+    var aliases: [String: String] = [:]
+    func session(for key: String) -> SessionSummary? { sessions[resolvedKey(key)] }
+    func resolvedKey(_ key: String) -> String { aliases[key] ?? key }
     func removeSession(key: String) { sessions[key] = nil }
 }
 @MainActor final class HostSessionFeed { var listStore = SessionListStore() }
 @MainActor final class MacPaneSurfaceCache {
+    var renames: [(String, String)] = []
     func reset() {}
     func evict(_ key: String) {}
     func evictDormant(visible: Set<String>) {}
+    func rename(_ old: String, to new: String) { renames.append((old, new)) }
 }
 // Transport-only fixture: memory pressure and emulator rendering are tested elsewhere.
 @MainActor enum ClientMemoryPressure {
@@ -805,8 +813,58 @@ struct LifecycleProbe {
         print("PASS pane activation: repeated focus, pane shortcut, composer and passive restoration")
     }
 
+    /// Owner report 2026-10-28: a pane kept a promoted provisional key, the
+    /// sidebar reopened the split under the canonical key and both mounted
+    /// one native surface, leaving the visible slot blank.
+    @MainActor static func keyMigrationRegressions() {
+        let feed = HostSessionFeed()
+        let pi = SessionSummary(key: "pi:ab0bbd67", cwd: "/p")
+        let claude = SessionSummary(key: "claude:173ff007", cwd: "/p")
+        feed.listStore.sessions = [pi.key: pi, claude.key: claude]
+
+        // Alias learned from a list reply (no migration event): the sidebar's
+        // canonical row reopens the same split, renaming the pane in place.
+        let workspace = MacWorkspace()
+        workspace.feed = feed
+        workspace.restorePanes([pi.key, "claude:46e947ff"])
+        workspace.focus("claude:46e947ff")
+        feed.listStore.aliases["claude:46e947ff"] = claude.key
+        workspace.open(claude.key, sessions: [pi, claude], takeKeys: false)
+        check(workspace.paneKeys == [pi.key, claude.key], "sidebar open kept the provisional pane key")
+        check(workspace.focusedKey == claude.key, "renamed pane lost focus")
+        check(workspace.paneSurfaces.renames.count == 1
+              && workspace.paneSurfaces.renames[0] == ("claude:46e947ff", claude.key),
+              "renamed pane did not keep its native host")
+
+        // Migration event: the pane follows without any navigation.
+        let migrated = MacWorkspace()
+        migrated.feed = feed
+        feed.listStore.aliases = [:]
+        migrated.restorePanes(["claude:1111", pi.key])
+        feed.listStore.aliases["claude:1111"] = claude.key
+        migrated.sessionMigrated(from: "claude:1111", to: claude.key)
+        check(migrated.paneKeys == [claude.key, pi.key] && migrated.focusedKey == claude.key,
+              "migration event did not rename the pane")
+
+        // Both identities already on screen: one slot remains.
+        let duplicate = MacWorkspace()
+        duplicate.feed = feed
+        feed.listStore.aliases = [:]
+        duplicate.restorePanes(["claude:2222", claude.key])
+        feed.listStore.aliases["claude:2222"] = claude.key
+        duplicate.canonicalizePaneKeys()
+        check(duplicate.paneKeys == [claude.key], "alias and canonical key both kept a pane")
+        check(duplicate.focusedKey == claude.key, "focus stayed on the retired alias")
+        duplicate.restorePanes(["claude:2222", claude.key])
+        check(duplicate.paneKeys == [claude.key], "restoration reintroduced the alias")
+        duplicate.addPane("claude:2222", project: "/p")
+        check(duplicate.paneKeys == [claude.key], "adding the alias opened a second pane")
+        print("PASS key migration: rename in place, list-learned aliases, duplicate removal")
+    }
+
     @MainActor static func main() async throws {
         paneActivationRegressions()
+        keyMigrationRegressions()
         await sessionBatchRegressions()
         modeObservationRegressions()
         await sidebarSplitRestorationRegressions()
@@ -818,6 +876,7 @@ struct LifecycleProbe {
         try await workspaceRegressions()
         try await terminalRegressions()
         await terminalFirstFrameRegressions()
+        await terminalRecoveryRegressions()
         await promptNavigationRegressions()
     }
 }

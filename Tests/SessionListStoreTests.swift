@@ -6,6 +6,87 @@ import XCTest
 final class SessionListStoreTests: XCTestCase {
     private var scratch: URL!
 
+    func testLegacyOrphanVisitsRetireOnUnchangedReplyAndStayRetiredAfterReload() throws {
+        let store = SessionListStore()
+        store.loadPersisted(hostID: "orphan-host")
+        let keys = ["opencode:72e038c8", "opencode:3ffbe30a", "opencode:b0b148e2"]
+        let rows = keys.map { SessionSummary(key: $0, runtime: "opencode", title: "OpenCode · New session", live: true, hosted: true, attention: .working, marker: "working") }
+        store.updateSessions(rows)
+        for row in rows { store.revealSession(row) }
+        XCTAssertEqual(Set(store.retainedSessionKeys), Set(keys))
+        // A replacement host has no panes or migration map. It confirms these
+        // exact keys missing independently of its unchanged bounded window.
+        store.applyListResponse(SessionsListResponse(sessions: [], version: "v1", unchanged: true, missingKeys: keys))
+        XCTAssertTrue(store.windowSessions.isEmpty)
+        XCTAssertTrue(store.retainedSessionKeys.isEmpty)
+        SessionListCache.flushPendingWrites()
+        let reopened = SessionListStore()
+        reopened.loadPersisted(hostID: "orphan-host")
+        XCTAssertTrue(reopened.windowSessions.isEmpty)
+        // Retirement is not a user deletion: a genuinely re-discovered row may return.
+        reopened.applyListResponse(SessionsListResponse(sessions: [rows[0]], version: "v2"))
+        XCTAssertEqual(reopened.windowSessions.map(\.key), [keys[0]])
+    }
+
+    func testRetainedCanonicalMetadataWinsBeforeAliasAndSurvivesRestart() throws {
+        let store = SessionListStore()
+        store.loadPersisted(hostID: "retained-alias-host")
+        let old = SessionSummary(key: "opencode:creation", title: "New session", live: true, attention: .working, marker: "working")
+        let canonical = SessionSummary(key: "opencode:ses_finished", title: "Finished result", live: false, marker: "")
+        store.updateSessions([old])
+        store.revealSession(old)
+        store.applyListResponse(SessionsListResponse(
+            sessions: [], version: "v1", unchanged: true,
+            aliases: [old.key: canonical.key], retainedSessions: [canonical]
+        ))
+        XCTAssertEqual(store.windowSessions, [canonical])
+        XCTAssertEqual(store.session(for: old.key), canonical)
+        SessionListCache.flushPendingWrites()
+        let reopened = SessionListStore()
+        reopened.loadPersisted(hostID: "retained-alias-host")
+        XCTAssertEqual(reopened.resolvedKey(old.key), canonical.key)
+        XCTAssertEqual(reopened.session(for: old.key), canonical)
+        XCTAssertEqual(reopened.retainedSessionKeys, [canonical.key])
+        reopened.loadPersisted(hostID: "different-host")
+        XCTAssertEqual(reopened.resolvedKey(old.key), old.key)
+    }
+
+    func testStaleReconciliationCannotRetireOrRedirectNewerState() {
+        let store = SessionListStore()
+        let current = SessionSummary(key: "pi:current", title: "Current", live: true, marker: "working")
+        store.applyListResponse(SessionsListResponse(sessions: [current], revision: 20))
+        store.revealSession(current)
+        store.applyListResponse(SessionsListResponse(
+            sessions: [], unchanged: true, revision: 19,
+            aliases: [current.key: "pi:wrong"], missingKeys: [current.key]
+        ))
+        XCTAssertEqual(store.windowSessions, [current])
+        XCTAssertEqual(store.resolvedKey(current.key), current.key)
+    }
+
+    func testWindowMissAndOldHostDoNotRetireVisitedHistory() {
+        let store = SessionListStore()
+        let history = SessionSummary(key: "claude:older", title: "Older", marker: "")
+        store.revealSession(history)
+        store.applyListResponse(SessionsListResponse(sessions: [], version: "window", hasMore: true))
+        XCTAssertEqual(store.windowSessions, [history])
+        store.applyListResponse(SessionsListResponse(sessions: [], unchanged: true))
+        XCTAssertEqual(store.windowSessions, [history])
+    }
+
+    func testUnchangedWireResponseKeepsRetainedReconciliationFields() throws {
+        let response = try RemoteJSONDecoder.decode(SessionsListResponse.self, from: [
+            "unchanged": true, "version": "v1",
+            "retained_sessions": [["key": "opencode:ses_real", "marker": ""]],
+            "missing_keys": ["opencode:orphan"],
+        ])
+        XCTAssertEqual(response.retainedSessions?.map(\.key), ["opencode:ses_real"])
+        XCTAssertEqual(response.missingKeys, ["opencode:orphan"])
+        let roundTrip = try JSONDecoder().decode(SessionsListResponse.self, from: JSONEncoder().encode(response))
+        XCTAssertEqual(roundTrip.retainedSessions, response.retainedSessions)
+        XCTAssertEqual(roundTrip.missingKeys, response.missingKeys)
+    }
+
     func testExplicitHistoryVisitSurvivesRefreshReloadAndCanonicalMigration() throws {
         let old = try session(key: "claude:old", title: "Old history")
         let fresh = try session(key: "claude:fresh", title: "Today")

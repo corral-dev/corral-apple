@@ -11,6 +11,8 @@ nonisolated enum ClientDiagnosticEvent: String, Codable, Sendable {
     case planeOverload
     /// A slow event subscriber lost events and receives a coalesced resync marker.
     case eventGap
+    /// Correlated control/snapshot metadata only, never terminal bytes or session keys.
+    case terminal
 }
 
 nonisolated enum ClientDiagnosticFailure: String, Codable, Sendable {
@@ -25,6 +27,7 @@ nonisolated struct ClientDiagnosticRecord: Codable, Sendable {
     let durationMs: Double?
     let errorCode: Int?
     let reason: ClientDiagnosticFailure?
+    let terminal: TerminalDiagnosticContext?
 }
 
 nonisolated struct ClientDiagnosticState: Codable, Sendable {
@@ -79,13 +82,14 @@ nonisolated struct ClientDiagnosticReport: Codable, Sendable {
     }
 
     func record(_ event: ClientDiagnosticEvent, plane: String? = nil,
-                durationMs: Double? = nil, errorCode: Int? = nil, reason: ClientDiagnosticFailure? = nil) {
+                durationMs: Double? = nil, errorCode: Int? = nil, reason: ClientDiagnosticFailure? = nil,
+                terminal: TerminalDiagnosticContext? = nil) {
         sequence += 1
         counters[event.rawValue, default: 0] += 1
         // Successful responses are counters, not an unbounded per-frame trace.
         if event != .responseReceived {
             events.append(ClientDiagnosticRecord(sequence: sequence, timestamp: Date().timeIntervalSince1970,
-                event: event, plane: plane, durationMs: durationMs, errorCode: errorCode, reason: reason))
+                event: event, plane: plane, durationMs: durationMs, errorCode: errorCode, reason: reason, terminal: terminal))
             if events.count > 128 { events.removeFirst(events.count - 128) }
             let label = event.rawValue
             let code = errorCode ?? 0
@@ -166,6 +170,12 @@ nonisolated struct ClientDiagnosticReport: Codable, Sendable {
             subscriptions: wildcardSubscribers.count + channelSubscribers.values.reduce(0) { $0 + $1.count },
             reconnectAttempt: reconnectAttempt, dataRebindAttempt: dataPlaneRebindAttempt,
             lastReceiveAge: lastReceiveAge)
+    }
+
+    func traceTerminal(_ context: TerminalDiagnosticContext, durationMs: Double?, error: (any Error)?) {
+        diagnostics.record(.terminal, durationMs: durationMs, errorCode: error.map { ($0 as NSError).code },
+                           terminal: context)
+        diagnostics.persist(state: diagnosticState)
     }
 
     func persistDiagnostics() {

@@ -312,6 +312,10 @@ import Foundation
             hostOffersDataPlane = WireProtocol.shouldAttachDataPlane(dataBind: bind)
             if WireProtocol.shouldAttachDataPlane(dataBind: bind), let bind {
                 try await bindDataPlaneOnce(bind: bind, name: name)
+                guard isCurrentPlane(source, isControl: true), !Task.isCancelled else { return }
+                // Host-side subscriptions may have been retired with the old
+                // data socket. A ready control plane alone cannot restore them.
+                notifyReadyHandlers()
             }
         } catch is CancellationError {
             return
@@ -347,6 +351,12 @@ import Foundation
     }
 
     #if DEBUG
+    /// Mounted acceptance of data-only recovery; never changes agent processes.
+    func inspectionFailDataPlane() {
+        guard let plane = dataPlane else { return }
+        handlePlaneFailure(plane: plane, isControl: false, reason: .receive)
+    }
+
     func setConnectionStateForTesting(_ state: State) {
         self.state = state
     }

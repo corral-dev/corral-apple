@@ -34,6 +34,27 @@ final class RemoteClientLifecycleTests: XCTestCase {
         XCTAssertEqual(report.counters["malformedResponse"], 1)
     }
 
+    func testTerminalDiagnosticsCorrelateWithoutPayloads() throws {
+        let recorder = ClientDiagnostics(), stream = UUID(), request = UUID()
+        recorder.record(.terminal, durationMs: 20_000, errorCode: 1,
+            terminal: TerminalDiagnosticContext(streamID: stream, operation: .resync, requestID: request,
+                result: .failed, attempt: 2, snapshotRevision: 7))
+        let report = recorder.report(state: ClientDiagnosticState(connection: "ready", transport: "local",
+            dataAttached: true, pendingRequests: 0, subscriptions: 1, reconnectAttempt: 0,
+            dataRebindAttempt: 0, lastReceiveAge: 0))
+        let encoded = try JSONEncoder().encode(report)
+        let decoded = try JSONDecoder().decode(ClientDiagnosticReport.self, from: encoded)
+        let context = try XCTUnwrap(decoded.events.last?.terminal)
+        XCTAssertEqual(context.streamID, stream)
+        XCTAssertEqual(context.requestID, request)
+        XCTAssertEqual(context.operation, .resync)
+        XCTAssertEqual(context.snapshotRevision, 7)
+        let json = String(decoding: encoded, as: UTF8.self)
+        for forbidden in ["sessionKey", "params", "payload", "history", "path"] {
+            XCTAssertFalse(json.contains(forbidden))
+        }
+    }
+
     func testDiagnosticRetentionAndResponseCountersAreBounded() {
         let recorder = ClientDiagnostics()
         for _ in 0..<300 { recorder.record(.orphanResponse) }

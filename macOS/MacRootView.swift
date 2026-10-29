@@ -528,8 +528,9 @@ struct MacRootView: View {
         feed = current
         workspace.feed = current
         current.onSessionMigrated = { [weak workspace] old, new in workspace?.sessionMigrated(from: old, to: new) }
-        current.onListChanged = { [weak current] in
-            if let current { await notifications.resolvePending(feed: current, workspace: workspace) }
+        current.onListChanged = { [weak current, weak workspace] in
+            workspace?.canonicalizePaneKeys()
+            if let current, let workspace { await notifications.resolvePending(feed: current, workspace: workspace) }
         }
         guard !Task.isCancelled, appModel.selectedHost?.hostID == host.hostID,
               feed === current else {

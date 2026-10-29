@@ -6,6 +6,8 @@ nonisolated struct SessionListSnapshot: Codable, Sendable, Equatable {
     var sessions: [SessionSummary]
     /// Optional for snapshots written before explicit history navigation.
     var revealedKeys: [String]? = nil
+    /// Accepted redirects must survive client relaunch and host pane retirement.
+    var aliases: [String: String]? = nil
 }
 
 enum SessionListCache {

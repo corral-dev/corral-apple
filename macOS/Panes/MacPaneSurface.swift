@@ -115,6 +115,12 @@ final class MacPaneSurfaceCache {
 
     func existingEntry(for key: String) -> Entry? { entries[key] }
 
+    /// A pane renamed to its canonical session key keeps its native host.
+    func rename(_ old: String, to new: String) {
+        guard entries[new] == nil, let entry = entries.removeValue(forKey: old) else { return }
+        entries[new] = entry
+    }
+
     func present(_ entry: Entry) {
         entry.lease = entry.lifetime.present()
     }
@@ -375,6 +381,10 @@ struct MacPaneSurface: NSViewRepresentable {
             coordinator.cache.present(entry)
             coordinator.lease = entry.lease
             entry.view.isHidden = false
+        } else if isPresented, coordinator.lease != entry.lease {
+            // A renamed pane's new mount adopts the presented host; its old
+            // mount is dismantled and must not keep the hiding lease.
+            coordinator.lease = entry.lease
         } else if !isPresented, entry.lifetime.isPresented {
             coordinator.cache.suspend(entry, key: session.key, lease: coordinator.lease, keepingMounted: true)
         }
