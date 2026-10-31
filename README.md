@@ -116,6 +116,17 @@ Session traffic and notification text are end-to-end encrypted. The relay sees r
 
 Remove private conversations, machine addresses and pairing credentials from public reports. For vulnerabilities, use [private security reporting](https://github.com/corral-dev/corral-apple/security/advisories/new).
 
+## 🧩 Related Tools in the AI Coding Suite
+
+If you run multiple AI coding agents daily, check out the rest of the local-first toolkit:
+
+| Repository | Description |
+| :--- | :--- |
+| **[corral](https://github.com/corral-dev/corral)** | Run Claude Code, Codex, OpenCode, Cursor & Pi side-by-side in a terminal session manager, then continue from iPhone or Mac. |
+| **[subswap](https://github.com/x0c/subswap)** | Check remaining quota and switch Claude Code, Codex, Cursor, Kimi Code & OpenCode accounts without logging out. |
+| **[agentsync](https://github.com/x0c/agentsync)** | Sync `AGENTS.md`, `CLAUDE.md`, skills, and MCP configs across coding agents from one local source of truth. |
+| **[agent-doc-skills](https://github.com/x0c/agent-doc-skills)** | Navigable project knowledge base skills (`doc-init`, `doc-update`, `doc-compact`) so coding agents don't rediscover your repo every session. |
+
 ## License
 
 [GPL-3.0-only](LICENSE). Corral's name and floral-hat artwork have a separate [brand policy](BRAND_POLICY.md). Dependencies and assistant-provider marks retain their own licenses and ownership; see [third-party notices](THIRD_PARTY_NOTICES.md).
