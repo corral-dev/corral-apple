@@ -61,7 +61,12 @@ brew update
 brew upgrade --cask x0c/tap/corral-mac
 ```
 
-The built-in updater remains available. Current Homebrew can recognize an app newer than its installation record, so an older recorded version alone does not mean an update failed. An “already an App” install error means the destination is occupied; use the appropriate adoption or update command above. Do not use `--force` as a routine fix: it can replace a newer app with an older tap version. Pairing and settings are preserved. [How Homebrew handles self-updating apps](https://docs.brew.sh/FAQ#how-does-brew-upgrade-handle-apps-that-update-themselves).
+<details>
+<summary>Troubleshooting Homebrew updates</summary>
+
+Note: Corral also includes a built-in auto-updater. If `brew install` reports that `Corral.app` already exists in `/Applications`, run `brew install --cask --adopt x0c/tap/corral-mac` instead of `--force`. Pairing and settings are preserved. [How Homebrew handles self-updating apps](https://docs.brew.sh/FAQ#how-does-brew-upgrade-handle-apps-that-update-themselves).
+
+</details>
 
 Download the [signed Mac DMG](https://github.com/corral-dev/corral-apple/releases/latest) and drag Corral to Applications. It checks for updates hourly, downloads them in the background and installs them when you quit.
 
