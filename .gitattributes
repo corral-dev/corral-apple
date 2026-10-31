@@ -3,3 +3,4 @@ Shared/Resources/ChatDiagrams/plantuml/** -diff
 Shared/Resources/ChatDiagrams/stdlib/** -diff
 Shared/Resources/ChatDiagrams/licenses/** -diff
 Shared/Resources/ChatDiagrams/purify.min.js -diff
+Shared/Resources/ChatDiagrams/** linguist-vendored
