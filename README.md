@@ -32,7 +32,7 @@ Read replies, answer questions, and send the next instruction to Claude Code, Co
 
 ## Install
 
-The **Mac app** is a signed download. The **iPhone app** is a source beta: build it with Xcode. Public App Store and TestFlight downloads are not available yet.
+The **Mac app** is a signed download. The **iPhone app** is source-only for now: build it with Xcode. Public App Store and TestFlight downloads are not available yet.
 
 | Client | Requirements |
 | --- | --- |
@@ -68,7 +68,7 @@ Note: Corral also includes a built-in auto-updater. If `brew install` reports th
 
 </details>
 
-Download the [signed Mac DMG](https://github.com/corral-dev/corral-apple/releases/latest) and drag Corral to Applications. It checks for updates hourly, downloads them in the background and installs them when you quit.
+Download the [signed Mac DMG](https://github.com/corral-dev/corral-apple/releases/latest) and drag Corral to Applications. It checks for updates hourly, downloads them in the background, and installs them when you quit.
 
 To build from source instead, with Xcode and its command-line tools installed:
 
@@ -101,17 +101,17 @@ corral remote pair
 
 If Corral is already installed, run only the second command. [Other CLI installation options](https://github.com/corral-dev/corral#install) are available.
 
-On the same local network, open the Apple client and scan or paste the pairing code. Pairing lets the client read and act on your host's sessions; use `corral remote pair --readonly` for viewing only. Keep the code private. The host must remain awake for agents and remote access to keep working.
+On the same local network, open the Apple client and scan the pairing code, or paste it in. Pairing lets the client read and act on your host's sessions; use `corral remote pair --readonly` for viewing only. Keep the code private. The host must remain awake for agents and remote access to keep working.
 
 ## Access from another network
 
-Run your own [Corral relay](https://github.com/corral-dev/corral-relay#quick-start) and configure its `wss://` address on the host. Same-network access works directly. Open-source clients use your configured relay; a shared hosted relay is not included.
+Run your own [Corral relay](https://github.com/corral-dev/corral-relay#quick-start) and configure its `wss://` address on the host. Same-network access works directly. There is no shared hosted relay — your clients use the relay you configure.
 
-For iPhone notifications, configure APNs on that relay with credentials matching your own app identity. Without APNs, conversations still update while the client is open.
+For iPhone notifications, set up APNs on that relay with your own app's credentials. Without APNs, conversations still update while the client is open.
 
 ## Privacy
 
-Session traffic and notification text are end-to-end encrypted. The relay sees routing identities, connection timing and byte counts. Device keys are stored in Keychain; conversations can be cached on the client for reopening history. See [PRIVACY.md](PRIVACY.md).
+Session traffic and notification text are end-to-end encrypted. The relay sees routing identities, connection timing, and byte counts. Device keys are stored in Keychain; conversations can be cached on the client so you can reopen past conversations. See [PRIVACY.md](PRIVACY.md).
 
 ## Help and contribute
 
