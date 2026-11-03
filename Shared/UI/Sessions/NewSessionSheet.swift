@@ -162,18 +162,18 @@ struct NewSessionSheet: View {
                             .help(Text(verbatim: project.path))
                         }
                     }
-                    // The catalog entry wears the quick filter's fixed More
-                    // capsule. It is an action, so it never shows selection.
-                    MacQuickFilterButton(selected: false) {
-                        Text("sessions.filter.more")
-                        Image(systemName: "chevron.down")
-                            .imageScale(.small)
-                            .accessibilityHidden(true)
+                    // Keep the current project visible outside the scrolling
+                    // quick set, just like the sidebar's pinned picker entry.
+                    MacQuickFilterButton(selected: selectedProject != nil) {
+                        projectSummaryLabel
                     } action: {
                         showProjects = true
                     }
-                    .accessibilityLabel(Text("sessions.filter.more"))
-                    .help(Text("sessions.filter.more"))
+                    .layoutPriority(1)
+                    .accessibilityLabel(Text("session.new.project"))
+                    .accessibilityValue(projectSummaryLabel.title)
+                    .accessibilityIdentifier("corral.newSession.project")
+                    .help(selectedProject.map { Text(verbatim: $0.path) } ?? projectSummaryLabel.title)
                     .popover(isPresented: $showProjects) {
                         MacNewSessionProjectPopover(projects: options.projects, selection: $options.selectedProject)
                     }
@@ -244,19 +244,28 @@ struct NewSessionSheet: View {
             .foregroundStyle(.secondary)
     }
 
-    /// The catalog arrives most recent first; its head is the quick set, and
-    /// a selection made through More stays visible in front of it.
+    /// Selection never reorders or expands the recent quick set; the pinned
+    /// summary exposes every selection, including choices from More.
     private var quickProjects: [ProjectEntry] {
-        let named = options.projects.filter { !$0.path.isEmpty }
-        let recent = Array(named.prefix(SessionListFiltering.recentLimit))
-        guard !recent.contains(where: { $0.path == options.selectedProject }),
-              let selected = options.projects.first(where: { $0.path == options.selectedProject }) else { return recent }
-        return recent + [selected]
+        Array(options.projects.filter { !$0.path.isEmpty }.prefix(SessionListFiltering.recentLimit))
+    }
+
+    private var selectedProject: ProjectEntry? {
+        options.projects.first { $0.path == options.selectedProject }
+    }
+
+    private var projectSummaryLabel: ProjectFilterSummaryLabel {
+        let project = selectedProject
+        return ProjectFilterSummaryLabel(
+            selected: project.map { [$0.path.isEmpty ? .noProject : .project(path: $0.path)] } ?? [],
+            options: project.map { [SessionProjectOption(path: $0.path, label: $0.displayName)] } ?? [],
+            maximumNameWidth: 108 * interfaceScale
+        )
     }
 
     private var macFooter: some View {
         HStack(spacing: Space.md * interfaceScale) {
-            if let project = options.projects.first(where: { $0.path == options.selectedProject }), !project.path.isEmpty {
+            if let project = selectedProject, !project.path.isEmpty {
                 Text(verbatim: (project.path as NSString).abbreviatingWithTildeInPath)
                     .interfaceFont(.callout)
                     .foregroundStyle(.secondary)

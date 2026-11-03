@@ -4,9 +4,9 @@ import SwiftUI
 extension NotificationSound {
     var title: LocalizedStringKey {
         switch self {
-        case .chime: "settings.notifications.sound.chime"
-        case .marimba: "settings.notifications.sound.marimba"
-        case .tap: "settings.notifications.sound.tap"
+        case .woodenDuet: "settings.notifications.sound.wooden_duet"
+        case .waterDrop: "settings.notifications.sound.water_drop"
+        case .electronicChime: "settings.notifications.sound.electronic_chime"
         }
     }
 }

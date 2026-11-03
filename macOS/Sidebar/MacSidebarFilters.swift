@@ -4,14 +4,15 @@ import SwiftUI
 /// Native controls over the unfiltered host window; selections only narrow presentation.
 struct MacSidebarFilters: View {
     let sessions: [SessionSummary]
-    /// Sessions in the Focus filter (host `needs_attention`).
-    let attentionCount: Int
-    @Binding var attentionOnly: Bool
+    @Binding var quickFilter: SessionQuickFilter
     @Binding var runtimes: Set<SessionRuntimeFilter>
     @Binding var projects: Set<SessionProjectFilter>
     @State private var showProjects = false
     @State private var choices: [SessionProjectOption] = []
     @State private var extraChoices: [SessionProjectOption] = []
+    #if DEBUG
+    @State private var didInspectQuickFilter = false
+    #endif
 
     @Environment(\.interfaceScale) private var interfaceScale
     @Environment(\.colorScheme) private var colorScheme
@@ -20,13 +21,13 @@ struct MacSidebarFilters: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Space.sm * interfaceScale) {
             MacFilterChoices {
-                MacQuickFilterButton(selected: attentionOnly, sidebar: true) {
-                    Text("sessions.filter.attention")
-                    Text(verbatim: attentionCount.formatted()).monospacedDigit().opacity(0.75)
-                } action: { attentionOnly.toggle() }
+                MacQuickFilterButton(selected: quickFilter != .all, sidebar: true) {
+                    Text(LocalizedStringKey(quickFilter.titleKey))
+                    Text(verbatim: quickFilter.count(sessions: sessions).formatted()).monospacedDigit().opacity(0.75)
+                } action: { advanceQuickFilter() }
                 .fixedSize()
-                .accessibilityLabel(Text("sessions.filter.attention"))
-                .accessibilityValue(Text(verbatim: attentionCount.formatted()))
+                .accessibilityLabel(Text(LocalizedStringKey(quickFilter.titleKey)))
+                .accessibilityValue(Text(verbatim: quickFilter.count(sessions: sessions).formatted()))
                 .accessibilityIdentifier("corral.filter.attention")
                 Divider().interfaceFrame(width: 1, height: 16)
                 ForEach(SessionRuntimeFilter.ordered.filter { $0 != .all }, id: \.self) { runtime in
@@ -85,7 +86,7 @@ struct MacSidebarFilters: View {
             guard !choices.isEmpty else { return }
             let arguments = ProcessInfo.processInfo.arguments
             if arguments.contains("-CorralInspectSelectedFilters") {
-                attentionOnly = true
+                quickFilter = .attention
                 runtimes = [.codex]
                 projects = [.project(path: choices[0].path)]
             } else if arguments.contains("-CorralInspectMultiFilters") {
@@ -96,14 +97,40 @@ struct MacSidebarFilters: View {
                 projects = [.project(path: last.path)]
             }
             if arguments.contains("-CorralInspectAllFilters") {
-                attentionOnly = true
+                quickFilter = .attention
                 runtimes = Set(SessionRuntimeFilter.ordered.filter { $0 != .all })
                 projects = Set(choices.prefix(2).map { .project(path: $0.path) })
             }
             if arguments.contains("-CorralInspectDarkFilters") { NSApp.appearance = NSAppearance(named: .darkAqua) }
             if arguments.contains("-CorralInspectProjectPicker") { showProjects = true }
         }
+        .task(id: sessions.isEmpty) {
+            guard !sessions.isEmpty else { return }
+            let arguments = ProcessInfo.processInfo.arguments
+            if arguments.contains("-CorralInspectQuickFilterCycle"), !didInspectQuickFilter {
+                didInspectQuickFilter = true
+                for step in 0...3 {
+                    if step > 0 { advanceQuickFilter() }
+                    let evidence: [String: Any] = [
+                        "step": step, "mode": quickFilter.rawValue,
+                        "titleKey": quickFilter.titleKey,
+                        "selected": quickFilter != .all,
+                        "count": quickFilter.count(sessions: sessions),
+                        "visibleKeys": quickFilter.apply(sessions: sessions, runtimes: runtimes, projects: projects).map(\.key),
+                    ]
+                    if let data = try? JSONSerialization.data(withJSONObject: evidence, options: [.sortedKeys]) {
+                        try? data.write(to: URL(fileURLWithPath: "/tmp/corral-quick-filter-\(step).json"), options: .atomic)
+                    }
+                    try? await Task.sleep(for: .seconds(8))
+                    guard !Task.isCancelled else { return }
+                }
+            }
+        }
         #endif
+    }
+
+    private func advanceQuickFilter() {
+        quickFilter.advance()
     }
 
     private func logoScheme(selected: Bool) -> ColorScheme {

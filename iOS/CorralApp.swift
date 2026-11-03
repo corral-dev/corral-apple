@@ -6,7 +6,6 @@ import UserNotifications
 struct CorralApp: App {
     @UIApplicationDelegateAdaptor(CorralAppDelegate.self) private var appDelegate
     @State private var appModel = AppModel()
-    @State private var navigationPath = NavigationPath()
     /// Ticket already routed for the pending tap. A new ticket replaces the
     /// notification path with the tapped host; repeats of the routed ticket no-op.
     @State private var routedTicket: UInt64?
@@ -36,10 +35,10 @@ struct CorralApp: App {
                 } else if ProcessInfo.processInfo.arguments.contains("-CorralInspectDeletion") {
                     SessionDeletionInspection()
                 } else {
-                    NavigationStack(path: $navigationPath) { HostListView() }
+                    SessionSplitRoot()
                 }
                 #else
-                NavigationStack(path: $navigationPath) { HostListView() }
+                SessionSplitRoot()
                 #endif
             }
             .tint(Palette.accent)
@@ -72,7 +71,7 @@ struct CorralApp: App {
                 let host = appModel.hosts.first(where: { $0.hostID == connectedID })
                     ?? appModel.hosts.first
                 guard let host else { return }
-                navigationPath.append(host)
+                appModel.selectHost(host)
             }
             #if DEBUG
             .draftImageInspection()
@@ -87,7 +86,7 @@ struct CorralApp: App {
                 guard ProcessInfo.processInfo.arguments.contains("-CorralInspectSessions")
                     || ProcessInfo.processInfo.arguments.contains("-CorralInspectNewSession"),
                       let host = appModel.hosts.first else { return }
-                navigationPath.append(host)
+                appModel.selectHost(host)
             }
             .fullScreenCover(isPresented: $showQuestionPolish) {
                 NavigationStack {
@@ -125,12 +124,13 @@ struct CorralApp: App {
                 openPendingNotificationIfReady()
             }
         }
+        .commands { CorralIOSCommands() }
     }
 
-    /// Notification-tap host leg: each new request ticket replaces the navigation
-    /// path with the tapped host on paired identity alone, never waiting for a
+    /// Notification-tap host leg: each new request ticket selects the tapped
+    /// host on paired identity alone, never waiting for a
     /// live connection; repeats of the routed ticket no-op. The explicit body tap
-    /// authorizes navigation to that host and session. The session leg is pushed
+    /// authorizes navigation to that host and session. The session leg is selected
     /// by the host's list after its snapshot loads; unknown hosts are dropped.
     private func openPendingNotificationIfReady() {
         let registrar = PushRegistrar.shared
@@ -150,8 +150,9 @@ struct CorralApp: App {
             registrar.clearPendingOpen(hostID: request.hostID)
             return
         }
-        navigationPath = NavigationPath()
-        navigationPath.append(host)
+        // The iPad split shows the selected machine's list, which opens the session leg.
+        // The selected machine's list opens the session leg.
+        appModel.selectHost(host)
         routedTicket = ticket
     }
 }
@@ -159,6 +160,21 @@ struct CorralApp: App {
 /// 接 APNs 设备令牌回调。
 final class CorralAppDelegate: NSObject, UIApplicationDelegate {
     weak var appModel: AppModel?
+
+    func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        if #available(iOS 26.0, *) {
+            // Corral has no in-text find; without this the system Find group's
+            // ⌘F / ⌘E conflict with Search and Switch Chat / Terminal in the
+            // menu bar. SwiftUI's commands still build (no custom handler).
+            let menu = UIMainMenuSystem.Configuration()
+            menu.findingPreference = .removed
+            UIMainMenuSystem.shared.setBuildConfiguration(menu)
+        }
+        return true
+    }
 
     func application(
         _ application: UIApplication,

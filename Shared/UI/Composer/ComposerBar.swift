@@ -174,14 +174,16 @@ struct ComposerBar: View {
         .contentShape(cardShape)
         .onTapGesture { focused = true }
         .accessibilityIdentifier("composer.surface")
+        // Images dragged in from another app attach like picked ones; on iPad
+        // this is the multitasking drag (owner request 2026-11-01).
+        .dropDestination(for: Data.self) { items, _ in
+            addImageData(items)
+            return !items.isEmpty
+        }
         #if os(macOS)
         .focusEffectDisabled()
         .onPasteCommand(of: [.image, .fileURL]) { providers in
             addImages(from: providers)
-        }
-        .dropDestination(for: Data.self) { items, _ in
-            addImageData(items)
-            return !items.isEmpty
         }
         .fileImporter(
             isPresented: $showImageImporter,
@@ -285,6 +287,11 @@ struct ComposerBar: View {
         .accessibilityIdentifier(identifier)
         #if os(macOS)
         .help(Text(label))
+        #else
+        // Hardware keyboard on iPad (owner request 2026-11-01). A ⌘ chord
+        // never reaches an input method, so marked text is never sent; plain
+        // Return keeps the touch keyboard's behavior. Stop is never bound.
+        .keyboardShortcut(stop ? nil : KeyboardShortcut(.return, modifiers: .command))
         #endif
         .accessibilityLabel(Text(label))
     }
@@ -499,6 +506,8 @@ struct ComposerBar: View {
         }
     }
 
+    #endif
+
     private func addImageData(_ items: [Data]) {
         for data in items {
             guard canAttachMore,
@@ -506,7 +515,6 @@ struct ComposerBar: View {
             attachments.append(DraftImageAttachment(id: UUID(), base64: encoded.base64, preview: encoded.preview))
         }
     }
-    #endif
 }
 
 #if os(macOS)

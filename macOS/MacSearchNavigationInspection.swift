@@ -51,7 +51,7 @@ enum MacSearchNavigationInspection {
             defer { workspace.setMode(otherMode, for: other.key) }
             workspace.open(other.key, sessions: feed.listStore.windowSessions, takeKeys: false)
             results["retainedAfterSwitch"] = feed.listStore.windowSessions.contains { $0.key == key }
-            await workspace.navigateHistory(by: -1)
+            try await navigateHistory(by: -1, workspace: workspace)
             results["back"] = workspace.focusedKey == key
             results["backSidebar"] = await waitForSidebar(key, state: state)
             let returned = conversationScroll(key: key, workspace: workspace)?.coordinator?.navigationPosition
@@ -67,8 +67,11 @@ enum MacSearchNavigationInspection {
                 options: [.prettyPrinted, .sortedKeys])
                 .write(to: folder.appendingPathComponent("reading.json"), options: .atomic)
             await stage("back", results: results, folder: folder, workspace: workspace)
-            await workspace.navigateHistory(by: 1)
+            try await navigateHistory(by: 1, workspace: workspace)
             results["forward"] = workspace.focusedKey == other.key
+            if ProcessInfo.processInfo.arguments.contains("-CorralInspectMouseNavigation") {
+                results["mouseEventDispatch"] = true
+            }
 
             let callsResult = search.store.result?.matches.map(\.key)
             search.store.cancelPending()
@@ -140,6 +143,50 @@ enum MacSearchNavigationInspection {
         }
     }
 
+    /// Optional side-button acceptance uses the real window's local monitor,
+    /// never the system event stream or the owner's pointer.
+    private static func navigateHistory(by step: Int, workspace: MacWorkspace) async throws {
+        guard ProcessInfo.processInfo.arguments.contains("-CorralInspectMouseNavigation") else {
+            await workspace.navigateHistory(by: step)
+            return
+        }
+        func containsObserver(_ view: NSView) -> Bool {
+            view is MacMouseNavigation.EventView || view.subviews.contains(where: containsObserver)
+        }
+        var mountedWindow: NSWindow?
+        // Opening the preceding visit schedules a SwiftUI mount. Wait for its
+        // actual window before dispatching, rather than targeting another root.
+        for _ in 0..<100 {
+            if let key = workspace.focusedKey,
+               let window = workspace.paneSurfaces.existingEntry(for: key)?.view.window,
+               window.contentView.map(containsObserver) == true {
+                mountedWindow = window
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        guard let window = mountedWindow else { throw Failure.unready }
+        let history = workspace.navigation.host.history
+        let index = history.index + step
+        guard history.keys.indices.contains(index) else { throw Failure.noHistory }
+        let target = history.keys[index]
+        for type in [NSEvent.EventType.otherMouseDown, .otherMouseUp] {
+            guard let native = NSEvent.mouseEvent(with: type, location: .zero, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: 0), let cg = native.cgEvent else {
+                throw Failure.unready
+            }
+            cg.setIntegerValueField(.mouseEventButtonNumber, value: step < 0 ? 3 : 4)
+            guard let event = NSEvent(cgEvent: cg) else { throw Failure.unready }
+            NSApp.sendEvent(event)
+        }
+        for _ in 0..<300 {
+            if workspace.focusedKey == target, !workspace.navigation.isNavigating { return }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        throw Failure.unready
+    }
+
     private static func conversationScroll(key: String, workspace: MacWorkspace) -> MacConversationTable.ConversationScrollView? {
         func find(_ view: NSView) -> MacConversationTable.ConversationScrollView? {
             if let scroll = view as? MacConversationTable.ConversationScrollView { return scroll }
@@ -160,7 +207,7 @@ enum MacSearchNavigationInspection {
     }
 
     private static func inspectHorizontalGeometry(key: String, workspace: MacWorkspace, folder: URL) async -> Bool {
-        guard let window = NSApp.windows.first(where: { $0.title == "Corral" }) else { return false }
+        guard let window = workspace.paneSurfaces.existingEntry(for: key)?.view.window else { return false }
         let original = window.frame
         defer { window.setFrame(original, display: true) }
         var samples: [[String: Double]] = []
@@ -214,7 +261,9 @@ enum MacSearchNavigationInspection {
 
     private static func stage(_ phase: String, results: [String: Bool], folder: URL, workspace: MacWorkspace) async {
         let state = workspace.navigation.host
+        let window = workspace.focusedKey.flatMap { workspace.paneSurfaces.existingEntry(for: $0)?.view.window }
         let report: [String: Any] = ["phase": phase, "checks": results,
+            "windowID": window?.windowNumber ?? -1, "pid": ProcessInfo.processInfo.processIdentifier,
             "focus": workspace.focusedKey ?? "", "reveal": state.revealKey ?? "",
             "sidebarKey": state.inspectionSidebarKey ?? "", "sidebar": state.inspectionSidebar,
             "history": state.history.keys, "historyIndex": state.history.index,
@@ -230,7 +279,7 @@ enum MacSearchNavigationInspection {
         let trees = NSApp.windows.compactMap { $0.contentView }.flatMap { tree($0) }
         try? trees.joined(separator: "\n").write(to: folder.appendingPathComponent("\(phase)-views.txt"), atomically: true, encoding: .utf8)
         // App-owned pixels are supplementary geometry evidence, not a desktop capture.
-        if let view = NSApp.windows.first(where: { $0.title == "Corral" })?.contentView,
+        if let view = window?.contentView,
            let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
             view.cacheDisplay(in: view.bounds, to: bitmap)
             try? bitmap.representation(using: .png, properties: [:])?

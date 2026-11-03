@@ -54,6 +54,9 @@ nonisolated final class SessionListWriter: @unchecked Sendable {
         let revision: UInt64
     }
     private let queue = DispatchQueue(label: "com.x0c.corral.session-lists", qos: .utility)
+    /// Reads never wait for an in-flight drain: `load` kept sharing this queue,
+    /// so a MainActor caller could stall on a large snapshot encode.
+    private let readQueue = DispatchQueue(label: "com.x0c.corral.session-lists.read", qos: .utility)
     private let lock = NSLock()
     private var pending: [URL: Pending] = [:]
     private var revision: UInt64 = 0
@@ -76,7 +79,7 @@ nonisolated final class SessionListWriter: @unchecked Sendable {
         let snapshot = pending[url]?.snapshot
         lock.unlock()
         if let snapshot { return snapshot }
-        return queue.sync {
+        return readQueue.sync {
             guard let data = try? Data(contentsOf: url) else { return nil }
             return try? JSONDecoder().decode(SessionListSnapshot.self, from: data)
         }

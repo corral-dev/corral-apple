@@ -210,6 +210,7 @@ import Foundation
 
     func attachDataPlane(bind: String, name: String) async throws {
         guard state == .ready, let source = controlPlane, allowReconnect else { throw CancellationError() }
+        let attachT0 = ContinuousClock.now
         dataAttachmentGeneration += 1
         let generation = dataAttachmentGeneration
         guard let host = reconnectHost, let publicKey = host.publicKeyData else {
@@ -260,7 +261,8 @@ import Foundation
             }
             dataPlaneConfirmed = true
             lastDataPlaneError = nil
-            diagnose(.dataAttached, isControl: false)
+            diagnose(.dataAttached, isControl: false,
+                     durationMs: attachT0.duration(to: .now).milliseconds)
             dataPlaneRebindAttempt = 0
         } catch {
             diagnose(.dataAttachFailed, isControl: false, error: error)

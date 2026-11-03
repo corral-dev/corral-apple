@@ -117,6 +117,10 @@ struct SessionDetailView: View {
         .fullScreenCover(isPresented: $showProjectTerminal) {
             ProjectTerminalScreen(project: session.cwd)
         }
+        // iPad menu bar ⌘E, as on the Mac (owner request 2026-11-01).
+        .focusedSceneValue(\.corralToggleSessionMode, canShowAgentTerminal ? CorralCommandAction(id: sessionKey) {
+            pane = pane == .chat ? .terminal : .chat
+        } : nil)
         #if DEBUG
         // `-CorralInspectProjectTerminal`: open the project terminal once the host allows it.
         .onChange(of: canOpenProjectTerminal, initial: true) { _, allowed in
@@ -318,20 +322,6 @@ struct SessionDetailView: View {
     /// Idempotent: cached tail, image loader and saved draft are local reads only.
     @discardableResult
     private func prepareConversationIfNeeded() -> ConversationStore {
-        if let conversationStore { return conversationStore }
-        if let injectedStore {
-            let hostID = appModel.selectedHost?.hostID ?? appModel.connectedHostID ?? ""
-            draftHostID = hostID
-            if !didLoadDraft {
-                if let saved = ComposerDraftStore.load(hostID: hostID, sessionKey: session.key) {
-                    draft = saved
-                }
-                didLoadDraft = true
-            }
-            conversationStore = injectedStore
-            imageLoader = ChatImageLoader(client: appModel.client, hostID: hostID, sessionKey: session.key)
-            return injectedStore
-        }
         let hostID = appModel.selectedHost?.hostID
             ?? appModel.connectedHostID
             ?? ""
@@ -342,6 +332,12 @@ struct SessionDetailView: View {
             }
             didLoadDraft = true
         }
+        // An injected store is already present on the first appearance. It does
+        // not imply that this detail's media loader or draft has been prepared.
+        if imageLoader == nil {
+            imageLoader = ChatImageLoader(client: appModel.client, hostID: hostID, sessionKey: session.key)
+        }
+        if let conversationStore { return conversationStore }
         let client = appModel.client
         let conv = ConversationStore(
             sessionKey: session.key,
@@ -356,7 +352,6 @@ struct SessionDetailView: View {
             }
         }
         conversationStore = conv
-        imageLoader = ChatImageLoader(client: client, hostID: hostID, sessionKey: session.key)
         return conv
     }
 

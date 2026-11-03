@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 
-struct RichMessage { let seq: Int; let text: String?; let role: String }
+struct RichMessage: Equatable { let seq: Int; let text: String?; let role: String }
 #if !CORRAL_REAL_MARKDOWN
 enum ChatMarkdown { static let referenceBodyPointSize: CGFloat = 14; static func attributed(_ text: String) -> AttributedString { AttributedString(text) } }
 #endif

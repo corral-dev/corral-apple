@@ -43,18 +43,16 @@ struct UserPromptsView: View {
             .inlineNavigationTitle()
             .toolbar {
                 ToolbarItem(placement: .corralTrailing) {
-                    Button {
-                        dismiss()
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .symbolRenderingMode(.hierarchical)
-                            .interfaceFont(.title2)
-                            .foregroundStyle(.secondary)
-                            .interfaceFrame(width: TouchTarget.minimum, height: TouchTarget.minimum)
-                            .contentShape(Rectangle())
+                    if #available(iOS 26.0, macOS 26.0, *) {
+                        Button(role: .close) {
+                            dismiss()
+                        }
+                    } else {
+                        Button("action.dismiss", systemImage: "xmark") {
+                            dismiss()
+                        }
+                        .labelStyle(.iconOnly)
                     }
-                    .buttonStyle(PressableButtonStyle())
-                    .accessibilityLabel(Text("action.dismiss"))
                 }
             }
         }

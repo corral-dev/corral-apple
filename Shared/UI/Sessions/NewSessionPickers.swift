@@ -211,6 +211,15 @@ struct MacNewSessionProjectPopover: View {
                 query = preset
             }
         }
+        .task {
+            guard ProcessInfo.processInfo.arguments.contains("-CorralInspectPickNewSessionProject") else { return }
+            // Let the actual popover mount, then use its production selection
+            // handler without pointer input or creating an assistant session.
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled,
+                  let project = ProjectEntry.matching(projects, query: query).first else { return }
+            choose(project)
+        }
         #endif
     }
 

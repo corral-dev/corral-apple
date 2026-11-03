@@ -254,11 +254,13 @@ enum SessionListFiltering {
         sessions: [SessionSummary],
         runtimes: Set<SessionRuntimeFilter>,
         projects: Set<SessionProjectFilter>,
-        attentionOnly: Bool = false
+        attentionOnly: Bool = false,
+        activeOnly: Bool = false
     ) -> [SessionSummary] {
         sessions.filter { session in
             ActiveRuntimeVisibility.isListVisible(session)
                 && (!attentionOnly || needsAttention(session))
+                && (!activeOnly || SessionPresentation.activityMarker(for: session) != nil)
                 && (runtimes.isEmpty || runtimes.contains { $0.matches(session) })
                 && (projects.isEmpty || projects.contains { $0.matches(session) })
         }
@@ -270,10 +272,12 @@ enum SessionListFiltering {
         to sections: [SessionListStore.Section],
         runtimes: Set<SessionRuntimeFilter>,
         projects: Set<SessionProjectFilter>,
-        attentionOnly: Bool = false
+        attentionOnly: Bool = false,
+        activeOnly: Bool = false
     ) -> [SessionListStore.Section] {
         sections.compactMap { section in
-            let kept = apply(sessions: section.sessions, runtimes: runtimes, projects: projects, attentionOnly: attentionOnly)
+            let kept = apply(sessions: section.sessions, runtimes: runtimes, projects: projects,
+                             attentionOnly: attentionOnly, activeOnly: activeOnly)
             guard !kept.isEmpty else { return nil }
             switch section {
             case .waiting: return .waiting(kept)

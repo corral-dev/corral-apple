@@ -39,6 +39,7 @@ struct CorralMacApp: App {
     }
 
     init() {
+        LaunchClock.markLaunch()
         ClientMemoryPressure.install()
         #if CORRAL_DIRECT_DOWNLOAD
         // Keep scheduled updates alive independently of menus and Settings.

@@ -6,6 +6,50 @@ next version's section. A `Release: minor` or `Release: major` line requests a
 larger version step; `Release: hold <reason>` keeps the changes unreleased until
 the named acceptance is done.
 
+## Mac 0.3.162 (167) / iPhone 1.0.212 (224)
+
+### English
+
+- Restore Markdown images inside Mac, iPhone and iPad chat messages when the conversation is owned by a pane or the selected session. Restore saved drafts on the same path without restarting the conversation.
+- Prevent Mac images from appearing twice when Markdown paragraph separators inherited an image reference. Keep intentionally repeated images intact.
+- Add native detail-view regressions for image attachments, draft restoration and session replacement.
+
+### 简体中文
+
+- 修复 Mac、iPhone 和 iPad 聊天中图片只剩替代文字的问题：分屏或选中会话持有对话数据时也会正常初始化图片加载，并恢复已保存的草稿，不重启对话。
+- 修复 Mac 排版换行继承图片引用、导致同一张图重复显示的问题，保留正文中有意重复引用的图片。
+- 新增真实详情页回归测试，覆盖图片附件、草稿恢复和会话切换。
+
+## Mac 0.3.161 (166) / iPhone 1.0.211 (223)
+
+### English
+
+- Replace the notification sounds on Mac and iPhone with Wooden Duet, Water Drop and Electronic Chime. Keep instant previews and migrate previous sound choices automatically.
+- Cycle the session filter through All, Focus and Active on both Apple clients.
+- Mac: clicking inside the conversation area no longer moves focus to a previously viewed session kept in the background, so the sidebar always highlights the session on the right and a single conversation's title is never dimmed.
+
+### 简体中文
+
+- Mac 和 iPhone 的通知提示音改为「木质双音」「清透水滴」「电子钟琴」，保留选择即试听，并自动对应旧版铃声选择。
+- 两端会话筛选均可在「全部」「关注」「活跃」之间循环切换。
+- Mac：点击右侧对话区时，焦点不再跑到后台保留的上一个会话；侧栏高亮始终对应右侧显示的会话，只有一个会话时标题不再置灰。
+
+## iPhone 1.0.210 (222)
+
+### English
+
+- Keep the selected iPhone/iPad conversation's history load and assistant subscription independent of temporary detail-view transitions. Finish the previous unwatch before a replacement watch, and rebind the conversation when its client changes.
+- Preserve independent New Session actions instead of merging separate create requests.
+- Complete English and Chinese translations for string-formatted search counts and selected-project counts.
+- Verification limit: the reported Claude/Pi transitions still require physical-device screen acceptance; both paired devices were passcode-locked during this repair.
+
+### 简体中文
+
+- 让 iPhone/iPad 当前选中会话的历史加载和助手消息订阅独立于临时的详情页切换；旧订阅退出后才启动新订阅，连接客户端更换时重新绑定会话。
+- 不再合并相互独立的新建会话操作。
+- 补齐字符串格式的搜索命中数和已选项目数的中英文翻译。
+- 验证限制：用户报告的 Claude/Pi 切换场景仍待真机画面验收；本轮修复时两台已配对设备均需密码解锁。
+
 ## Mac 0.3.160 (165) / iPhone 1.0.206 (218)
 
 ### English

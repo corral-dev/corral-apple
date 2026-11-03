@@ -67,7 +67,7 @@ import Foundation
                     }
                 }
                 // 先登记再发送：低延迟响应可能在 `send` 返回前抵达，反过来会被收包循环丢弃。
-                pendingRequests[requestID] = (continuation, timeout, ObjectIdentifier(target))
+                pendingRequests[requestID] = (continuation, timeout, ObjectIdentifier(target), method)
                 do {
                     // Encrypt + queue is one ordered step on the plane's single writer;
                     // never hand frames to the socket from separate tasks.

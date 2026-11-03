@@ -728,6 +728,10 @@ final class TerminalInputSender {
     private var queue: [Input] = []
     private var draining = false
     private(set) var revision = 0
+    #if DEBUG
+    /// Payload-free timing stages for a disposable terminal inspection.
+    var inspectionTiming: ((String, Int, Int) -> Void)?
+    #endif
 
     init(sessionKey: String, client: RemoteClient) {
         self.sessionKey = sessionKey
@@ -777,6 +781,9 @@ final class TerminalInputSender {
     private func enqueue(_ input: Input, typed: Bool = true) {
         if typed { revision &+= 1 }
         queue.append(input)
+        #if DEBUG
+        inspectionTiming?("queued", revision, queue.count)
+        #endif
         guard !draining else { return }
         draining = true
         Task { await drain() }
@@ -803,6 +810,10 @@ final class TerminalInputSender {
                 queue.insert(next, at: 0)
                 break
             }
+            #if DEBUG
+            let inputRevision = revision
+            inspectionTiming?("dispatch", inputRevision, queue.count)
+            #endif
             do {
                 switch next {
                 case .bytes(let data, let passive):
@@ -819,6 +830,9 @@ final class TerminalInputSender {
                         ]
                     )
                 }
+                #if DEBUG
+                inspectionTiming?("ack", inputRevision, queue.count)
+                #endif
                 retriedHead = false
             } catch is CancellationError {
                 queue.insert(next, at: 0)

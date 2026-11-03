@@ -30,6 +30,7 @@ enum MacPaneHeaderInspection {
         var report: [[String: Any]] = []
         report.append(contentsOf: capture(workspace: workspace, step: "entry"))
         report.append(contentsOf: await inspectRestart(workspace: workspace))
+        report.append(contentsOf: await inspectDormantClick(workspace: workspace))
         if workspace.paneKeys.count > 1 {
             let other = workspace.paneKeys.first { $0 != workspace.focusedKey }
             if let other {
@@ -86,6 +87,47 @@ enum MacPaneHeaderInspection {
         try? await Task.sleep(for: .seconds(3))
         results.append(["step": "restart-cleared", "phase": String(describing: restarts.phase(for: key))])
         results.append(contentsOf: capture(workspace: workspace, step: "cleared"))
+        return results
+    }
+
+    /// `-CorralInspectDormantClick` (owner report 2026-11-02): switch the lone
+    /// pane to another session through the sidebar's `open`, so the first
+    /// stays a retained dormant host in the same slot, then resolve clicks at
+    /// the visible pane's centre through production click-to-focus. Focus,
+    /// sidebar selection and the header must stay on the shown session.
+    /// `CORRAL_INSPECTION_SWITCH_KEY` picks the second session;
+    /// `CORRAL_INSPECTION_HOLD_SECONDS` holds the state for a window capture.
+    private static func inspectDormantClick(workspace: MacWorkspace) async -> [[String: Any]] {
+        let environment = ProcessInfo.processInfo.environment
+        guard ProcessInfo.processInfo.arguments.contains("-CorralInspectDormantClick"),
+              let feed = workspace.feed, workspace.paneKeys.count == 1,
+              let first = workspace.paneKeys.first else { return [] }
+        let sessions = feed.listStore.windowSessions
+        guard let second = environment["CORRAL_INSPECTION_SWITCH_KEY"]
+                ?? sessions.first(where: { $0.key != first && workspace.layout.group(containing: $0.key) == nil })?.key
+        else { return [] }
+        workspace.open(second, sessions: sessions, takeKeys: false)
+        try? await Task.sleep(for: .seconds(3))
+        let dormantFrames = workspace.paneFrames.keys.filter { !workspace.isShownPane($0) }.sorted()
+        var resolved: [String] = []
+        if let frame = workspace.paneFrames[second] {
+            let point = CGPoint(x: frame.midX, y: frame.midY)
+            for _ in 0..<40 {
+                guard let key = workspace.paneKey(atWindowPoint: point) else { continue }
+                workspace.focus(key)
+                if !resolved.contains(key) { resolved.append(key) }
+            }
+        }
+        try? await Task.sleep(for: .milliseconds(600))
+        var results = capture(workspace: workspace, step: "dormant-click")
+        results.append(["step": "dormant-click", "dormant": first, "shown": workspace.paneKeys,
+                        "focused": workspace.focusedKey ?? "", "resolved": resolved,
+                        "dormantFrames": dormantFrames,
+                        "headerFocused": workspace.showsFocus(second)])
+        if let hold = environment["CORRAL_INSPECTION_HOLD_SECONDS"].flatMap(Double.init) {
+            try? await Task.sleep(for: .seconds(hold))
+        }
+        workspace.open(first, sessions: feed.listStore.windowSessions, takeKeys: false)
         return results
     }
 

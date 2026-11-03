@@ -21,12 +21,8 @@ struct SessionListItem<Row: View>: View {
             }
             .listRowInsets(SessionListLayout.rowInsets)
             .swipeActions(edge: .leading) {
-                let isPinned = session.pinned == true || session.group?.pinned == true
-                Button(action: onPin) {
-                    Label(isPinned ? "sessions.action.unpin" : "sessions.action.pin",
-                          systemImage: isPinned ? "pin.slash" : "pin")
-                }
-                .tint(Palette.accent)
+                pinButton
+                    .tint(Palette.accent)
             }
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                 // This action asks; only the dialog's destructive action deletes.
@@ -39,6 +35,26 @@ struct SessionListItem<Row: View>: View {
                 }
                 .tint(.gray)
             }
+            // Secondary click on iPad (and long press on iPhone): the swipe
+            // actions as a menu, as in the Mac session menu (owner request 2026-11-01).
+            .contextMenu {
+                pinButton
+                Button(action: onStop) {
+                    Label("sessions.action.stop", systemImage: "stop.fill")
+                }
+                Divider()
+                Button(role: .destructive) { confirmation.wrappedValue = true } label: {
+                    Label("sessions.action.delete", systemImage: "trash")
+                }
+            }
+        }
+    }
+
+    private var pinButton: some View {
+        let isPinned = session.pinned == true || session.group?.pinned == true
+        return Button(action: onPin) {
+            Label(isPinned ? "sessions.action.unpin" : "sessions.action.pin",
+                  systemImage: isPinned ? "pin.slash" : "pin")
         }
     }
 }

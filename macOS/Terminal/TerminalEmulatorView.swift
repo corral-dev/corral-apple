@@ -237,12 +237,17 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
 
     #if DEBUG
     static weak var inspectionLatest: TerminalHostView?
+    var inspectionFeedTiming: ((TimeInterval, TimeInterval, Data) -> Void)?
     private var lastInspectedFit: TerminalGrid?
     var inspectionPalette: String { palette == .light ? "light" : "dark" }
     private(set) var inspectionFirstReset: Date?
     var inspectionHasKeyboardFocus: Bool { window?.firstResponder === terminal }
     var inspectionFontSize: CGFloat { fontSize }
     var inspectionUsesMetal: Bool { terminal.isUsingMetalRenderer }
+    var inspectionSuspendsRenderingWhenNotVisible: Bool {
+        get { terminal.suspendsRenderingWhenNotVisible }
+        set { terminal.suspendsRenderingWhenNotVisible = newValue }
+    }
     var inspectionBottomVisible: Bool { terminal.frame.maxY <= bounds.maxY - inset + 1 }
     var inspectionVisibleText: [String] {
         terminal.visibleRowsText(0..<terminal.terminalDimensions.rows)
@@ -546,7 +551,13 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
     }
 
     func terminalFeed(_ data: Data) {
+        #if DEBUG
+        let started = ProcessInfo.processInfo.systemUptime
+        #endif
         terminal.feedFromHost(data)
+        #if DEBUG
+        inspectionFeedTiming?(started, ProcessInfo.processInfo.systemUptime, data)
+        #endif
     }
 
     // MARK: - TerminalViewDelegate

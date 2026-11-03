@@ -20,7 +20,7 @@ final class SessionCreationCoordinatorTests: XCTestCase {
         try? FileManager.default.removeItem(at: scratch)
     }
 
-    func testLostReplyReusesIdentityAndRecoversResult() async throws {
+    func testLostReplyDoesNotBlockANewCreationIntent() async throws {
         var ids: [String] = []
         do {
             _ = try await SessionCreationCoordinator.create(
@@ -38,13 +38,13 @@ final class SessionCreationCoordinatorTests: XCTestCase {
             return ["status": "delivered", "result": ["session": ["key": "codex:a", "id": "a", "runtime": "codex"]]]
         }
         XCTAssertEqual(ids.count, 2)
-        XCTAssertEqual(ids[0], ids[1])
+        XCTAssertNotEqual(ids[0], ids[1])
         XCTAssertEqual(session.key, "codex:a")
         let next = try PendingSessionCreationStore.begin(hostID: "host", runtimeID: "codex", cwd: "/fixture")
         XCTAssertNotEqual(ids[0], next.commandID)
     }
 
-    func testUnknownCreationKeepsIdentityForExplicitReview() async throws {
+    func testUnknownCreationIsRetainedWithoutBlockingANewIntent() async throws {
         do {
             _ = try await SessionCreationCoordinator.create(
                 hostID: "host", runtimeID: "claude", cwd: "/fixture", supportsReceipts: true
@@ -52,21 +52,37 @@ final class SessionCreationCoordinatorTests: XCTestCase {
             XCTFail("Unknown is not success")
         } catch let SessionCreationError.unconfirmed(record, detail) {
             XCTAssertEqual(detail, "Check the session list")
-            XCTAssertEqual(record, try PendingSessionCreationStore.begin(hostID: "host", runtimeID: "claude", cwd: "/fixture"))
+            let next = try PendingSessionCreationStore.begin(hostID: "host", runtimeID: "claude", cwd: "/fixture")
+            XCTAssertNotEqual(record.commandID, next.commandID)
+            let records = try JSONDecoder().decode(
+                [PendingSessionCreation].self,
+                from: Data(contentsOf: scratch.appendingPathComponent("creations.json"))
+            )
+            XCTAssertEqual(records, [record, next], "Uncertain outcomes remain durable, not a create gate")
         }
     }
 
-    func testRejectedCreationAllowsFreshIntent() async throws {
-        let original = try PendingSessionCreationStore.begin(hostID: "host", runtimeID: "codex", cwd: "")
+    func testRejectedCreationRemovesOnlyItsOwnRecord() async throws {
+        let older = try PendingSessionCreationStore.begin(hostID: "host", runtimeID: "codex", cwd: "")
+        var rejectedID: String?
         do {
             _ = try await SessionCreationCoordinator.create(
                 hostID: "host", runtimeID: "codex", cwd: "", supportsReceipts: true
-            ) { _, _ in ["status": "rejected", "detail": "Assistant unavailable"] }
+            ) { _, params in
+                rejectedID = params["command_id"] as? String
+                return ["status": "rejected", "detail": "Assistant unavailable"]
+            }
             XCTFail("Rejected must show the cause")
         } catch CommandDeliveryError.rejected(let reason) {
             XCTAssertEqual(reason, "Assistant unavailable")
         }
-        XCTAssertNotEqual(original.commandID, try PendingSessionCreationStore.begin(hostID: "host", runtimeID: "codex", cwd: "").commandID)
+        XCTAssertNotNil(rejectedID)
+        XCTAssertNotEqual(older.commandID, rejectedID)
+        let remaining = try JSONDecoder().decode(
+            [PendingSessionCreation].self,
+            from: Data(contentsOf: scratch.appendingPathComponent("creations.json"))
+        )
+        XCTAssertEqual(remaining, [older])
     }
 
     func testLegacyHostDoesNotReceiveCreationID() async throws {
@@ -192,17 +208,48 @@ final class SessionCreationCoordinatorTests: XCTestCase {
         await store.stop()
     }
 
-    func testExpiredCreationOnlyQueriesStatus() async throws {
+    func testExpiredCreationDoesNotHijackNewSessionOrAddPane() async throws {
         try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
-        let old = PendingSessionCreation(commandID: "old", hostID: "host", runtimeID: "codex", cwd: "", createdAt: Date(timeIntervalSince1970: 1))
-        try JSONEncoder().encode([old]).write(to: scratch.appendingPathComponent("creations.json"))
-        do {
-            _ = try await SessionCreationCoordinator.create(hostID: "host", runtimeID: "codex", cwd: "", supportsReceipts: true) { method, _ in
-                XCTAssertEqual(method, WireProtocol.mCommandStatus)
-                return ["status": "unseen"]
+        let old = PendingSessionCreation(commandID: "old", hostID: "host", runtimeID: "pi", cwd: "/fixture", createdAt: Date(timeIntervalSince1970: 1))
+        let url = scratch.appendingPathComponent("creations.json")
+        try JSONEncoder().encode([old]).write(to: url)
+        var ids: [String] = []
+        // The shared coordinator serves New Session, Quick Start and Mac Add Pane.
+        for index in 0..<3 {
+            let session = try await SessionCreationCoordinator.create(
+                hostID: "host", runtimeID: "pi", cwd: "/fixture", supportsReceipts: true
+            ) { method, params in
+                XCTAssertEqual(method, WireProtocol.mSessionNew)
+                let id = try XCTUnwrap(params["command_id"] as? String)
+                XCTAssertNotEqual(id, old.commandID)
+                ids.append(id)
+                return ["session": ["key": "pi:new-\(index)", "id": "new-\(index)", "runtime": "pi"]]
             }
-            XCTFail("An expired receipt must not become a new launch")
-        } catch let SessionCreationError.unconfirmed(record, _) { XCTAssertEqual(record.commandID, "old") }
+            XCTAssertEqual(session.key, "pi:new-\(index)")
+        }
+        XCTAssertEqual(Set(ids).count, 3)
+        let remaining = try JSONDecoder().decode([PendingSessionCreation].self, from: Data(contentsOf: url))
+        XCTAssertEqual(remaining, [old], "A new intent must not replay or erase an uncertain older one")
+    }
+
+    func testAcceptedCreationPollsOnlyItsOwnIdentity() async throws {
+        let old = try PendingSessionCreationStore.begin(hostID: "host", runtimeID: "pi", cwd: "/fixture")
+        var id: String?
+        let session = try await SessionCreationCoordinator.create(
+            hostID: "host", runtimeID: "pi", cwd: "/fixture", supportsReceipts: true
+        ) { method, params in
+            let commandID = try XCTUnwrap(params["command_id"] as? String)
+            XCTAssertNotEqual(commandID, old.commandID)
+            if method == WireProtocol.mSessionNew {
+                XCTAssertNil(id)
+                id = commandID
+                return ["status": "accepted"]
+            }
+            XCTAssertEqual(method, WireProtocol.mCommandStatus)
+            XCTAssertEqual(commandID, id)
+            return ["status": "delivered", "result": ["session": ["key": "pi:new", "id": "new", "runtime": "pi"]]]
+        }
+        XCTAssertEqual(session.key, "pi:new")
     }
 
     func testHostAndProjectIsolationAndNegotiation() throws {

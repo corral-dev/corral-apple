@@ -1,6 +1,54 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "search.hits %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Matches: %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 处命中"
+          }
+        }
+      }
+    },
+    "search.more %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "More matching sessions: %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "还有 %@ 个会话命中"
+          }
+        }
+      }
+    },
+    "sessions.filter.project.selected %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已选 %@ 项"
+          }
+        }
+      }
+    },
     "chat.diagram.title": {
       "localizations": {
         "en": { "stringUnit": { "state": "translated", "value": "Diagram" } },
@@ -3542,15 +3590,39 @@
       "extractionState": "manual",
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pairing gives this phone the same control as sitting at that computer. Only scan codes from your own machines."
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Pairing gives this iPad the same control as sitting at that computer. Only scan codes from your own machines."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Pairing gives this phone the same control as sitting at that computer. Only scan codes from your own machines."
+                }
+              }
+            }
           }
         },
         "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "配对后，这部手机拥有与坐在那台电脑前相同的控制权。只扫你自己电脑上的码。"
+          "variations": {
+            "device": {
+              "ipad": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "配对后，这台 iPad 拥有与坐在那台电脑前相同的控制权。只扫你自己电脑上的码。"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "配对后，这部手机拥有与坐在那台电脑前相同的控制权。只扫你自己电脑上的码。"
+                }
+              }
+            }
           }
         }
       }
@@ -4818,6 +4890,23 @@
         }
       }
     },
+    "sessions.filter.active": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Active"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "活跃"
+          }
+        }
+      }
+    },
     "sessions.filter.attention": {
       "extractionState": "manual",
       "localizations": {
@@ -5617,53 +5706,53 @@
         }
       }
     },
-    "settings.notifications.sound.chime": {
+    "settings.notifications.sound.electronic_chime": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Chime"
+            "value": "Electronic Chime"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "清铃"
+            "value": "电子钟琴"
           }
         }
       }
     },
-    "settings.notifications.sound.marimba": {
+    "settings.notifications.sound.wooden_duet": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Marimba"
+            "value": "Wooden Duet"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "木琴"
+            "value": "木质双音"
           }
         }
       }
     },
-    "settings.notifications.sound.tap": {
+    "settings.notifications.sound.water_drop": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Soft Tap"
+            "value": "Water Drop"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "轻叩"
+            "value": "清透水滴"
           }
         }
       }

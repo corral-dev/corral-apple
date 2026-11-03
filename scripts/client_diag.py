@@ -168,7 +168,7 @@ def main():
                 print(f"{client['clientRun']}  {state.get('connection')}  {state.get('transport') or '-'}  data={state.get('dataAttached')}  {freshness}  age={client['ageSeconds']}s")
         elif "events" in data:
             for event in data["events"]:
-                print(f"{event.get('sequence')}  {event.get('event')}  {event.get('plane', '-')}  {event.get('durationMs', '-')} ms")
+                print(f"{event.get('sequence')}  {event.get('event')}  {event.get('plane', '-')}  {event.get('method', '-')}  {event.get('stage', '-')}  {event.get('durationMs', '-')} ms")
         elif "tools" in data:
             for name, path in data["tools"].items():
                 print(f"{name}: {path or 'missing'}")

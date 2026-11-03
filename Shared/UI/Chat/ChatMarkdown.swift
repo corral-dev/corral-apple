@@ -211,7 +211,7 @@ nonisolated enum ChatMarkdown: Sendable {
                 // Both native table renderers consume the same cell runs.
                 // Keep one paragraph per cell, never pipe-separated prose.
                 if intentRange.lowerBound != text.startIndex {
-                    text.characters.insert(contentsOf: "\n", at: intentRange.lowerBound)
+                    text.insert(AttributedString("\n"), at: intentRange.lowerBound)
                 }
                 previousListID = 0
                 continue
@@ -274,7 +274,8 @@ nonisolated enum ChatMarkdown: Sendable {
             }
 
             if intentRange.lowerBound != text.startIndex {
-                text.characters.insert(contentsOf: "\n", at: intentRange.lowerBound)
+                // Separators must not inherit adjacent image/link attributes.
+                text.insert(AttributedString("\n"), at: intentRange.lowerBound)
             }
             previousListID = listID
         }

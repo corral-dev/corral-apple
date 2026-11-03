@@ -1,73 +1,36 @@
 #if os(iOS)
 import SwiftUI
 
+/// The machines page shown only while no machine is paired: the pairing
+/// empty state. With a paired machine the adaptive split opens straight on
+/// its sessions and machines switch from the title menu (owner decision 2026-11-01).
 struct HostListView: View {
     @Environment(AppModel.self) private var appModel
     @State private var showPairing = false
-    #if DEBUG
-    @State private var showNotificationSettings = false
-    #endif
 
     var body: some View {
-        Group {
-            if appModel.hosts.isEmpty {
-                emptyState
-            } else {
-                List(appModel.hosts) { host in
-                    NavigationLink(value: host) {
-                        HostRow(host: host)
+        emptyState
+            .navigationTitle("nav.hosts")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showPairing = true
+                    } label: {
+                        Label("hosts.pair", systemImage: "qrcode.viewfinder")
                     }
                 }
-                .listStyle(.insetGrouped)
-                .navigationDestination(for: HostInfo.self) { host in
-                    SessionListView(host: host)
+            }
+            .sheet(isPresented: $showPairing) {
+                PairingScannerView()
+            }
+            .onAppear {
+                appModel.refreshHosts()
+                #if DEBUG
+                if ProcessInfo.processInfo.arguments.contains("-CorralRenderEmptyHosts") {
+                    renderEmptyStateForInspection()
                 }
+                #endif
             }
-        }
-        .navigationTitle("nav.hosts")
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    showPairing = true
-                } label: {
-                    Label("hosts.pair", systemImage: "qrcode.viewfinder")
-                }
-            }
-        }
-        .sheet(isPresented: $showPairing) {
-            PairingScannerView()
-        }
-        #if DEBUG
-        .sheet(isPresented: $showNotificationSettings) {
-            if let host = appModel.hosts.first {
-                NavigationStack {
-                    HostSettingsView(host: host)
-                        .toolbar { ToolbarItem(placement: .confirmationAction) {
-                            Button("action.done") { showNotificationSettings = false }
-                        } }
-                }
-                .task { if !appModel.isConnected(to: host) { await appModel.connect(to: host) } }
-            }
-        }
-        #endif
-        .onAppear {
-            appModel.refreshHosts()
-            #if DEBUG
-            if ProcessInfo.processInfo.arguments.contains("-CorralInspectNotifications") {
-                showNotificationSettings = true
-            }
-            if ProcessInfo.processInfo.arguments.contains("-CorralRenderEmptyHosts") {
-                renderEmptyStateForInspection()
-            }
-            #endif
-            if ProcessInfo.processInfo.arguments.contains("-CorralInspectPairing") {
-                showPairing = true
-            }
-        }
-        .task {
-            guard !appModel.hosts.isEmpty else { return }
-            await appModel.connectSelectedHost()
-        }
     }
 
     #if DEBUG
@@ -108,29 +71,6 @@ struct HostListView: View {
                 .tint(Palette.accent)
         }
         .background(Color(.systemGroupedBackground))
-    }
-}
-
-private struct HostRow: View {
-    let host: HostInfo
-
-    var body: some View {
-        HStack(spacing: Space.md) {
-            MachineIconTile(size: 44)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(host.displayName)
-                    .font(.body.weight(.semibold))
-                    .lineLimit(1)
-                Text(host.hostID)
-                    .font(.footnote.monospaced())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
-        }
-        .padding(.vertical, Space.xs)
-        .accessibilityElement(children: .combine)
     }
 }
 #endif

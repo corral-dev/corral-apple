@@ -202,6 +202,8 @@ struct MacConversationTable: NSViewRepresentable {
             var value: MacConversationRowValue
             var mediaRevision: Int = 0
             var isFirst: Bool
+            var hasPrecedingTextBlock: Bool
+            var hasFollowingTextBlock: Bool
             var render: MacConversationRenderKey
         }
 
@@ -351,8 +353,12 @@ struct MacConversationTable: NSViewRepresentable {
             heights.prune(keeping: indexByID)
             if old.map(\.id) == newRows.map(\.id) {
                 var changed = IndexSet()
-                for index in newRows.indices where renderChanged || newRows[index] != old[index] {
-                    changed.insert(index)
+                for index in newRows.indices {
+                    let row = newRows[index]
+                    if renderChanged || row != old[index]
+                        || heights.measured[row.id]?.key.content != contentKey(for: row, isFirst: index == 0) {
+                        changed.insert(index)
+                    }
                 }
                 // The table also keeps prepared rows outside the viewport;
                 // every realized row must show its current content.
@@ -392,14 +398,13 @@ struct MacConversationTable: NSViewRepresentable {
             guard rows.indices.contains(row) else { return 1 }
             let item = rows[row]
             let width = rowWidth
-            guard canMeasure, let renderKey else {
+            guard canMeasure, let contentKey = contentKey(for: item, isFirst: row == 0) else {
                 // Hidden or not yet sized: keep the last known height and
                 // measure every row before this table is next laid out.
                 needsRemeasure = true
                 return heights.measured[item.id]?.height ?? 1
             }
-            let key = HeightKey(content: ContentKey(value: item.value, mediaRevision: item.mediaRevision, isFirst: row == 0, render: renderKey),
-                                width: width)
+            let key = HeightKey(content: contentKey, width: width)
             if let cached = heights.measured[item.id], cached.key == key { return cached.height }
             let height = measure(item, isFirst: row == 0, width: width)
             heights.measured[item.id] = Measured(key: key, height: height)
@@ -495,9 +500,24 @@ struct MacConversationTable: NSViewRepresentable {
 
         func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { false }
 
+        private func contentKey(for row: MacConversationRow, isFirst: Bool) -> ContentKey? {
+            guard let renderKey else { return nil }
+            let document = environment.macConversationTextDocument
+            let textID: Int?
+            if case .timeline(.message(let message), _, _) = row.value {
+                textID = message.seq
+            } else {
+                textID = nil
+            }
+            return ContentKey(value: row.value, mediaRevision: row.mediaRevision, isFirst: isFirst,
+                              hasPrecedingTextBlock: textID.map { document?.hasPrecedingBlock($0) == true } ?? false,
+                              hasFollowingTextBlock: textID.map { document?.hasFollowingBlock($0) == true } ?? false,
+                              render: renderKey)
+        }
+
         private func content(for row: MacConversationRow, isFirst: Bool, measuring: Bool) -> AnyView {
             let base = rowContent?(row) ?? AnyView(EmptyView())
-            let contentKey = renderKey.map { ContentKey(value: row.value, mediaRevision: row.mediaRevision, isFirst: isFirst, render: $0) }
+            let contentKey = contentKey(for: row, isFirst: isFirst)
             let content = base
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .chatReadableColumn()

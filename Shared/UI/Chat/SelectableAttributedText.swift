@@ -515,6 +515,7 @@ private struct MacSelectableTextView: NSViewRepresentable {
     /// width), so both are cached until the text or its styling changes.
     final class Coordinator {
         var appliedText: NSAttributedString?
+        var hasPrecedingBlock = false
         var hasFollowingBlock = false
         var source: Source?
         var converted: NSAttributedString?
@@ -637,8 +638,10 @@ private struct MacSelectableTextView: NSViewRepresentable {
         guard let width = proposal.width, width.isFinite, width > 0 else { return nil }
         let coordinator = context.coordinator
         let ns = converted(coordinator)
+        let hasPrecedingBlock = selectionID.map { document?.hasPrecedingBlock($0) == true } ?? false
         let hasFollowingBlock = selectionID.map { document?.hasFollowingBlock($0) == true } ?? false
-        if coordinator.hasFollowingBlock != hasFollowingBlock {
+        if coordinator.hasPrecedingBlock != hasPrecedingBlock || coordinator.hasFollowingBlock != hasFollowingBlock {
+            coordinator.hasPrecedingBlock = hasPrecedingBlock
             coordinator.hasFollowingBlock = hasFollowingBlock
             coordinator.sizes.removeAll()
         }
@@ -647,7 +650,8 @@ private struct MacSelectableTextView: NSViewRepresentable {
             natural = cached
         } else {
             let measurement = selectionID.flatMap { document?.measurement(for: $0) } ?? coordinator.measurement
-            natural = measurement.size(for: ns, font: font, width: width, hasFollowingBlock: hasFollowingBlock)
+            natural = measurement.size(for: ns, font: font, width: width,
+                                       hasPrecedingBlock: hasPrecedingBlock, hasFollowingBlock: hasFollowingBlock)
             if coordinator.sizes.count >= 24 { coordinator.sizes.removeAll() }
             coordinator.sizes[width] = natural
         }

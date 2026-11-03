@@ -200,18 +200,16 @@ struct ToolActivityView: View, Equatable {
                 .inlineNavigationTitle()
                 .toolbar {
                     ToolbarItem(placement: .corralTrailing) {
-                        Button {
-                            showDetail = false
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .symbolRenderingMode(.hierarchical)
-                                .interfaceFont(.title2)
-                                .foregroundStyle(.secondary)
-                                .interfaceFrame(width: TouchTarget.minimum, height: TouchTarget.minimum)
-                                .contentShape(Rectangle())
+                        if #available(iOS 26.0, macOS 26.0, *) {
+                            Button(role: .close) {
+                                showDetail = false
+                            }
+                        } else {
+                            Button("action.dismiss", systemImage: "xmark") {
+                                showDetail = false
+                            }
+                            .labelStyle(.iconOnly)
                         }
-                        .buttonStyle(PressableButtonStyle())
-                        .accessibilityLabel(Text("action.dismiss"))
                     }
                 }
                 .task(id: showDetail) {

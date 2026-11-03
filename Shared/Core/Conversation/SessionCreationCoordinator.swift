@@ -10,7 +10,7 @@ enum SessionCreationError: LocalizedError {
     }
 }
 
-/// One durable operation across reconnect/retry. A transport error never mints a new ID.
+/// Each call represents a new creation intent; status polling keeps its durable ID.
 enum SessionCreationCoordinator {
     static func create(
         hostID: String, runtimeID: String, cwd: String, supportsReceipts: Bool,
@@ -21,13 +21,7 @@ enum SessionCreationCoordinator {
         let record = supportsReceipts
             ? try PendingSessionCreationStore.begin(hostID: hostID, runtimeID: runtimeID, cwd: cwd) : nil
         if let record { params["command_id"] = record.commandID }
-        var payload: Any
-        if let record, Date().timeIntervalSince(record.createdAt) >= 7 * 24 * 60 * 60 {
-            // Receipt retention expiry is not evidence that creation never ran.
-            payload = try await call(WireProtocol.mCommandStatus, ["command_id": record.commandID])
-        } else {
-            payload = try await call(WireProtocol.mSessionNew, params)
-        }
+        var payload = try await call(WireProtocol.mSessionNew, params)
         let deadline = Date().addingTimeInterval(35)
         while true {
             guard let dict = payload as? [String: Any] else { throw RemoteClient.ConnectionError.invalidResponse }

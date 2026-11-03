@@ -6,6 +6,122 @@ import XCTest
 
 @MainActor
 final class MessageBubbleLayoutTests: XCTestCase {
+    func testInjectedDetailInitializesImagesAndRestoresDraft() async throws {
+        try await withInjectedDetail { host, model, session, store in
+            let images = Self.imageAttachments(in: host.view)
+            XCTAssertEqual(images.count, 5, "Mount the detail, not ChatView with a manually injected loader")
+            XCTAssertTrue(images.allSatisfy { !$0.isPlaceholder }, "Cached previews must become real attachments")
+            let composer = try XCTUnwrap(Self.descendants(of: host.view).compactMap { $0 as? UITextView }.first { $0.isEditable })
+            XCTAssertEqual(composer.text, "Saved detail draft")
+            composer.text = "Edited detail draft"
+            composer.delegate?.textViewDidChange?(composer)
+            try await Task.sleep(for: .milliseconds(50))
+            host.rootView = Self.detailRoot(model: model, session: session, store: store)
+            host.view.layoutIfNeeded()
+            try await Task.sleep(for: .milliseconds(100))
+            XCTAssertEqual(composer.text, "Edited detail draft", "Repeated preparation must not restore over current input")
+            XCTAssertEqual(Self.imageAttachments(in: host.view).count, 5)
+            XCTAssertEqual(store.messages.count, 1, "Preparing local collaborators must not replace or restart the injected store")
+        }
+    }
+
+    func testInjectedDetailReplacementDoesNotRetainPreviousImagesOrDraft() async throws {
+        try await withInjectedDetail { host, model, session, _ in
+            let replacementSession = SessionSummary(key: "claude:replacement-\(UUID().uuidString)", runtime: "claude", title: "Replacement")
+            let replacement = ConversationStore(sessionKey: replacementSession.key, client: nil, live: false)
+            try Self.applyDetailMessage("Replacement text without images", to: replacement)
+            let hostID = try XCTUnwrap(model.selectedHost?.hostID)
+            ComposerDraftStore.save(hostID: hostID, sessionKey: replacementSession.key, text: "Replacement draft")
+            host.rootView = Self.detailRoot(model: model, session: replacementSession, store: replacement)
+            // Native navigation retains outgoing views during replacement.
+            // Wait for the new content, not an assumed animation duration.
+            let deadline = Date().addingTimeInterval(3)
+            repeat {
+                host.view.setNeedsLayout()
+                host.view.layoutIfNeeded()
+                let composers = Self.descendants(of: host.view).compactMap { $0 as? UITextView }.filter { $0.isEditable }
+                if Self.imageAttachments(in: host.view).isEmpty, composers.contains(where: { $0.text == "Replacement draft" }) { break }
+                try await Task.sleep(for: .milliseconds(20))
+            } while Date() < deadline
+            XCTAssertTrue(Self.imageAttachments(in: host.view).isEmpty)
+            let composer = try XCTUnwrap(Self.descendants(of: host.view).compactMap { $0 as? UITextView }.first { $0.isEditable })
+            XCTAssertEqual(composer.text, "Replacement draft")
+            XCTAssertNotEqual(replacementSession.key, session.key)
+            XCTAssertEqual(replacement.messages.first?.text, "Replacement text without images")
+        }
+    }
+
+    /// Seed only the shared bitmap cache. The mounted production detail must
+    /// create its own loader; injecting one into the view would hide this bug.
+    private func withInjectedDetail(
+        _ verify: (UIHostingController<AnyView>, AppModel, SessionSummary, ConversationStore) async throws -> Void
+    ) async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let savedHostDirectory = HostStore.directoryOverride
+        let savedDraftDirectory = ComposerDraftStore.directoryOverride
+        let savedHosts = HostStore.shared.hosts
+        HostStore.directoryOverride = folder
+        ComposerDraftStore.directoryOverride = folder
+        let fixtureHost = HostInfo(hostID: "detail-fixture-\(UUID().uuidString)", name: "Fixture", publicKeyHex: String(repeating: "0", count: 64))
+        HostStore.shared.replaceAllForTesting([fixtureHost])
+        defer {
+            HostStore.shared.replaceAllForTesting(savedHosts)
+            HostStore.directoryOverride = savedHostDirectory
+            ComposerDraftStore.directoryOverride = savedDraftDirectory
+            try? FileManager.default.removeItem(at: folder)
+        }
+        let model = AppModel()
+        let session = SessionSummary(key: "claude:detail-\(UUID().uuidString)", runtime: "claude", title: "Image detail")
+        let store = ConversationStore(sessionKey: session.key, client: nil, live: false)
+        let seed = ChatImageLoader(client: nil, hostID: fixtureHost.hostID, sessionKey: session.key)
+        seed.localPreview = UIGraphicsImageRenderer(size: CGSize(width: 180, height: 100)).image { context in
+            UIColor.systemGreen.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 180, height: 100))
+        }
+        let refs = (1...5).map { "corral-preview://detail-\($0).png" }
+        for ref in refs { _ = await seed.load(seq: 1, ref: ref, tier: seed.inlineTier()) }
+        let text = refs.enumerated().map { "Before \($0.offset)\n\n![Image \($0.offset)](\($0.element))\n\nAfter \($0.offset)" }.joined(separator: "\n\n")
+        try Self.applyDetailMessage(text, to: store)
+        ComposerDraftStore.save(hostID: fixtureHost.hostID, sessionKey: session.key, text: "Saved detail draft")
+        let host = UIHostingController(rootView: Self.detailRoot(model: model, session: session, store: store))
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = host
+        window.isHidden = false
+        defer { window.isHidden = true; window.rootViewController = nil }
+        let deadline = Date().addingTimeInterval(3)
+        repeat {
+            host.view.layoutIfNeeded()
+            if Self.imageAttachments(in: host.view).count == 5 { break }
+            try await Task.sleep(for: .milliseconds(20))
+        } while Date() < deadline
+        try await verify(host, model, session, store)
+    }
+
+    private static func detailRoot(model: AppModel, session: SessionSummary, store: ConversationStore) -> AnyView {
+        AnyView(SessionDetailView(session: session, injectedStore: store)
+            .id(ObjectIdentifier(store))
+            .environment(model))
+    }
+
+    private static func applyDetailMessage(_ text: String, to store: ConversationStore) throws {
+        let messages = [RichMessage(seq: 1, role: "assistant", text: text)]
+        let list = try JSONSerialization.jsonObject(with: JSONEncoder().encode(messages))
+        let data = try JSONSerialization.data(withJSONObject: ["messages": list, "oldest_seq": 1, "newest_seq": 1])
+        store.applySnapshot(try JSONDecoder().decode(SessionMessagesResponse.self, from: data))
+    }
+
+    private static func imageAttachments(in view: UIView) -> [ChatImageAttachment] {
+        descendants(of: view).compactMap { $0 as? UITextView }.flatMap { textView in
+            var images: [ChatImageAttachment] = []
+            let text = textView.attributedText ?? NSAttributedString()
+            text.enumerateAttribute(.attachment, in: NSRange(location: 0, length: text.length)) { value, _, _ in
+                if let image = value as? ChatImageAttachment { images.append(image) }
+            }
+            return images
+        }
+    }
+
     func testCappedMediaTextKeepsItsOffsetAcrossUnchangedRefreshes() async throws {
         let loader = ChatImageLoader(client: nil, hostID: "scroll-fixture", sessionKey: "fixture")
         loader.localPreview = UIGraphicsImageRenderer(size: CGSize(width: 600, height: 400)).image { context in

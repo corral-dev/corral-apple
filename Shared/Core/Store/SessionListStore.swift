@@ -57,6 +57,16 @@ final class SessionListStore {
     /// Explicit visits outlive replacement host windows; search previews do not.
     private var revealedKeys: [String] = []
     static let maxRevealedSessions = 100
+    #if DEBUG
+    /// Warm-switch diagnostics: how often a full rebuild produced an identical
+    /// section list and skipped the publish.
+    static var sectionRebuilds = 0
+    static var sectionSkips = 0
+    static func resetSectionCounters() {
+        sectionRebuilds = 0
+        sectionSkips = 0
+    }
+    #endif
     /// Provisional → canonical redirects so an open detail keeps resolving after migrate.
     private var aliasByKey: [String: String] = [:]
     private var revisionByKey: [String: UInt64] = [:]
@@ -540,7 +550,19 @@ final class SessionListStore {
         if !today.isEmpty { built.append(.today(today)) }
         if !yesterday.isEmpty { built.append(.yesterday(yesterday)) }
         if !earlier.isEmpty { built.append(.earlier(earlier)) }
-        sections = built
+        // Observation notifies on equal writes: an unchanged rebuild must not
+        // publish a new sections value and re-drive every list subscriber.
+        let sectionsChanged = built != sections
+        if sectionsChanged {
+            sections = built
+        }
+        #if DEBUG
+        if sectionsChanged {
+            SessionListStore.sectionRebuilds &+= 1
+        } else {
+            SessionListStore.sectionSkips &+= 1
+        }
+        #endif
     }
 
     private enum TimeBucket {

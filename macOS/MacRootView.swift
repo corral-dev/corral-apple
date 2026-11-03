@@ -188,6 +188,9 @@ struct MacRootView: View {
             .toolbar { detailToolbar }
         }
         .navigationSplitViewStyle(.balanced)
+        .background(MacMouseNavigation { step in
+            Task { await workspace.navigateHistory(by: step) }
+        })
         .background(MacWindowWidthReader { width in
             windowContentWidth = width
             updateSidebarAutomation(width: width)
@@ -541,6 +544,33 @@ struct MacRootView: View {
         workspace.startLayoutWatch()
         restorePanes(from: current)
         restoringHostID = nil
+        // Launch anchor: cumulative ms since process start. Bounded poll below
+        // resolves the remaining gap to user-perceived ready (control + data).
+        if let ms = LaunchClock.millisSinceLaunch(), let client = appModel.client {
+            client.diagnose(.launchStage, durationMs: ms, stage: "ui")
+            let hostID = host.hostID
+            let clientID = ObjectIdentifier(client)
+            Task { @MainActor [weak appModel] in
+                var firstCheckRecorded = false
+                for _ in 0..<150 {
+                    try? await Task.sleep(for: .milliseconds(200))
+                    guard let appModel, appModel.selectedHost?.hostID == hostID,
+                          let live = appModel.client, ObjectIdentifier(live) == clientID else { return }
+                    if !firstCheckRecorded {
+                        firstCheckRecorded = true
+                        if let pollMs = LaunchClock.millisSinceLaunch() {
+                            live.diagnose(.launchStage, durationMs: pollMs, stage: "pollAlive")
+                        }
+                    }
+                    let state = live.diagnosticState
+                    guard state.connection == "ready", state.dataAttached else { continue }
+                    if let readyMs = LaunchClock.millisSinceLaunch() {
+                        live.diagnose(.launchStage, durationMs: readyMs, stage: "ready")
+                    }
+                    return
+                }
+            }
+        }
         await notifications.resolvePending(feed: current, workspace: workspace)
         #if DEBUG
         MacInspection.apply(feed: current, workspace: workspace)
@@ -582,6 +612,9 @@ struct MacRootView: View {
         }
         if ProcessInfo.processInfo.arguments.contains("-CorralInspectPiRedraw") {
             Task { await MacPiRedrawInspection.run(workspace: workspace, appModel: appModel, feed: current) }
+        }
+        if ProcessInfo.processInfo.arguments.contains("-CorralInspectTerminalTyping") {
+            Task { await MacTerminalTypingInspection.run(workspace: workspace, appModel: appModel, feed: current) }
         }
         if ProcessInfo.processInfo.arguments.contains("-CorralInspectModeSwitch") {
             Task { await MacModeSwitchInspection.run(workspace: workspace, feed: current) }

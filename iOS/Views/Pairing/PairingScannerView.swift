@@ -425,7 +425,17 @@ private final class QRScannerViewController: UIViewController, AVCaptureMetadata
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        previewLayer?.frame = view.bounds
+        guard let previewLayer else { return }
+        previewLayer.frame = view.bounds
+        // 旋转后只改 frame 不够：预览连接的角度必须跟着界面方向走，
+        // 否则画面保持旧方向、角度错乱。用 iOS 17+ 的 videoRotationAngle
+        //（传感器原生横向：竖屏 90°、倒竖 270°、左横 0°、右横 180°）。
+        if let connection = previewLayer.connection,
+           let interfaceOrientation = view.window?.windowScene?.interfaceOrientation,
+           let angle = interfaceOrientation.videoRotationAngle,
+           connection.isVideoRotationAngleSupported(angle) {
+            connection.videoRotationAngle = angle
+        }
     }
 
     func setScanning(_ scanning: Bool) {
@@ -445,6 +455,21 @@ private final class QRScannerViewController: UIViewController, AVCaptureMetadata
         else { return }
         paused = true
         onScan?(value)
+    }
+}
+
+private extension UIInterfaceOrientation {
+    /// 界面方向对应的预览旋转角（顺时针度数）。注意左右横屏与
+    /// UIDeviceOrientation 是镜像的：界面 landscapeLeft 是 Home 在左，
+    /// 手机顺时针转了 90°，画面需转 180° 才正。
+    var videoRotationAngle: CGFloat? {
+        switch self {
+        case .portrait: return 90
+        case .portraitUpsideDown: return 270
+        case .landscapeLeft: return 180
+        case .landscapeRight: return 0
+        default: return nil
+        }
     }
 }
 #endif

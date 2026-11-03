@@ -811,6 +811,40 @@ struct LifecycleProbe {
         check(workspace.paneFocusSerial == initial + 3,
               "passive pane restoration synthesized explicit activation")
         print("PASS pane activation: repeated focus, pane shortcut, composer and passive restoration")
+        shownPaneFocusRegressions()
+    }
+
+    /// Owner report 2026-11-02: one pane showed a HandySwitch session with a
+    /// gray title while the sidebar selected a Subswap session. A retained
+    /// dormant host kept its frame under the visible pane and won the click.
+    @MainActor static func shownPaneFocusRegressions() {
+        let workspace = MacWorkspace()
+        let frame = CGRect(x: 300, y: 0, width: 800, height: 900)
+        workspace.restorePanes(["shown"])
+        for _ in 0..<32 {
+            workspace.paneFrames = ["dormant": frame, "shown": frame]
+            check(workspace.paneKey(atWindowPoint: CGPoint(x: 600, y: 400)) == "shown",
+                  "a click resolved to a dormant pane under the visible one")
+            workspace.paneFrames = ["shown": frame, "dormant": frame]
+            check(workspace.paneKey(atWindowPoint: CGPoint(x: 600, y: 400)) == "shown",
+                  "a click resolved to a dormant pane under the visible one")
+        }
+        workspace.paneFrames = ["dormant": frame]
+        check(workspace.paneKey(atWindowPoint: CGPoint(x: 600, y: 400)) == nil,
+              "a dormant frame alone took a click")
+        let serial = workspace.paneFocusSerial
+        workspace.focus("dormant")
+        workspace.composerDidGainFocus("dormant")
+        check(workspace.focusedKey == "shown" && workspace.paneFocusSerial == serial,
+              "focus moved to a session that is not shown")
+        workspace.focusedKey = nil
+        check(workspace.showsFocus("shown") && !workspace.showsFocus("dormant"),
+              "a lone pane did not draw the focused header")
+        workspace.restorePanes(["shown", "peer"])
+        workspace.focus("peer")
+        check(!workspace.showsFocus("shown") && workspace.showsFocus("peer"),
+              "split panes lost their focus distinction")
+        print("PASS shown-pane focus: dormant frames, hidden focus requests, lone-pane header")
     }
 
     /// Owner report 2026-10-28: a pane kept a promoted provisional key, the

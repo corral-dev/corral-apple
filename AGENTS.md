@@ -2,7 +2,7 @@
 
 iPhone + native Mac session-handoff app: scan-pair with the development machine, browse and reply to sessions, locally-decrypted push. Both ends share the code and resources under `Shared/`. The iPhone session More menu switches between chat and the native agent terminal (see constraint 9); the Mac client ships a terminal view where each pane switches between chat and the agent's native interface.
 
-Product overview and cross-component rules live in the terminal repository: `https://github.com/corral-dev/corral` (SessKit session-semantics ownership, five-runtime allowlist, dormant compatibility). This file keeps Apple-client-only engineering rules.
+Product overview and cross-component rules live in the terminal repository: `https://github.com/corral-dev/corral` (SessKit session-semantics ownership, five-runtime allowlist, dormant compatibility). Generic launch/input/lifecycle and durable execution belong to AgentSessionControl, consumed through explicit Corral host adapters; see the [delegation design](https://github.com/corral-dev/corral/blob/main/docs/design/AGENT_SESSION_DELEGATION_DESIGN.md#reusable-control-extraction-and-acp-owner-approved-2026-10-30). This file keeps Apple-client-only engineering rules.
 
 ## Apple documentation
 
@@ -12,7 +12,7 @@ Read the documents whose described content is relevant before deciding or editin
 - [Release runbook](https://github.com/corral-dev/corral/blob/main/docs/RELEASE_RUNBOOK.md): Maintainer CLI, Mac and iPhone release entry, gates, known issues and recovery; signing and publisher configuration remain private.
 - [Session header design](docs/design/SESSION_HEADER_DESIGN.md): read before completing the adopted conversation-header redesign.
 - [Haptic feedback design](docs/design/HAPTIC_FEEDBACK_DESIGN.md): Implemented user-action and outcome feedback, quiet reading/streaming rules, foreground deduplication, default behavior without settings, evidence-gated arrival/completion cues.
-- [iPad and Mac client adaptation](docs/design/MULTIPLATFORM_CLIENT_DESIGN.md): Product positioning and core selling points of the native Apple client (performance, many agents, developer-first, split panes, chat/terminal switching) and its open-source state.
+- [iPad and Mac client adaptation](docs/design/MULTIPLATFORM_CLIENT_DESIGN.md): Product positioning and core selling points of the native Apple client (performance, many agents, developer-first, split panes, chat/terminal switching), its open-source state, the iPad's Mac-like split layout, keyboard, pointer and drop behavior, and the single adaptive layout shared by iPhone, iPad and the folding iPhone Duo.
 - [Public client builds](docs/PUBLIC_BUILD_GUIDE.md): Public-source history, platform requirements, local signing, installation and verification limits. Read it before changing signing, bundle identifiers, the Keychain group or update configuration.
 - [Privacy](PRIVACY.md): Session authorization, client caches, Keychain, encrypted transport and relay metadata.
 - [Contributing](CONTRIBUTING.md): Client checks and contributor agreement; software licensing, brand policy and third-party notices.

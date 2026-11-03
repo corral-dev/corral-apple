@@ -25,10 +25,12 @@ enum MessageBubbleLayout {
            height > 1 {
             return height
         }
-        if let height = scenes.first?.screen.bounds.height, height > 1 {
+        // The app's window, never the physical screen: a folding iPhone or a
+        // resized window is smaller than its display.
+        if let height = scenes.first?.coordinateSpace.bounds.height, height > 1 {
             return height
         }
-        return UIScreen.main.bounds.height
+        return 800
         #endif
     }
 

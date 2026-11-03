@@ -184,7 +184,7 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
     /// break after each container break gives the next block a real paragraph
     /// start without visible height. See
     /// docs/troubleshooting/2026-10-27-mac-message-first-line-list-indent.md.
-    private static let paragraphStartFont = NSFont.systemFont(ofSize: 0.1)
+    fileprivate static let paragraphStartFont = NSFont.systemFont(ofSize: 0.1)
 
     private final class Block {
         // AppKit ignores explicit container breaks with a near-infinite height.
@@ -521,6 +521,11 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
 
     func text(for id: Int) -> NSAttributedString? { byID[id]?.text }
 
+    func hasPrecedingBlock(_ id: Int) -> Bool {
+        guard let block = byID[id] else { return false }
+        return blocks.first !== block
+    }
+
     func hasFollowingBlock(_ id: Int) -> Bool {
         guard let block = byID[id] else { return false }
         return blocks.last !== block
@@ -610,6 +615,7 @@ final class MacTextMeasurement: NSObject, NSLayoutManagerDelegate {
     private let layout = NSLayoutManager()
     private let container = NSTextContainer(size: NSSize(width: 0, height: MacConversationTextDocument.initialCanvasHeight))
     private var source: NSAttributedString?
+    private var startsWithParagraphBreak = false
     private var endsWithContainerBreak = false
     private var sizes: [CGFloat: CGSize] = [:]
     private var widths: [CGFloat] = []
@@ -623,10 +629,18 @@ final class MacTextMeasurement: NSObject, NSLayoutManagerDelegate {
     }
 
     func size(for text: NSAttributedString, font: NSFont, width: CGFloat,
-              hasFollowingBlock: Bool = false) -> CGSize {
-        if source !== text || endsWithContainerBreak != hasFollowingBlock {
+              hasPrecedingBlock: Bool = false, hasFollowingBlock: Bool = false) -> CGSize {
+        if source !== text || startsWithParagraphBreak != hasPrecedingBlock
+            || endsWithContainerBreak != hasFollowingBlock {
+            startsWithParagraphBreak = hasPrecedingBlock
             endsWithContainerBreak = hasFollowingBlock
-            storage.setAttributedString(text)
+            // Match the live container's paragraph start. TextKit omits a
+            // first paragraph's spacing-before at storage start, but honors
+            // it after this break (bold leads/headings otherwise clip the tail).
+            storage.setAttributedString(hasPrecedingBlock
+                ? NSAttributedString(string: "\n", attributes: [.font: MacConversationTextDocument.paragraphStartFont])
+                : NSAttributedString(string: ""))
+            storage.append(text)
             if hasFollowingBlock {
                 storage.append(NSAttributedString(string: "\n", attributes: [.font: font]))
             }

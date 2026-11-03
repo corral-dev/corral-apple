@@ -70,7 +70,7 @@ struct MacShellPane: View {
                 HStack(alignment: .firstTextBaseline, spacing: 6 * interfaceScale) {
                     Text(verbatim: shell?.name ?? title ?? String(localized: "terminal.panel.title"))
                         .interfaceFont(.callout.weight(.semibold))
-                        .foregroundStyle(isFocused ? .primary : .secondary)
+                        .foregroundStyle(workspace.showsFocus(shellKey) ? .primary : .secondary)
                         .lineLimit(1)
                         .layoutPriority(1)
                     if let shell, shell.busy, !shell.command.isEmpty {

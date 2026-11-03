@@ -55,6 +55,46 @@ final class RemoteClientLifecycleTests: XCTestCase {
         }
     }
 
+    func testSlowRequestCarriesMethod() {
+        let recorder = ClientDiagnostics()
+        recorder.trackPending([7: "session.watch"])
+        recorder.trackPending([:], slowAfterMs: 0)
+        let slow = recorder.events.last
+        XCTAssertEqual(slow?.event, .slowRequest)
+        XCTAssertEqual(slow?.method, "session.watch")
+        XCTAssertEqual(recorder.counters["slowRequest"], 1)
+    }
+
+    func testOldRecordWithoutMethodDecodes() throws {
+        let json = #"{"sequence":1,"timestamp":1.5,"event":"slowRequest","durationMs":1500}"#
+        let record = try JSONDecoder().decode(ClientDiagnosticRecord.self, from: Data(json.utf8))
+        XCTAssertEqual(record.event, .slowRequest)
+        XCTAssertNil(record.method)
+    }
+
+    func testLaunchClockStartsUnmarkedAndIsMonotonic() {
+        XCTAssertNil(LaunchClock.millisSinceLaunch())
+        LaunchClock.markLaunch()
+        let first = try? XCTUnwrap(LaunchClock.millisSinceLaunch())
+        LaunchClock.markLaunch()
+        let second = try? XCTUnwrap(LaunchClock.millisSinceLaunch())
+        XCTAssertNotNil(first)
+        XCTAssertNotNil(second)
+        if let first, let second { XCTAssertGreaterThanOrEqual(second, first) }
+    }
+
+    func testLaunchStageCarriesFixedName() throws {
+        let recorder = ClientDiagnostics()
+        recorder.record(.launchStage, stage: "snapshot", durationMs: 12.5)
+        let staged = try XCTUnwrap(recorder.events.last)
+        XCTAssertEqual(staged.event, .launchStage)
+        XCTAssertEqual(staged.stage, "snapshot")
+        XCTAssertEqual(staged.durationMs, 12.5)
+        let legacy = #"{"sequence":9,"timestamp":2.5,"event":"launchStage","durationMs":3}"#
+        let decoded = try JSONDecoder().decode(ClientDiagnosticRecord.self, from: Data(legacy.utf8))
+        XCTAssertNil(decoded.stage)
+    }
+
     func testDiagnosticRetentionAndResponseCountersAreBounded() {
         let recorder = ClientDiagnostics()
         for _ in 0..<300 { recorder.record(.orphanResponse) }

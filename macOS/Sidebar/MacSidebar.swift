@@ -16,7 +16,7 @@ struct MacSidebar: View {
     @State private var filter = ""
     @State private var sectionExpansion: [String: Bool] = [:]
     @State private var filteredSectionExpansion: [String: Bool] = [:]
-    @State private var attentionOnly = false
+    @State private var quickFilter: SessionQuickFilter = .all
     @State private var runtimeFilter: Set<SessionRuntimeFilter> = []
     @State private var projectFilter: Set<SessionProjectFilter> = []
     @State private var orderBox = OrderBox()
@@ -42,11 +42,10 @@ struct MacSidebar: View {
 
     private var sessions: [SessionSummary] { feed.listStore.windowSessions }
     private var filteredSessions: [SessionSummary] {
-        SessionListFiltering.apply(sessions: sessions, runtimes: runtimeFilter, projects: projectFilter,
-                                   attentionOnly: attentionOnly)
+        quickFilter.apply(sessions: sessions, runtimes: runtimeFilter, projects: projectFilter)
     }
     private var hasActiveScope: Bool {
-        !filter.isEmpty || attentionOnly || !runtimeFilter.isEmpty || !projectFilter.isEmpty
+        !filter.isEmpty || quickFilter != .all || !runtimeFilter.isEmpty || !projectFilter.isEmpty
     }
 
     var body: some View {
@@ -62,7 +61,7 @@ struct MacSidebar: View {
                 #if DEBUG
                   if ProcessInfo.processInfo.arguments.contains("-CorralInspectSearchNavigation") {
                       filter = "__corral_navigation_conflicting_filter__"
-                      attentionOnly = true
+                      quickFilter = .attention
                   }
                   if ProcessInfo.processInfo.arguments.contains("-CorralInspectPaneSelection") {
                       await inspectPaneSelection()
@@ -122,7 +121,7 @@ struct MacSidebar: View {
             .searchable(text: $filter, placement: .sidebar, prompt: Text("mac.sidebar.filter"))
             .onChange(of: feed.host.id) { _, _ in
                 filter = ""
-                attentionOnly = false
+                quickFilter = .all
                 runtimeFilter.removeAll()
                 projectFilter.removeAll()
                 sectionExpansion.removeAll()
@@ -165,8 +164,7 @@ struct MacSidebar: View {
             .safeAreaBar(edge: .top, spacing: 0) {
                 MacSidebarFilters(
                     sessions: sessions,
-                    attentionCount: SessionListFiltering.attentionCount(sessions: sessions),
-                    attentionOnly: $attentionOnly, runtimes: $runtimeFilter, projects: $projectFilter
+                    quickFilter: $quickFilter, runtimes: $runtimeFilter, projects: $projectFilter
                 )
                     .id(feed.host.id)
                     .modifier(MacZoomContent())
@@ -375,8 +373,7 @@ struct MacSidebar: View {
                                       projects: [], attentionOnly: false).isEmpty { runtimeFilter = [] }
         if SessionListFiltering.apply(sessions: [session], runtimes: [],
                                       projects: projectFilter, attentionOnly: false).isEmpty { projectFilter = [] }
-        if SessionListFiltering.apply(sessions: [session], runtimes: [],
-                                      projects: [], attentionOnly: attentionOnly).isEmpty { attentionOnly = false }
+        if quickFilter.apply(sessions: [session]).isEmpty { quickFilter = .all }
         guard let section = sidebarSections.first(where: { $0.items.contains { $0.session.key == key } }) else { return nil }
         if hasActiveScope { filteredSectionExpansion[section.id] = true }
         else {
@@ -403,7 +400,7 @@ struct MacSidebar: View {
             "selected": selectedKeys == [key],
             "nativeSelected": state?.selected == true,
             "rowVisible": state?.visible == true,
-            "conflictingFiltersCleared": filter.isEmpty && !attentionOnly,
+            "conflictingFiltersCleared": filter.isEmpty && quickFilter == .all,
         ]
     }
     #endif

@@ -9,6 +9,22 @@ struct SessionRoute: Hashable, Identifiable {
     var id: String { key }
 }
 
+/// Adaptive split container hooks (owner decisions 2026-11-01): the list is
+/// the sidebar on a regular width and the stack root on a compact one.
+struct SessionSplitContext {
+    /// Detail-column selection bound to the rows' `NavigationLink(value:)`.
+    var selection: Binding<SessionRoute?>
+    /// Selects a conversation; `focusComposer` opens it ready for typing.
+    var open: (_ route: SessionRoute, _ focusComposer: Bool) -> Void
+    var showSettings: () -> Void
+    var showPairing: () -> Void
+    /// Bumped by the empty detail column's New Session action.
+    var newSessionRequest: Int
+    /// The split is collapsed to one stack (compact window width). Read
+    /// outside the split: a sidebar column always reports a compact width.
+    var isCollapsed: Bool
+}
+
 struct SessionListView: View {
     static let listRecheckInterval = HostSessionFeed.listRecheckInterval
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -21,15 +37,15 @@ struct SessionListView: View {
     private var isLoading: Bool { feed.isLoading }
     private var loadError: String? { feed.loadError }
 
-    init(host: HostInfo) {
+    private let split: SessionSplitContext
+
+    init(host: HostInfo, feed: HostSessionFeed, split: SessionSplitContext) {
         self.host = host
-        _feed = State(initialValue: HostSessionFeed(host: host))
+        self.split = split
+        _feed = State(initialValue: feed)
     }
     @State private var showNewSession = false
     @State private var pendingCreatedSessionKey: String?
-    @State private var openedSessionRoute: SessionRoute?
-    /// Notification-tap session leg, pushed once this host's snapshot holds the key.
-    @State private var notificationSessionRoute: SessionRoute?
     @State private var hapticScope = HapticScope()
     /// True while this list is the visible navigation content. Pending taps are
     /// consumed only here, never by an offscreen or stale same-host instance.
@@ -48,7 +64,6 @@ struct SessionListView: View {
     /// recovery, dismissible; never a silent empty screen. List windows can never
     /// set this — only the `session.get` lookup may.
     @State private var missingNotificationKey: String?
-    @State private var inspectedSessionRoute: SessionRoute?
     #if DEBUG
     @State private var navigationInspectionStarted = false
     #endif
@@ -59,7 +74,7 @@ struct SessionListView: View {
     /// in the navigation stack, so state is host-scoped) and survive pushing
     /// a conversation and returning. Live updates, refreshes, and reconnects
     /// never reset them; only leaving this host's page discards them.
-    @State private var attentionOnly = false
+    @State private var quickFilter: SessionQuickFilter = .all
     @State private var runtimeFilter: Set<SessionRuntimeFilter> = []
     @State private var projectFilter: Set<SessionProjectFilter> = []
     @State private var showProjectPicker = false
@@ -74,8 +89,8 @@ struct SessionListView: View {
     var body: some View {
         VStack(spacing: 0) {
             SessionRuntimeFilterRow(
-                attentionOnly: $attentionOnly,
-                attentionCount: SessionListFiltering.attentionCount(sessions: windowSessions),
+                quickFilter: $quickFilter,
+                sessions: windowSessions,
                 selected: $runtimeFilter
             )
                 .padding(.top, Space.xs)
@@ -101,7 +116,7 @@ struct SessionListView: View {
                 loadFailed: loadError != nil
             ) {
             case .content:
-                List {
+                List(selection: split.selection) {
                     if let loadError, shouldShowLoadErrorBanner(loadError) {
                         Section {
                             Label(loadError, systemImage: "exclamationmark.triangle")
@@ -158,7 +173,7 @@ struct SessionListView: View {
                 }
                 .listStyle(.plain)
                 .contentMargins(.top, Space.sm, for: .scrollContent)
-                .contentMargins(.bottom, Self.searchBarClearance, for: .scrollContent)
+                .contentMargins(.bottom, searchBarClearance, for: .scrollContent)
                 .listSectionSpacing(Space.sm)
                 .environment(\.defaultMinListHeaderHeight, SessionListLayout.sectionHeaderHeight)
                 .scrollDismissesKeyboard(.interactively)
@@ -221,27 +236,22 @@ struct SessionListView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .navigationBarTitleDisplayMode(.inline)
-        .navigationDestination(for: SessionRoute.self) { route in
-            sessionDetail(for: route, autoFocusComposer: false)
-        }
-        .navigationDestination(item: $openedSessionRoute) { route in
-            sessionDetail(for: route, autoFocusComposer: true)
-        }
-        .navigationDestination(item: $notificationSessionRoute) { route in
-            sessionDetail(for: route, autoFocusComposer: false)
-        }
-        .navigationDestination(item: $inspectedSessionRoute) { route in
-            sessionDetail(
-                for: route,
-                autoFocusComposer: ProcessInfo.processInfo.arguments.contains("-CorralInspectKeyboard")
-            )
-        }
         .searchable(
             text: Bindable(listStore).searchQuery,
             isPresented: $isSearchPresented,
+            // Side by side, the field sits fixed under the sidebar's title
+            // bar: `.sidebar` let iOS 27.1 float it across both columns.
+            placement: isCompact ? .automatic : .navigationBarDrawer(displayMode: .always),
             prompt: Text("sessions.search")
         )
-        .modifier(SessionListSystemSearchPlacement())
+        .modifier(SessionListSystemSearchPlacement(enabled: isCompact))
+        .focusedSceneValue(\.corralSearchSessions, CorralCommandAction(id: host.hostID) {
+            isSearchPresented = true
+        })
+        .focusedSceneValue(\.corralNewSession, canCreateSession ? CorralCommandAction(id: host.hostID) {
+            showNewSession = true
+        } : nil)
+        .onChange(of: split.newSessionRequest) { _, _ in showNewSession = true }
         .onChange(of: listStore.searchQuery) { _, query in
             scheduleRemoteSearch(query)
         }
@@ -270,16 +280,11 @@ struct SessionListView: View {
         }
         .toolbar {
             ToolbarItem(placement: .principal) {
-                SessionPrincipalHeader(
-                    deviceName: host.displayName,
-                    state: appModel.connectionState,
-                    transport: appModel.activeTransport
-                )
+                SessionMachineSwitcher(host: host, onPair: split.showPairing)
             }
             ToolbarItem(placement: .topBarTrailing) {
-                NavigationLink {
-                    HostSettingsView(host: host)
-                } label: {
+                // A sheet survives folding; the sidebar never pushes into the detail column.
+                Button(action: split.showSettings) {
                     Label("nav.settings", systemImage: "gearshape")
                 }
             }
@@ -290,7 +295,7 @@ struct SessionListView: View {
                     Label("sessions.new", systemImage: "plus")
                 }
             }
-            if #available(iOS 26.0, *) {
+            if #available(iOS 26.0, *), isCompact {
                 ToolbarSpacer(.flexible, placement: .bottomBar)
                 DefaultToolbarItem(kind: .search, placement: .bottomBar)
             }
@@ -335,7 +340,10 @@ struct SessionListView: View {
                 let requestedKey = ProcessInfo.processInfo.environment["CORRAL_INSPECTION_SESSION_KEY"]
                 let sessions = listStore.sections.flatMap(\.sessions)
                 if let session = sessions.first(where: { requestedKey == nil || $0.key == requestedKey }) {
-                    inspectedSessionRoute = SessionRoute(key: session.key)
+                    split.open(
+                        SessionRoute(key: session.key),
+                        ProcessInfo.processInfo.arguments.contains("-CorralInspectKeyboard")
+                    )
                 }
             }
             #endif
@@ -356,29 +364,6 @@ struct SessionListView: View {
         }
     }
 
-    @ViewBuilder
-    private func sessionDetail(for route: SessionRoute, autoFocusComposer: Bool) -> some View {
-        if let session = listStore.session(for: route.key) {
-            SessionDetailView(
-                session: session,
-                autoFocusComposer: autoFocusComposer,
-                metadataStore: listStore,
-                onDidCreateSession: { created in
-                    listStore.patchSession(created)
-                    listStore.rememberOpened(created)
-                    openedSessionRoute = SessionRoute(key: created.key)
-                }
-            )
-                .id(route.key)
-                .onAppear { listStore.revealSession(session) }
-        } else {
-            ContentUnavailableView(
-                "sessions.empty.title",
-                systemImage: "bubble.left.and.bubble.right"
-            )
-        }
-    }
-
     #if DEBUG
     /// Drive the actual detail route without injecting input or editing history.
     @MainActor private func inspectSearchNavigation() async {
@@ -389,16 +374,16 @@ struct SessionListView: View {
         guard let match = search.result?.matches.first(where: { !previous.contains($0.key) }),
               let session = match.session else { return }
         retainSearchResult(session)
-        inspectedSessionRoute = SessionRoute(key: session.key)
+        split.open(SessionRoute(key: session.key), false)
         try? await Task.sleep(for: .seconds(3))
         let retained = listStore.windowSessions.contains { $0.key == session.key }
-        let report: [String: Any] = ["outsideWindow": true, "detailOpened": inspectedSessionRoute?.key == session.key,
+        let report: [String: Any] = ["outsideWindow": true, "detailOpened": split.selection.wrappedValue?.key == session.key,
             "retainedAfterOpen": retained, "key": session.key]
         let folder = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted])
             .write(to: folder.appendingPathComponent("navigation-inspection.json"), options: .atomic)
         try? await Task.sleep(for: .seconds(12))
-        inspectedSessionRoute = nil
+        split.selection.wrappedValue = nil
         listStore.searchQuery = ""
         for section in listStore.sections where section.sessions.contains(where: { $0.key == session.key }) {
             sectionExpansion[section.id] = true
@@ -424,11 +409,10 @@ struct SessionListView: View {
                 ?? match.session.flatMap { ActiveRuntimeVisibility.isListVisible($0) ? $0 : nil }
             return summary.map { FulltextRow(session: $0, match: match) }
         }
-        let kept = Set(SessionListFiltering.apply(
+        let kept = Set(quickFilter.apply(
             sessions: rows.map(\.session),
             runtimes: runtimeFilter,
-            projects: projectFilter,
-            attentionOnly: attentionOnly
+            projects: projectFilter
         ).map(\.key))
         return rows.filter { kept.contains($0.session.key) }
     }
@@ -451,7 +435,7 @@ struct SessionListView: View {
             ProgressView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if rows.isEmpty {
-            if attentionOnly || !runtimeFilter.isEmpty || !projectFilter.isEmpty {
+            if quickFilter != .all || !runtimeFilter.isEmpty || !projectFilter.isEmpty {
                 ContentUnavailableView {
                     Label("sessions.filter.empty.title", systemImage: "magnifyingglass")
                 } description: {
@@ -467,7 +451,7 @@ struct SessionListView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         } else {
-            List {
+            List(selection: split.selection) {
                 ForEach(rows) { row in
                     SessionListItem(
                         session: row.session,
@@ -489,7 +473,7 @@ struct SessionListView: View {
             }
             .listStyle(.plain)
             .contentMargins(.top, Space.sm, for: .scrollContent)
-            .contentMargins(.bottom, Self.searchBarClearance, for: .scrollContent)
+            .contentMargins(.bottom, searchBarClearance, for: .scrollContent)
             .scrollDismissesKeyboard(.interactively)
         }
     }
@@ -508,24 +492,28 @@ struct SessionListView: View {
         // Sheet dismiss animation first, then push chat so focus sticks.
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(120))
-            openedSessionRoute = SessionRoute(key: key)
+            split.open(SessionRoute(key: key), true)
         }
     }
 
     /// The floating bottom search field must never rest on top of the last row.
-    private static var searchBarClearance: CGFloat {
-        if #available(iOS 26.0, *) { Space.xl } else { 0 }
+    /// A side-by-side sidebar keeps its search field at the top, so it needs none.
+    private var searchBarClearance: CGFloat {
+        if #available(iOS 26.0, *), isCompact { Space.xl } else { 0 }
     }
+
+    /// A collapsed split (iPhone, folded Duo, narrow windows) keeps the bottom
+    /// minimized search; a side-by-side sidebar searches from its top.
+    private var isCompact: Bool { split.isCollapsed }
 
     /// Store sections intersected with the runtime/project quick filters.
     /// Search is already applied inside the store; counts and headers below
     /// always describe exactly these rows.
     private var visibleSections: [SessionListStore.Section] {
-        SessionListFiltering.apply(
+        quickFilter.apply(
             to: listStore.sections,
             runtimes: runtimeFilter,
-            projects: projectFilter,
-            attentionOnly: attentionOnly
+            projects: projectFilter
         )
     }
 
@@ -548,7 +536,7 @@ struct SessionListView: View {
 
     /// Any narrowing: a filter dimension or text search.
     private var hasActiveScope: Bool {
-        attentionOnly || !runtimeFilter.isEmpty || !projectFilter.isEmpty || isSearching
+        quickFilter != .all || !runtimeFilter.isEmpty || !projectFilter.isEmpty || isSearching
     }
 
     /// Human-readable filtered scope for the empty-results description:
@@ -574,8 +562,8 @@ struct SessionListView: View {
         }.sorted()
         let projectName = projectNames.isEmpty ? all : projectNames.joined(separator: ", ")
         var scope = "\(runtimeName) · \(projectName)"
-        if attentionOnly {
-            scope = String(localized: String.LocalizationValue("sessions.filter.attention")) + " · " + scope
+        if quickFilter != .all {
+            scope = String(localized: String.LocalizationValue(quickFilter.titleKey)) + " · " + scope
         }
         let query = listStore.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         if !query.isEmpty {
@@ -585,7 +573,7 @@ struct SessionListView: View {
     }
 
     private func clearFilters() {
-        attentionOnly = false
+        quickFilter = .all
         runtimeFilter.removeAll()
         projectFilter.removeAll()
         listStore.searchQuery = ""
@@ -796,16 +784,13 @@ struct SessionListView: View {
         await openPendingNotificationSession()
     }
 
-    private func pushNotificationSession(key: String) {        guard notificationSessionRoute?.key == key else {
-            notificationSessionRoute = SessionRoute(key: key)
-            return
-        }
-        // Same value would block repeat navigation: reset, then set on the next
-        // main-actor turn so the destination observes a change.
-        notificationSessionRoute = nil
-        Task { @MainActor in
-            notificationSessionRoute = SessionRoute(key: key)
-        }
+    private func pushNotificationSession(key: String) {
+        split.open(SessionRoute(key: key), false)
+    }
+
+    /// Same gate as the Mac's New Session command: a connected, writable machine.
+    private var canCreateSession: Bool {
+        appModel.isConnected(to: host) && !SessionActionsMenu.isReadonly(access: appModel.connectedAccess)
     }
 
     private func refreshSessions(showLoading: Bool) async {

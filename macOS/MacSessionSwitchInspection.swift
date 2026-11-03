@@ -57,6 +57,7 @@ enum MacSessionSwitchInspection {
                     preparationMs[session.key] = nil
                 }
                 ConversationStore.resetSwitchCounters()
+                SessionListStore.resetSectionCounters()
                 MacTextRowSwitchCounters.reset()
                 SwitchBodyCounters.reset()
                 let clock = ContinuousClock()
@@ -173,6 +174,8 @@ enum MacSessionSwitchInspection {
                 record["docRenders"] = MacTextRowSwitchCounters.docRenders
                 record["timelineRebuilds"] = ConversationStore.timelineRebuilds
                 record["timelineSkips"] = ConversationStore.timelineSkips
+                record["sectionRebuilds"] = SessionListStore.sectionRebuilds
+                record["sectionSkips"] = SessionListStore.sectionSkips
                 record["promptsHits"] = ConversationStore.promptsHits
                 record["promptsRecomputes"] = ConversationStore.promptsRecomputes
                 record["bubbleBodies"] = SwitchBodyCounters.bubbleBodies

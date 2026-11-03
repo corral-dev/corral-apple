@@ -215,7 +215,11 @@ final class ChatImageLoader {
 
     private static var displayScale: CGFloat {
         #if canImport(UIKit)
-        UIScreen.main.scale
+        // The live scene's scale, not `UIScreen.main`: a folding iPhone or a
+        // mirrored window may show this app on a different display.
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let scene = scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
+        return scene?.traitCollection.displayScale ?? 3
         #else
         NSScreen.main?.backingScaleFactor ?? 2
         #endif

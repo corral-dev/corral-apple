@@ -107,9 +107,9 @@ final class RemoteClient: NSObject {
     var nextRequestID = 0
     /// `plane` is the socket the request was sent on, so a data-plane teardown can fail
     /// its own requests immediately instead of leaving them for the timeout.
-    var pendingRequests: [Int: (continuation: CheckedContinuation<WireResponseBox, Error>, timeout: Task<Void, Never>, plane: ObjectIdentifier)] = [:] {
+    var pendingRequests: [Int: (continuation: CheckedContinuation<WireResponseBox, Error>, timeout: Task<Void, Never>, plane: ObjectIdentifier, method: String)] = [:] {
         didSet {
-            diagnostics.trackPending(Set(pendingRequests.keys))
+            diagnostics.trackPending(pendingRequests.mapValues { $0.method })
             persistDiagnostics()
         }
     }

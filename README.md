@@ -32,7 +32,7 @@ Read replies, answer questions, and send the next instruction to Claude Code, Co
 
 ## Install
 
-The **Mac app** is a signed download. The **iPhone app** is source-only for now: build it with Xcode. Public App Store and TestFlight downloads are not available yet.
+The **Mac app** is a signed download. The **iPhone app** is a source beta: build it with Xcode. Public App Store and TestFlight downloads are not available yet.
 
 | Client | Requirements |
 | --- | --- |
@@ -61,14 +61,9 @@ brew update
 brew upgrade --cask x0c/tap/corral-mac
 ```
 
-<details>
-<summary>Troubleshooting Homebrew updates</summary>
+The built-in updater remains available. Current Homebrew can recognize an app newer than its installation record, so an older recorded version alone does not mean an update failed. An “already an App” install error means the destination is occupied; use the appropriate adoption or update command above. Do not use `--force` as a routine fix: it can replace a newer app with an older tap version. Pairing and settings are preserved. [How Homebrew handles self-updating apps](https://docs.brew.sh/FAQ#how-does-brew-upgrade-handle-apps-that-update-themselves).
 
-Note: Corral also includes a built-in auto-updater. If `brew install` reports that `Corral.app` already exists in `/Applications`, run `brew install --cask --adopt x0c/tap/corral-mac` instead of `--force`. Pairing and settings are preserved. [How Homebrew handles self-updating apps](https://docs.brew.sh/FAQ#how-does-brew-upgrade-handle-apps-that-update-themselves).
-
-</details>
-
-Download the [signed Mac DMG](https://github.com/corral-dev/corral-apple/releases/latest) and drag Corral to Applications. It checks for updates hourly, downloads them in the background, and installs them when you quit.
+Download the [signed Mac DMG](https://github.com/corral-dev/corral-apple/releases/latest) and drag Corral to Applications. It checks for updates hourly, downloads them in the background and installs them when you quit.
 
 To build from source instead, with Xcode and its command-line tools installed:
 
@@ -101,17 +96,17 @@ corral remote pair
 
 If Corral is already installed, run only the second command. [Other CLI installation options](https://github.com/corral-dev/corral#install) are available.
 
-On the same local network, open the Apple client and scan the pairing code, or paste it in. Pairing lets the client read and act on your host's sessions; use `corral remote pair --readonly` for viewing only. Keep the code private. The host must remain awake for agents and remote access to keep working.
+On the same local network, open the Apple client and scan or paste the pairing code. Pairing lets the client read and act on your host's sessions; use `corral remote pair --readonly` for viewing only. Keep the code private. The host must remain awake for agents and remote access to keep working.
 
 ## Access from another network
 
-Run your own [Corral relay](https://github.com/corral-dev/corral-relay#quick-start) and configure its `wss://` address on the host. Same-network access works directly. There is no shared hosted relay — your clients use the relay you configure.
+Run your own [Corral relay](https://github.com/corral-dev/corral-relay#quick-start) and configure its `wss://` address on the host. Same-network access works directly. Open-source clients use your configured relay; a shared hosted relay is not included.
 
-For iPhone notifications, set up APNs on that relay with your own app's credentials. Without APNs, conversations still update while the client is open.
+For iPhone notifications, configure APNs on that relay with credentials matching your own app identity. Without APNs, conversations still update while the client is open.
 
 ## Privacy
 
-Session traffic and notification text are end-to-end encrypted. The relay sees routing identities, connection timing, and byte counts. Device keys are stored in Keychain; conversations can be cached on the client so you can reopen past conversations. See [PRIVACY.md](PRIVACY.md).
+Session traffic and notification text are end-to-end encrypted. The relay sees routing identities, connection timing and byte counts. Device keys are stored in Keychain; conversations can be cached on the client for reopening history. See [PRIVACY.md](PRIVACY.md).
 
 ## Help and contribute
 
@@ -120,17 +115,6 @@ Session traffic and notification text are end-to-end encrypted. The relay sees r
 - [Contributing](CONTRIBUTING.md) and the [contributor agreement](CLA.md)
 
 Remove private conversations, machine addresses and pairing credentials from public reports. For vulnerabilities, use [private security reporting](https://github.com/corral-dev/corral-apple/security/advisories/new).
-
-## 🧩 Related Tools in the AI Coding Suite
-
-If you run multiple AI coding agents daily, check out the rest of the local-first toolkit:
-
-| Repository | Description |
-| :--- | :--- |
-| **[corral](https://github.com/corral-dev/corral)** | Run Claude Code, Codex, OpenCode, Cursor & Pi side-by-side in a terminal session manager, then continue from iPhone or Mac. |
-| **[subswap](https://github.com/x0c/subswap)** | Check remaining quota and switch Claude Code, Codex, Cursor, Kimi Code & OpenCode accounts without logging out. |
-| **[agentsync](https://github.com/x0c/agentsync)** | Sync `AGENTS.md`, `CLAUDE.md`, skills, and MCP configs across coding agents from one local source of truth. |
-| **[agent-doc-skills](https://github.com/x0c/agent-doc-skills)** | Navigable project knowledge base skills (`doc-init`, `doc-update`, `doc-compact`) so coding agents don't rediscover your repo every session. |
 
 ## License
 

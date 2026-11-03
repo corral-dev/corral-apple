@@ -7,6 +7,9 @@ nonisolated enum ClientDiagnosticEvent: String, Codable, Sendable {
     case disconnected, socketTeardown, planeFailed, reconnectScheduled
     case dataAttached, dataAttachFailed, dataRetryScheduled, dataRetryExhausted
     case responseReceived, responseRejected, orphanResponse, malformedResponse, slowRequest
+    /// Cold-start/warm-open stage durations (`snapshot`/`connect`/`list`); still
+    /// fixed names plus monotonic durations, never content.
+    case launchStage
     /// One plane's bounded outgoing queue rejected a frame; the plane resets.
     case planeOverload
     /// A slow event subscriber lost events and receives a coalesced resync marker.
@@ -24,6 +27,12 @@ nonisolated struct ClientDiagnosticRecord: Codable, Sendable {
     let timestamp: TimeInterval
     let event: ClientDiagnosticEvent
     let plane: String?
+    /// Fixed RPC vocabulary only (`session.watch`, `history.page`, …); never
+    /// params, payloads or keys. Absent on records written before this field.
+    let method: String?
+    /// Fixed launch-stage name (`snapshot`/`connect`/`list`); absent otherwise.
+    /// Same additive-optional rule as `method`: old reports decode without it.
+    let stage: String?
     let durationMs: Double?
     let errorCode: Int?
     let reason: ClientDiagnosticFailure?
@@ -59,12 +68,34 @@ nonisolated struct ClientDiagnosticReport: Codable, Sendable {
 }
 
 /// Main-actor bookkeeping only; encoding, atomic writes and retention run on a serial queue.
+nonisolated enum LaunchClock {
+    /// Process-start anchor, set once from the app entry point. Reads without
+    /// a mark return nil so tests and non-app hosts fall back to local origins.
+    nonisolated(unsafe) private static var _t0: ContinuousClock.Instant?
+    private static let lock = NSLock()
+
+    static func markLaunch() {
+        lock.lock()
+        defer { lock.unlock() }
+        if _t0 == nil { _t0 = .now }
+    }
+
+    static func millisSinceLaunch() -> Double? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let t0 = _t0 else { return nil }
+        return t0.duration(to: .now).milliseconds
+    }
+}
+
 @MainActor final class ClientDiagnostics {
     let clientRun = UUID().uuidString
     private(set) var events: [ClientDiagnosticRecord] = []
     private(set) var counters: [String: Int] = [:]
     private var sequence = 0
     private var pendingStarts: [Int: ContinuousClock.Instant] = [:]
+    /// Fixed RPC names captured at registration; read when a wait completes.
+    private var pendingMethods: [Int: String] = [:]
     private var completedWaits = 0
     private var maxWaitMs = 0.0
     private var slowWaits = 0
@@ -81,7 +112,7 @@ nonisolated struct ClientDiagnosticReport: Codable, Sendable {
             ? AppStorageLocation.appDirectory.appendingPathComponent("diagnostics", isDirectory: true) : nil)
     }
 
-    func record(_ event: ClientDiagnosticEvent, plane: String? = nil,
+    func record(_ event: ClientDiagnosticEvent, plane: String? = nil, method: String? = nil, stage: String? = nil,
                 durationMs: Double? = nil, errorCode: Int? = nil, reason: ClientDiagnosticFailure? = nil,
                 terminal: TerminalDiagnosticContext? = nil) {
         sequence += 1
@@ -89,7 +120,7 @@ nonisolated struct ClientDiagnosticReport: Codable, Sendable {
         // Successful responses are counters, not an unbounded per-frame trace.
         if event != .responseReceived {
             events.append(ClientDiagnosticRecord(sequence: sequence, timestamp: Date().timeIntervalSince1970,
-                event: event, plane: plane, durationMs: durationMs, errorCode: errorCode, reason: reason, terminal: terminal))
+                event: event, plane: plane, method: method, stage: stage, durationMs: durationMs, errorCode: errorCode, reason: reason, terminal: terminal))
             if events.count > 128 { events.removeFirst(events.count - 128) }
             let label = event.rawValue
             let code = errorCode ?? 0
@@ -102,17 +133,21 @@ nonisolated struct ClientDiagnosticReport: Codable, Sendable {
         }
     }
 
-    func trackPending(_ ids: Set<Int>) {
+    func trackPending(_ methods: [Int: String], slowAfterMs: Double = 1_000) {
         let now = ContinuousClock.now
-        for id in ids where pendingStarts[id] == nil { pendingStarts[id] = now }
-        for id in Array(pendingStarts.keys) where !ids.contains(id) {
+        for (id, method) in methods {
+            if pendingStarts[id] == nil { pendingStarts[id] = now }
+            pendingMethods[id] = method
+        }
+        for id in Array(pendingStarts.keys) where methods[id] == nil {
             guard let start = pendingStarts.removeValue(forKey: id) else { continue }
+            let method = pendingMethods.removeValue(forKey: id)
             let ms = start.duration(to: now).milliseconds
             completedWaits += 1
             maxWaitMs = max(maxWaitMs, ms)
-            if ms >= 1_000 {
+            if ms >= slowAfterMs {
                 slowWaits += 1
-                record(.slowRequest, durationMs: ms)
+                record(.slowRequest, method: method, durationMs: ms)
             }
         }
     }
@@ -183,8 +218,9 @@ nonisolated struct ClientDiagnosticReport: Codable, Sendable {
     }
 
     func diagnose(_ event: ClientDiagnosticEvent, isControl: Bool? = nil,
-                  durationMs: Double? = nil, error: (any Error)? = nil, reason: ClientDiagnosticFailure? = nil) {
-        diagnostics.record(event, plane: isControl.map { $0 ? "control" : "data" },
+                  durationMs: Double? = nil, error: (any Error)? = nil, reason: ClientDiagnosticFailure? = nil,
+                  stage: String? = nil) {
+        diagnostics.record(event, plane: isControl.map { $0 ? "control" : "data" }, stage: stage,
                            durationMs: durationMs, errorCode: error.map { ($0 as NSError).code }, reason: reason)
         diagnostics.persist(state: diagnosticState, force: event == .created || event == .disconnected)
     }

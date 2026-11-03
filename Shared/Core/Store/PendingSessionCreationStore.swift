@@ -8,15 +8,14 @@ struct PendingSessionCreation: Codable, Equatable, Sendable {
     let createdAt: Date
 }
 
-/// Creation identities survive sheet dismissal, process death and lost RPC replies.
+/// Durable operation records, not a host/runtime/project uniqueness constraint.
 enum PendingSessionCreationStore {
     static var directoryOverride: URL?
 
     static func begin(hostID: String, runtimeID: String, cwd: String) throws -> PendingSessionCreation {
         var records = try load()
-        if let existing = records.first(where: {
-            $0.hostID == hostID && $0.runtimeID == runtimeID && $0.cwd == cwd
-        }) { return existing }
+        // Each explicit create is a new intent. Older unresolved outcomes must
+        // remain available without blocking another session in the same project.
         let record = PendingSessionCreation(
             commandID: UUID().uuidString, hostID: hostID, runtimeID: runtimeID, cwd: cwd, createdAt: Date()
         )

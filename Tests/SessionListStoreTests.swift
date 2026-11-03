@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 @testable import Corral
 import XCTest
 
@@ -870,6 +871,57 @@ final class SessionListStoreTests: XCTestCase {
         // Hold released: a later unread at the same activity time is the host's truth.
         store.applySessionEvent(SessionSummary(key: "claude:r", mtime: 100, attention: .unread, marker: "unread"))
         XCTAssertEqual(SessionPresentation.statusMarker(for: store.session(for: "claude:r")!), .unread)
+    }
+
+    /// Redundant rebuilds must leave the published list value untouched; a real
+    /// change still publishes exactly once (proves the tracking was live).
+    /// Micro-verified on this toolchain: `withObservationTracking` does not
+    /// fire on equal writes, so this asserts value stability rather than
+    /// delivery. The guard in `rebuildSections` additionally protects the
+    /// SwiftUI view-invalidation channel, which historically re-rendered on
+    /// equal writes (see PERFORMANCE_KNOWLEDGE_BASE §Mac sidebar switching).
+    func testRedundantRebuildKeepsSectionsStable() throws {
+        let store = SessionListStore()
+        store.loadPersisted(hostID: "guard-host")
+        store.updateSessions([try session(key: "codex:g", title: "G")])
+        let notifications = Counter()
+        withObservationTracking {
+            _ = store.sections
+        } onChange: {
+            notifications.increment()
+        }
+        // Same content through the unchanged path must not republish sections.
+        store.applyListResponse(SessionsListResponse(sessions: [], version: "v1", unchanged: true))
+        XCTAssertEqual(notifications.value, 0)
+        // A real change still publishes exactly once: proves tracking was live.
+        store.patchSession(try session(key: "codex:g", title: "G2"))
+        XCTAssertEqual(notifications.value, 1)
+    }
+
+    func testPendingSnapshotReadableWithoutFlush() throws {
+        let first = SessionListStore()
+        first.loadPersisted(hostID: "pending-host")
+        first.applyListResponse(
+            SessionsListResponse(
+                sessions: [try session(key: "codex:p", title: "P")],
+                version: "v9"
+            )
+        )
+        // No flush: the pending map (not disk) serves the reopened store.
+        let second = SessionListStore()
+        second.loadPersisted(hostID: "pending-host")
+        XCTAssertEqual(second.version, "v9")
+        XCTAssertEqual(second.sections.flatMap(\.sessions).map(\.key), ["codex:p"])
+    }
+
+    private final class Counter: @unchecked Sendable {
+        private let lock = NSLock()
+        private(set) var value = 0
+        func increment() {
+            lock.lock()
+            defer { lock.unlock() }
+            value += 1
+        }
     }
 
     private func session(

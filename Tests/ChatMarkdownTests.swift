@@ -120,6 +120,20 @@ final class ChatMarkdownTests: XCTestCase {
         XCTAssertEqual(images.first?.1.trimmingCharacters(in: .whitespacesAndNewlines), "图片渲染检查")
     }
 
+    func testImageSeparatorsDoNotCreateExtraReferences() {
+        let samples: [(String, Int)] = [
+            ((1...5).map { "**Candidate \($0)**\n\n![Image \($0)](/tmp/candidate-\($0).png)\n\nAfter." }.joined(separator: "\n\n"), 5),
+            ("Before\n\n![One](/tmp/repeated.png)\n\n![Two](/tmp/repeated.png)\n\nAfter", 2),
+            ("Before\n\n![ ](/tmp/spaces.png)\n\nAfter", 1),
+        ]
+        for (source, expected) in samples {
+            let text = ChatMarkdown.attributed(source)
+            let images = text.runs.filter { $0.imageURL != nil }
+            XCTAssertEqual(images.count, expected)
+            XCTAssertTrue(images.allSatisfy { !String(text[$0.range].characters).contains("\n") })
+        }
+    }
+
     func testSingleColumnTableBecomesBulletList() {
         let source = """
         | 名称 |

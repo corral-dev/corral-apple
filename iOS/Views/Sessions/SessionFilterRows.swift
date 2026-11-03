@@ -71,26 +71,28 @@ struct SessionPrincipalHeader: View {
 /// Intrinsic-width runtime chips keep each official logo and name on one line.
 /// Horizontal scrolling handles narrow screens and larger text without tiles.
 struct SessionRuntimeFilterRow: View {
-    @Binding var attentionOnly: Bool
-    /// Sessions in the Focus filter (host `needs_attention`).
-    let attentionCount: Int
+    @Binding var quickFilter: SessionQuickFilter
+    let sessions: [SessionSummary]
+    #if DEBUG
+    @State private var didInspectQuickFilter = false
+    #endif
     @Binding var selected: Set<SessionRuntimeFilter>
 
     var body: some View {
         SessionFilterScrollView {
             HStack(spacing: SessionFilterStyle.chipSpacing) {
                 // Its own dimension, intersected with the assistant choices.
-                SessionFilterChip(selected: attentionOnly) {
-                    Text("sessions.filter.attention")
-                    Text(verbatim: attentionCount.formatted())
+                SessionFilterChip(selected: quickFilter != .all) {
+                    Text(LocalizedStringKey(quickFilter.titleKey))
+                    Text(verbatim: quickFilter.count(sessions: sessions).formatted())
                         .monospacedDigit()
                         .opacity(0.75)
                 } action: {
-                    attentionOnly.toggle()
-                    HapticFeedback.shared.emit(.selection)
+                    advanceQuickFilter()
                 }
-                .accessibilityLabel(Text("sessions.filter.attention"))
-                .accessibilityValue(Text(verbatim: attentionCount.formatted()))
+                .accessibilityLabel(Text(LocalizedStringKey(quickFilter.titleKey)))
+                .accessibilityValue(Text(verbatim: quickFilter.count(sessions: sessions).formatted()))
+                .accessibilityIdentifier("corral.filter.attention")
                 Divider()
                     .frame(height: 20)
                 // No All chip: an empty selection already means every assistant.
@@ -119,14 +121,30 @@ struct SessionRuntimeFilterRow: View {
         #if DEBUG
         .task {
             if ProcessInfo.processInfo.arguments.contains("-CorralInspectSelectedFilters") {
-                attentionOnly = true
+                quickFilter = .attention
                 selected = [.codex]
             } else if ProcessInfo.processInfo.arguments.contains("-CorralInspectMultiFilters") {
                 selected = [.claude, .codex]
             }
         }
+        .task(id: sessions.isEmpty) {
+            guard !sessions.isEmpty, !didInspectQuickFilter,
+                  ProcessInfo.processInfo.arguments.contains("-CorralInspectQuickFilterCycle") else { return }
+            didInspectQuickFilter = true
+            for step in 0...3 {
+                if step > 0 { advanceQuickFilter() }
+                try? await Task.sleep(for: .seconds(8))
+                guard !Task.isCancelled else { return }
+            }
+        }
         #endif
     }
+
+    private func advanceQuickFilter() {
+        quickFilter.advance()
+        HapticFeedback.shared.emit(.selection)
+    }
+
     private func select(_ value: SessionRuntimeFilter) {
         let previous = selected
         SessionListFiltering.toggle(value, all: .all, in: &selected)

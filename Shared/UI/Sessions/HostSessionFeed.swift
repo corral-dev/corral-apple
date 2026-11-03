@@ -61,7 +61,14 @@ final class HostSessionFeed {
         self.appModel = appModel
         isActive = true
         startCalendarUpdates()
+        let localT0 = ContinuousClock.now
+        // Shared origin when the app entry marked launch; tests fall back
+        // to this activation so stage records stay non-negative either way.
+        func elapsed() -> Double {
+            LaunchClock.millisSinceLaunch() ?? localT0.duration(to: .now).milliseconds
+        }
         listStore.loadPersisted(hostID: host.hostID)
+        let snapshotMs = elapsed()
         if !listStore.sections.isEmpty {
             isLoading = false
         }
@@ -72,6 +79,7 @@ final class HostSessionFeed {
         } else {
             await appModel.connect(to: host)
         }
+        let connectMs = elapsed()
         // The surface may have disappeared while connect awaited.
         guard !Task.isCancelled, isActive else { return }
         await unwatchTask?.value
@@ -79,6 +87,14 @@ final class HostSessionFeed {
         guard !Task.isCancelled, isActive else { return }
         startWatching()
         await refresh(showLoading: listStore.sections.isEmpty)
+        let listMs = elapsed()
+        // Fixed stage names plus monotonic durations only; the client may have
+        // been replaced mid-flight, so read it fresh rather than caching.
+        if let client = appModel.client {
+            client.diagnose(.launchStage, durationMs: snapshotMs, stage: "snapshot")
+            client.diagnose(.launchStage, durationMs: connectMs, stage: "connect")
+            client.diagnose(.launchStage, durationMs: listMs, stage: "list")
+        }
         await onListChanged?()
     }
 

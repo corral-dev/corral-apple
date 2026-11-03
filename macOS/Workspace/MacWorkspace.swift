@@ -478,13 +478,26 @@ final class MacWorkspace {
         scheduleLayout(WireProtocol.mLayoutRemoveSession, ["key": key])
     }
 
+    /// Focus always names a shown pane, so the sidebar selection and pane
+    /// headers cannot follow a session that is not on screen.
     func focus(_ key: String) {
+        guard isShownPane(key) else { return }
         paneFocusSerial &+= 1
         guard focusedKey != key else { return }
         focusedKey = key
         guard paneKeys.count >= 2, layout.group(containing: key) != nil else { return }
         let project = projectPath(of: key)
         scheduleLayout(WireProtocol.mLayoutSetFocus, ["key": key, "project": project])
+    }
+
+    func isShownPane(_ key: String) -> Bool {
+        paneKeys.contains(key) || paneKeys.contains { canonicalPaneKey($0) == key }
+    }
+
+    /// A lone pane is the focus by definition; gray titles only tell split
+    /// panes apart.
+    func showsFocus(_ key: String) -> Bool {
+        focusedKey == key || (paneKeys.count == 1 && isShownPane(key))
     }
 
     var canReorderPanes: Bool { paneKeys.count > 1 && leavingPanes.isEmpty }
@@ -1005,8 +1018,14 @@ final class MacWorkspace {
     /// Pane frames in window coordinates (top-left origin), for click-to-focus.
     @ObservationIgnored var paneFrames: [String: CGRect] = [:]
 
+    /// Only shown panes, in slot order: a retained dormant or departing host
+    /// can still have a frame under the visible pane and must never take focus.
     func paneKey(atWindowPoint point: CGPoint) -> String? {
-        paneFrames.first { $0.value.contains(point) }?.key
+        for key in paneKeys {
+            let frameKey = paneFrames[key] != nil ? key : canonicalPaneKey(key)
+            if paneFrames[frameKey]?.contains(point) == true { return frameKey }
+        }
+        return nil
     }
 
     func openCreated(_ session: SessionSummary, asPane: Bool) {

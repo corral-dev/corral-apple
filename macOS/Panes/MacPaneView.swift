@@ -142,7 +142,7 @@ struct MacPaneView: View {
         VStack(spacing: 0) {
             MacPaneHeader(
                 session: session,
-                isFocused: isFocused,
+                isFocused: workspace.showsFocus(session.key),
                 allowsClose: allowsClose,
                 promptsCount: promptsCount,
                 promptsOpen: promptsOpenBinding

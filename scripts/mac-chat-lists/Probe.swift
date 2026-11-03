@@ -29,6 +29,8 @@ struct MacChatListsProbe {
 
     @MainActor static func main() {
         NSApplication.shared.setActivationPolicy(.prohibited)
+        checkLeadingParagraphSpacing()
+        checkImageSeparators()
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: rowWidth + 40, height: 640),
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -73,6 +75,7 @@ struct MacChatListsProbe {
                 for: document.text(for: source.id) ?? NSAttributedString(string: ""),
                 font: NSFont.systemFont(ofSize: bodyPointSize),
                 width: rowWidth,
+                hasPrecedingBlock: document.hasPrecedingBlock(source.id),
                 hasFollowingBlock: source.id < sources.count
             ).height ?? -1
             check(source: source, lines: lines, drawnHeight: height, measuredHeight: measured)
@@ -80,7 +83,7 @@ struct MacChatListsProbe {
 
         window.close()
         if failures.isEmpty {
-            print("PASS Mac list-first messages keep the marker and text on one line in every container")
+            print("PASS Mac list-first layout and 560 paragraph-boundary/width/font transitions fit every final line")
         } else {
             failures.forEach { print("FAIL \($0)") }
             exit(1)
@@ -118,6 +121,84 @@ struct MacChatListsProbe {
             }
         }
         return mutable
+    }
+
+    /// A detached row must model both native container boundaries. A bold lead
+    /// or heading has spacing-before that TextKit omits at storage start but
+    /// honors after the live container's near-zero paragraph start.
+    @MainActor static func checkLeadingParagraphSpacing() {
+        let samples = [
+            "**A bold lead 标题**\n\nA wrapped paragraph 中文 with a final readable line.\n\n最后一行必须完整显示。",
+            "# Heading 标题\n\nBody with a final line.\n\n最后一行必须完整显示。",
+            "### Heading 标题\n\nBody with a final line.",
+            "Plain 中文 paragraph with emoji 👩🏽‍💻 and a final line.",
+            "1. First 中文 item\n2. Second item",
+            "> Quoted 中文 paragraph\n\nFinal line.",
+            "```swift\nlet value = 1\n```\n\nFinal line.",
+        ]
+        for pointSize in [11.2, 14, 16.1, 21] {
+            let font = NSFont.systemFont(ofSize: pointSize)
+            for width in [240.0, 420, 594, 826] {
+                for (sampleIndex, sample) in samples.enumerated() {
+                    let document = MacConversationTextDocument()
+                    let target = MacConversationTextDocument.Source(id: 2, text: sample, isUser: false)
+                    let before = MacConversationTextDocument.Source(id: 1, text: "Earlier message.", isUser: true)
+                    let after = MacConversationTextDocument.Source(id: 3, text: "Later message.", isUser: true)
+                    // Reuse the same block and measurement through append,
+                    // prepend, tail removal and leading-history eviction.
+                    let windows = [[target], [target, after], [before, target, after], [before, target], [target]]
+                    for (step, sources) in windows.enumerated() {
+                        document.update(identity: ObjectIdentifier(document), sources: sources,
+                                        style: .init(font: font, foreground: .labelColor, userForeground: .labelColor)) {
+                            render($0, font: font)
+                        }
+                        guard let text = document.text(for: 2), let view = document.textView(for: 2),
+                              let container = view.textContainer, let ownRange = document.range(for: 2),
+                              let measurement = document.measurement(for: 2) else {
+                            failures.append("paragraph fixture lost its native text network")
+                            continue
+                        }
+                        let measured = measurement.size(for: text, font: font, width: width,
+                                                        hasPrecedingBlock: document.hasPrecedingBlock(2),
+                                                        hasFollowingBlock: document.hasFollowingBlock(2))
+                        view.textContainerInset = .zero
+                        view.isVerticallyResizable = false
+                        view.isHorizontallyResizable = false
+                        view.frame = NSRect(origin: .zero, size: measured)
+                        document.layout.ensureLayout(for: container)
+                        let drawn = document.layout.usedRect(for: container).maxY
+                        let covered = document.layout.characterRange(
+                            forGlyphRange: document.layout.glyphRange(for: container), actualGlyphRange: nil)
+                        let tag = "sample \(sampleIndex) step \(step) font \(pointSize) width \(width)"
+                        if measured.height != ceil(drawn) {
+                            failures.append("\(tag): drawn \(drawn) vs row \(measured.height)")
+                        }
+                        if covered.location > ownRange.location || NSMaxRange(covered) < NSMaxRange(ownRange) {
+                            failures.append("\(tag): container omits message characters")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @MainActor static func checkImageSeparators() {
+        let five = (1...5).map { "**Candidate \($0)**\n\n![Image \($0)](/tmp/candidate-\($0).png)\n\nFollowing prose." }.joined(separator: "\n\n")
+        let samples: [(String, Int)] = [
+            (five, 5),
+            ("Before\n\n![One](/tmp/repeated.png)\n\n![Two](/tmp/repeated.png)\n\nAfter", 2),
+            ("Before\n\n![ ](/tmp/spaces.png)\n\nAfter", 1),
+        ]
+        for (source, expected) in samples {
+            let text = ChatMarkdown.attributed(source)
+            let images = text.runs.filter { $0.imageURL != nil }
+            if images.count != expected {
+                failures.append("image separators: expected \(expected) declarations, got \(images.count) image runs")
+            }
+            for run in images where String(text[run.range].characters).contains("\n") {
+                failures.append("structural newline inherited imageURL")
+            }
+        }
     }
 
     struct Line {
@@ -179,7 +260,7 @@ struct MacChatListsProbe {
                 failures.append("\(tag): plain paragraph start changed: x=\(first.x) \(first.text.debugDescription)")
             }
         }
-        if measuredHeight >= 0, abs(drawnHeight - measuredHeight) > 0.5 {
+        if measuredHeight >= 0, measuredHeight != ceil(drawnHeight) {
             failures.append("\(tag): drawn height \(drawnHeight) differs from detached measurement \(measuredHeight)")
         }
     }
