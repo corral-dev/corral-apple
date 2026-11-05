@@ -19,11 +19,12 @@ struct MacPromptsCard: View {
     /// The clicked row's jump status, shown in place of its time.
     var status: TerminalPromptRowStatus? = nil
     var onSelect: (RichMessage) -> Void = { _ in }
-    /// The last row: return the pane to the latest position (owner 2026-10-25).
+    /// Fixed footer: return the pane to the latest position (owner 2026-10-25,
+    /// pinned to the bottom 2026-10-31).
     var onJumpLatest: () -> Void = {}
 
     static let width: CGFloat = 300
-    /// Identity of the fixed last row, which is not a prompt.
+    /// Identity of the fixed footer row, which is not a prompt.
     static let latestRowID = "corral-prompts-latest"
     /// Over content the card leaves part of the narrow pane visible.
     static let overContentWidthFraction: CGFloat = 0.6
@@ -108,7 +109,6 @@ struct MacPromptsCard: View {
                         ForEach(prompts) { prompt in
                             row(prompt).id(prompt.id)
                         }
-                        latestRow.id(Self.latestRowID)
                     }
                     .nativeOverlayScrollers()
                     .interfacePadding(Self.rowInset)
@@ -118,11 +118,19 @@ struct MacPromptsCard: View {
                 .frame(height: min(max(listHeight, 1), maxListHeight))
                 .task(id: prompts.last?.id) {
                     await Task.yield()
-                    guard !Task.isCancelled, prompts.last != nil else { return }
-                    // Anchor the fixed latest row, so it is visible with the
-                    // newest prompt directly above it.
-                    proxy.scrollTo(Self.latestRowID, anchor: .bottom)
+                    guard !Task.isCancelled, let lastID = prompts.last?.id else { return }
+                    // The latest row is a fixed footer outside the scroll view,
+                    // so anchor the newest prompt at the bottom instead.
+                    proxy.scrollTo(lastID, anchor: .bottom)
                 }
+            }
+            // Fixed footer: returns to the latest message, never scrolls away.
+            VStack(spacing: 0) {
+                Divider()
+                    .opacity(0.4)
+                latestRow
+                    .id(Self.latestRowID)
+                    .interfacePadding(Self.rowInset)
             }
         }
         .frame(width: width)
@@ -199,7 +207,7 @@ struct MacPromptsCard: View {
         .help(overContent ? Text(verbatim: Self.hoverText(prompt)) : Text("mac.prompts.jump"))
     }
 
-    /// Fixed last row: returns the pane to the latest position, never to a
+    /// Fixed footer: returns the pane to the latest position, never to a
     /// prompt (owner requirement 2026-10-25). A docked card stays open; one
     /// floating over content closes first so the landing is actually seen.
     private var latestRow: some View {

@@ -275,8 +275,49 @@ final class ConversationSendCoordinatorTests: XCTestCase {
         XCTAssertEqual(store.sentImages.map(\.commandID), [commandID])
         XCTAssertEqual(store.appliedStatuses.map(\.status), ["delivered"])
         XCTAssertEqual(store.messages.first(where: { $0.commandID == commandID })?.delivery, .sent)
+        // Image-only must still submit: the pasted path alone never reaches
+        // the assistant. The submit carries no bubble of its own.
+        XCTAssertEqual(store.sentTexts.map(\.text), [""])
         XCTAssertTrue(display.restoredImageBatches.isEmpty)
         XCTAssertEqual(display.clearedErrorCount, 1)
+    }
+
+    func testImageOnlySubmitsComposerAfterImages() async {
+        store.supportsCommandReceipts = true
+        let images = [StagedSendImage(id: UUID(), base64: "a", commandID: nil)]
+
+        guard let plan = coordinator.beginComposerSend(
+            store: store, display: display, text: "",
+            images: images, isBusy: false, isHostReady: true
+        ) else { return XCTFail("begin must succeed") }
+        XCTAssertNil(plan.text)
+
+        await coordinator.runComposerSend(plan, store: store, display: display)
+
+        XCTAssertEqual(store.orderedEvents, ["image:a", "text:"])
+        XCTAssertEqual(store.sentTexts.count, 1)
+        XCTAssertTrue(display.restoredImageBatches.isEmpty)
+        XCTAssertEqual(display.clearedErrorCount, 1)
+    }
+
+    func testImageOnlySubmitFailureShowsErrorWithoutRestoring() async {
+        store.supportsCommandReceipts = true
+        store.sendTextError = URLError(.timedOut)
+        let images = [StagedSendImage(id: UUID(), base64: "a", commandID: nil)]
+
+        guard let plan = coordinator.beginComposerSend(
+            store: store, display: display, text: "",
+            images: images, isBusy: false, isHostReady: true
+        ) else { return XCTFail("begin must succeed") }
+
+        await coordinator.runComposerSend(plan, store: store, display: display)
+
+        // The image paste landed; only the submit failed, so nothing returns
+        // to the composer (re-sending would duplicate the turn).
+        XCTAssertEqual(store.sentImages.count, 1)
+        XCTAssertEqual(store.sentTexts.count, 1)
+        XCTAssertTrue(display.restoredImageBatches.isEmpty)
+        XCTAssertEqual(display.errors.count, 1)
     }
 
     func testPartialImageFailureRestoresOnlyUnsentSuffix() async throws {

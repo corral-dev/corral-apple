@@ -74,8 +74,15 @@ final class TerminalTouchInteraction: NSObject, UIGestureRecognizerDelegate {
         guard gesture.state == .began else { return }
         cancelScrolling()
         // SwiftTerm's original target records the native hit and shows its
-        // standard menu. Run after all targets, then use its Select action to
-        // start a word selection directly, retaining its handles/edge scroll.
+        // standard menu. That menu is built before any selection exists, so
+        // it offers Paste/Select/Select All and no Copy. Dismiss it here so
+        // the menu presented after the word selection below is built with an
+        // active selection and offers Copy (owner report 2026-11-04: selected
+        // text with handles but no Copy item). Run the Select action after all
+        // targets, retaining SwiftTerm's handles/edge scroll.
+        if UIMenuController.shared.isMenuVisible {
+            UIMenuController.shared.hideMenu()
+        }
         DispatchQueue.main.async { [weak self] in
             guard let terminal = self?.terminal, !terminal.isHidden else { return }
             terminal.select(nil)

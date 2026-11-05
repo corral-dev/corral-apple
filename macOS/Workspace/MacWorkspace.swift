@@ -864,11 +864,21 @@ final class MacWorkspace {
     private func loadRuntimes(_ client: RemoteClient) async {
         let generation = layoutGeneration
         let host = hostID
-        guard let data = try? await client.call(WireProtocol.mRuntimesList) as? [String: Any],
-              let items = data["runtimes"] as? [[String: Any]] else { return }
-        guard !Task.isCancelled, appModel?.client === client, hostID == host,
-              layoutGeneration == generation else { return }
-        runtimes = items.compactMap { try? RemoteJSONDecoder.decode(RuntimeEntry.self, from: $0) }.filter(\.isActive)
+        var attempt = 0
+        while !Task.isCancelled {
+            guard appModel?.client === client, hostID == host,
+                  layoutGeneration == generation else { return }
+            if let data = try? await client.call(WireProtocol.mRuntimesList) as? [String: Any],
+               let items = data["runtimes"] as? [[String: Any]] {
+                guard !Task.isCancelled, appModel?.client === client, hostID == host,
+                      layoutGeneration == generation else { return }
+                runtimes = items.compactMap { try? RemoteJSONDecoder.decode(RuntimeEntry.self, from: $0) }.filter(\.isActive)
+                return
+            }
+            attempt += 1
+            if attempt >= 8 { return }
+            try? await Task.sleep(for: .milliseconds(500 * attempt))
+        }
     }
 
     private func pullLayout() async {

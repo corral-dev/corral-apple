@@ -11,7 +11,7 @@ Corral's Apple detail initialization owns this defect, not SessKit, image
 creation or Markdown syntax. The owner capture shows a Claude assistant reply
 with image labels (comparison, A1, A2, A3) but no images or loading placeholders.
 
-## Verified evidence
+## Initial investigation evidence
 
 - The matching native Claude assistant record contains five ordinary Markdown
   image declarations, with absolute local PNG paths. Its body is 1,453 UTF-8
@@ -47,7 +47,7 @@ as the URL attribute for a Markdown image. That attribute is not itself the
 `NSTextAttachment` inserted by Corral's image loader. The investigation checked
 Apple's documentation and the installed Foundation behavior separately.
 
-## Scope and acceptance limits
+## Initial investigation scope
 
 - iPhone/iPad: the production selected-conversation path has the confirmed
   initialization defect and matches the owner capture. the paired iPhone was
@@ -89,7 +89,8 @@ message-reference containment check.
 The detail prepares its image loader and draft before the existing-store return.
 The unreachable duplicate injected-store setup is removed. Existing stores remain
 container-owned; repeated preparation neither reloads the draft over current input
-nor replaces the loader/store. No host, parser or navigation behavior changes.
+nor replaces the loader/store. No native-history parser, host or navigation
+behavior changes.
 
 `MessageBubbleLayoutTests` mounts the production `SessionDetailView` with an
 injected store, without supplying an image-loader environment. Five cached image
@@ -125,21 +126,60 @@ reported body confirms ten `imageURL` runs for five declarations: each label is
 followed by a synthetic newline that inherited the same image attribute.
 This is a second rendering defect previously hidden by the nil loader.
 
-Insert structural separators with Foundation's attributed-string
-[`insert(_:at:)`](https://developer.apple.com/documentation/foundation/attributedstring/insert(_:at:))
-instead of the inheriting character-view insertion. An explicit unstyled separator
-must not become an image declaration. Retain intentional repeated references and
-whitespace alt labels; do not deduplicate by filename or drop all whitespace runs.
+The reusable mutation/attribute boundary and regression requirements are recorded
+in the [Swift standard](~/Codes/_standards/swift.md#structural-separators-must-not-become-media-references).
+Corral inserts explicit unstyled separators instead of inheriting image attributes.
 The native Mac text-network probe now verifies five declarations produce five
 image runs, two intentional references to the same URL stay two images, and a
 whitespace alt label is retained. Its existing 560 paragraph/list width/font
 transitions also pass. The nine-case iOS Markdown suite adds the same count and
-separator assertions. The final installed window still needs to be recaptured.
+separator assertions. Re-running the exact reported body against the corrected
+production Markdown source returns five image runs, not ten.
 
 ## Delivery
 
-Mac public release and iPhone/iPad artifact delivery are in progress. Do not
-interpret this record or a build success as installed or visual acceptance.
+Repair `f29be8d` is shipped from release commit `47b177c`, with durable release
+receipt `20261103-171823`.
+
+- **Mac 0.3.162 (167):** universal Developer ID Release, notarized app and DMG,
+  published [download](https://github.com/corral-dev/corral-apple/releases/tag/mac-v0.3.162)
+  and signed Sparkle feed. The installed executable matches the preparation
+  receipt and its active client reports ready local control/data. Independent
+  downloads of the 16,851,767-byte DMG and appcast match GitHub's SHA-256 digests;
+  the newest feed item is 0.3.162 with the signed update ZIP.
+- **iPhone/iPad 1.0.212 (224):** signature/profile validation and AppShelf upload
+  succeeded (release 427, delivery job `33ba111706fe82fac50df64a`). The actual
+  signed app was also installed on the paired iPad; CoreDevice independently
+  reads back version/build 1.0.212/224. Direct iPhone installation failed because
+  the device is unavailable. [Safari installation](the private install shelf)
+  remains available after passkey sign-in. No iPhone installation is claimed.
+- Full release Debug/static-analysis, universal Mac Release and generic iOS
+  Release logs were inspected. Only the individually assessed native Markdown,
+  serial camera and no-AppIntents/build-tool diagnostics remain; no new warning
+  was introduced by these fixes.
+
+### Remaining visual acceptance and diagnostic improvement
+
+The fresh installed Mac capture shows a connected session list with no selected
+conversation, not the affected image message. The earlier Debug main-window
+capture demonstrated the initialization repair and exposed the second duplicate-
+image defect; the subsequent exact-body run-count regression verifies the latter
+mechanism, not a fresh installed-message visual pass.
+
+A later same-source Debug media probe connected to the real host and loaded nine
+referenced previews, but selected seq 352, a newer bare-path message, and reported
+zero inline attachments. Its `last referenced message` heuristic is not a valid
+selector for the original Markdown-image report. This failed acceptance assertion
+is not reported as a product pass. Improvement item: select an explicitly named
+message containing explicit image declarations and mount `SessionDetailView`,
+rather than a bare-mention `ChatView` fixture. The installed Release was restored
+and is the sole running Corral GUI process after the probe.
+
+Fresh iPad captures show its lock screen; iPhone capture fails with CoreDevice
+4016. Physical iPhone/iPad image appearance and the installed Mac message remain
+unverified. No pointer, unlock, virtual display or user-history mutation was used;
+the task-booted simulator is shut down. These limits do not negate publication or
+installation evidence, but must not be described as completed screen acceptance.
 
 The current presentation requirement remains [Inline cited images](../UI_DESIGN_KNOWLEDGE_BASE.md#inline-cited-images-owner-correction-2026-10-27).
 The separate history-lifecycle investigation is [iPhone detail loses history](2026-11-02-claude-detail-empty.md).

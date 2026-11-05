@@ -6,6 +6,20 @@ next version's section. A `Release: minor` or `Release: major` line requests a
 larger version step; `Release: hold <reason>` keeps the changes unreleased until
 the named acceptance is done.
 
+## Mac 0.3.163 (168)
+
+### English
+
+- Handoff menu shows loading until the assistant catalog arrives (even if empty), with single-flight retry, so a transient fetch failure never reads as no assistants installed.
+- Mac prompts card pins the back-to-latest row as a fixed footer below the scroll list.
+- Sending photos without text now submits the turn: images send first, then an empty-text submit flushes them in order, so single-image messages arrive instead of sitting in the composer. Retries restore only unsent images to avoid duplicates.
+
+### 简体中文
+
+- 接力菜单在助手目录返回前显示加载态（含空目录情况），失败单次重试，短暂拉取失败不再被误读为“没有安装助手”。
+- Mac 提问卡片将“回到最新”行固定为滚动列表下方的底栏。
+- 纯图片消息现在会正常发出：图片先发送，再用空文本提交按序刷出，单图不再卡在输入框；重试只恢复未发出的图片，避免重复。
+
 ## Mac 0.3.162 (167) / iPhone 1.0.212 (224)
 
 ### English

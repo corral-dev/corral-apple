@@ -106,6 +106,11 @@ struct SessionActionsMenuView: View {
     let session: SessionSummary
     /// 接力候选（含来源自身；调用方应在 runtimes.list 回来后传入，已做 available 过滤亦可）。
     var runtimes: [RuntimeEntry]
+    /// True once `runtimes.list` has returned (even if the filtered list is
+    /// empty). False means the catalog hasn't loaded yet — the menu must show
+    /// loading, not "no assistants", so a transient fetch failure never reads
+    /// as "nothing installed".
+    var runtimesLoaded: Bool = false
     var access: String?
     var clientReady: Bool
     var isBusy: Bool
@@ -223,7 +228,15 @@ struct SessionActionsMenuView: View {
     @ViewBuilder
     private var handoffSection: some View {
         Menu("session.actions.handoff") {
-            if targets.isEmpty {
+            if !runtimesLoaded {
+                // Catalog not back yet (first open, reconnect, transient
+                // `unavailable`): show loading so it never reads as "nothing
+                // installed". Reuses the existing loading string, no new key.
+                HStack {
+                    ProgressView().controlSize(.small)
+                    Text("session.new.loading")
+                }
+            } else if targets.isEmpty {
                 Text("session.actions.handoff.empty")
             } else {
                 ForEach(targets) { target in

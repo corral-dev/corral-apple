@@ -405,6 +405,14 @@ struct MacPaneHeader: View {
         .onTapGesture { focusPane() }
         .accessibilityAddTraits(isFocused ? .isSelected : [])
         .task { await loadRuntimes() }
+        .onChange(of: workspace.runtimes.map(\.id)) { _, _ in
+            // Workspace catalog lands after panes mount (one fetch per
+            // connection): adopt it so a pane mounted early never stays on an
+            // empty fallback while the workspace already has the list.
+            if runtimes.isEmpty, !workspace.runtimes.isEmpty {
+                runtimes = workspace.runtimes
+            }
+        }
     }
 
     /// The title opens and closes Your prompts; the chevron shows the card's
@@ -585,10 +593,28 @@ struct MacPaneHeader: View {
             runtimes = workspace.runtimes
             return
         }
-        guard runtimes.isEmpty, let client = appModel.client,
-              let data = try? await client.call(WireProtocol.mRuntimesList) as? [String: Any],
-              let items = data["runtimes"] as? [[String: Any]] else { return }
-        runtimes = items.compactMap { try? RemoteJSONDecoder.decode(RuntimeEntry.self, from: $0) }.filter(\.isActive)
+        if !runtimes.isEmpty { return }
+        guard let client = appModel.client else { return }
+        let captured = client
+        var attempt = 0
+        while runtimes.isEmpty, !Task.isCancelled {
+            guard appModel.client === captured else { return }
+            if !workspace.runtimes.isEmpty {
+                runtimes = workspace.runtimes
+                return
+            }
+            if let data = try? await captured.call(WireProtocol.mRuntimesList) as? [String: Any],
+               let items = data["runtimes"] as? [[String: Any]] {
+                guard appModel.client === captured, !Task.isCancelled else { return }
+                runtimes = items.compactMap { try? RemoteJSONDecoder.decode(RuntimeEntry.self, from: $0) }.filter(\.isActive)
+                // Empty here means the host truly returned nothing usable;
+                // stop retrying and let the disabled menu state stand.
+                return
+            }
+            attempt += 1
+            if attempt >= 8 { return }
+            try? await Task.sleep(for: .milliseconds(500 * attempt))
+        }
     }
 }
 

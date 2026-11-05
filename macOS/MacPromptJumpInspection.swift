@@ -56,7 +56,7 @@ enum MacPromptJumpInspection {
                 try? data.write(to: URL(fileURLWithPath: "/tmp/corral-mac-prompt-jump.json"), options: .atomic)
             }
         }
-        // The card's fixed last row is not a prompt: it must return the pane to
+        // The card's fixed footer is not a prompt: it must return the pane to
         // the latest messages (owner requirement 2026-10-25). Move away from the
         // bottom first, so the return is measurable.
         if ProcessInfo.processInfo.arguments.contains("-CorralInspectPromptLatest") {

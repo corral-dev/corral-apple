@@ -240,14 +240,29 @@ struct ConversationSendCoordinator: Sendable {
             if let textPlan = plan.text {
                 textSendStarted = true
                 try await finishTextSend(textPlan, store: store)
+            } else {
+                // Image-only: `input.image` only pastes the saved path into
+                // the composer, so without a submit the path sits there
+                // forever (2026-11-04: single-image sends never arrived while
+                // image+text worked, because only the text path submitted).
+                // Flush with a submit-only empty text in the same ordered
+                // queue; the host presses one guarded Enter and reports it
+                // under its own receipt, leaving the delivered image bubbles
+                // untouched.
+                textSendStarted = true
+                try await store.sendText("", submit: true, commandID: nil)
             }
             display.clearError()
         } catch {
             // The failed image may already be delivered. Keep its command ID
             // for the user's explicit retry; only drop acknowledged successes.
-            display.restoreImages(
-                ComposerSendPolicy.unsentImageSuffix(images: plan.images, sentCount: sentImageCount)
-            )
+            // A submit-only failure after every image landed restores nothing:
+            // the paths are already in the host composer, and re-sending them
+            // would duplicate the turn.
+            let unsent = ComposerSendPolicy.unsentImageSuffix(images: plan.images, sentCount: sentImageCount)
+            if !unsent.isEmpty {
+                display.restoreImages(unsent)
+            }
             if let textPlan = plan.text {
                 handleOutboundFailure(
                     error,
