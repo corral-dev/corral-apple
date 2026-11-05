@@ -101,6 +101,71 @@ final class StreamTerminalView: SwiftTerm.TerminalView {
         super.mouseDown(with: event)
     }
 
+    // MARK: - IME anchoring under Metal
+
+    /// SwiftTerm's Metal path draws the cursor itself and leaves `caretView`
+    /// (which `firstRect` and the marked-text overlay anchor to) frozen at
+    /// its pre-Metal frame, so the input-method candidate window and the
+    /// inline composition preview appear at a stale position. While the Metal
+    /// renderer is active, anchor both to the live cursor from the content
+    /// snapshot instead; otherwise defer to SwiftTerm.
+    override func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
+        actualRange?.pointee = range
+        if isUsingMetalRenderer, let cursor = liveCursorRect(), let window {
+            return window.convertToScreen(convert(cursor, to: nil))
+        }
+        return super.firstRect(forCharacterRange: range, actualRange: actualRange)
+    }
+
+    override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
+        guard isUsingMetalRenderer, let cursor = liveCursorRect() else { return }
+        repositionMarkedTextOverlay(cursorMaxY: cursor.maxY, caretX: cursor.minX, cellHeight: cursor.height)
+    }
+
+    /// Cursor cell in this view's coordinates, mirroring SwiftTerm's cursor
+    /// math (non-flipped: row 0 at the top). Nil when the snapshot is
+    /// unavailable or the cursor is outside the visible viewport, in which
+    /// case the caller falls back to SwiftTerm's answer.
+    private func liveCursorRect() -> NSRect? {
+        guard let snapshot = terminalContentSnapshot(region: .viewport),
+              let top = snapshot.rows.first else { return nil }
+        let screenRow = snapshot.cursorRow - top.absoluteRow
+        guard screenRow >= 0, screenRow < snapshot.rows.count else { return nil }
+        let row = snapshot.rows[screenRow]
+        guard row.absoluteRow == snapshot.cursorRow else { return nil }
+        let col = min(max(0, snapshot.cursorColumn), row.cells.count)
+        let xCells = row.cells.prefix(col).reduce(0) { $0 + max(0, $1.width) }
+        let cell = TerminalAppearance.cellSize(fontSize: font.pointSize, scale: window?.backingScaleFactor)
+        let width = col < row.cells.count
+            ? CGFloat(max(1, row.cells[col].width)) * cell.width
+            : cell.width
+        return NSRect(
+            x: CGFloat(xCells) * cell.width,
+            y: bounds.height - CGFloat(screenRow + 1) * cell.height,
+            width: width,
+            height: cell.height
+        )
+    }
+
+    /// The overlay is SwiftTerm-private, so it is found by class name and
+    /// only its stale origin/exclusion (both derived from the frozen caret)
+    /// are corrected; size and text stay as SwiftTerm laid them out.
+    private func repositionMarkedTextOverlay(cursorMaxY: CGFloat, caretX: CGFloat, cellHeight: CGFloat) {
+        guard let overlay = subviews.first(where: {
+            $0 is NSTextView && NSStringFromClass(type(of: $0)).contains("DictationOverlay")
+        }) as? NSTextView,
+              let container = overlay.textContainer else { return }
+        var frame = overlay.frame
+        frame.origin.y = cursorMaxY - frame.height
+        overlay.frame = frame
+        let overlayX = frame.minX
+        let exclusionWidth = max(0, caretX - overlayX)
+        container.exclusionPaths = exclusionWidth > 0
+            ? [NSBezierPath(rect: NSRect(x: 0, y: 0, width: exclusionWidth, height: cellHeight + 1))]
+            : []
+    }
+
     override func paste(_ sender: Any) {
         guard let text = NSPasteboard.general.string(forType: .string),
               !text.isEmpty else { return }

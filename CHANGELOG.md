@@ -6,6 +6,16 @@ next version's section. A `Release: minor` or `Release: major` line requests a
 larger version step; `Release: hold <reason>` keeps the changes unreleased until
 the named acceptance is done.
 
+## Mac 0.3.165 (170) / iPhone 1.0.214 (226)
+
+### English
+
+- Fix CJK candidate-window and inline composition placement while the Metal terminal renderer is active: anchor to the live cursor instead of the frozen caret.
+
+### 简体中文
+
+- 修复 Metal 终端渲染下中文候选窗与行内组字位置：改为按实时光标定位，不再跟随冻结的旧光标。
+
 ## Mac 0.3.164 (169)
 
 ### English
