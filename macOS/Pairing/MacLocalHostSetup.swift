@@ -192,6 +192,18 @@ nonisolated enum MacHostCommand {
         return (data["host_id"] as? String).flatMap { $0.isEmpty ? nil : $0 }
     }
 
+    /// Grants only an explicitly chosen local folder, guarded by the host identity.
+    static func allowProject(_ folder: URL, hostID: String, corral: URL) async throws -> String {
+        let output = try await run(corral, ["remote", "allow-project", folder.path,
+                                          "--host-id", hostID, "--json"], timeout: 20)
+        let data = try envelopeData(output.stdout, fallback: output.stderr)
+        guard output.status == 0, data["host_id"] as? String == hostID,
+              let path = data["path"] as? String, !path.isEmpty else {
+            throw Failure.message(String(localized: "error.unknown"))
+        }
+        return path
+    }
+
     /// Turns the remote service on (it registers its own login autostart) and
     /// returns a fresh pairing link.
     static func pairingLink(corral: URL) async throws -> String {

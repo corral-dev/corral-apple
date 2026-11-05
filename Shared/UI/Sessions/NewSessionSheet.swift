@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 
 struct NewSessionSheet: View {
     @Environment(\.interfaceScale) private var interfaceScale
@@ -16,6 +19,9 @@ struct NewSessionSheet: View {
     @State private var creatingComboID: String?
     #if os(macOS)
     @State private var showProjects = false
+    @State private var customProject: ProjectEntry?
+    @State private var localCorral: URL?
+    @State private var isChoosingFolder = false
     #endif
     @State private var unconfirmedCreation: PendingSessionCreation?
     @State private var errorMessage: String?
@@ -99,7 +105,16 @@ struct NewSessionSheet: View {
 
     private var usableRuntimes: [RuntimeEntry] { options.runtimes.filter(\.isUsable) }
 
-    private var canStart: Bool { options.canCreate }
+    private var canStart: Bool {
+        #if os(macOS)
+        if isChoosingFolder { return false }
+        if let customProject, options.selectedProject == customProject.path {
+            return options.isReady && !options.isLoading
+                && usableRuntimes.contains { $0.id == options.selectedRuntime }
+        }
+        #endif
+        return options.canCreate
+    }
 
     #if os(macOS)
     /// A desktop dialog in the quick filters' form: a Quick Start row of
@@ -151,36 +166,10 @@ struct NewSessionSheet: View {
                 }
                 .interfacePadding(.bottom, Space.md)
                 macFieldLabel("session.new.project")
-                HStack(spacing: 6 * interfaceScale) {
-                    MacFilterChoices {
-                        ForEach(quickProjects) { project in
-                            MacQuickFilterButton(selected: project.path == options.selectedProject) {
-                                Text(verbatim: project.displayName)
-                            } action: {
-                                options.selectedProject = project.path
-                            }
-                            .help(Text(verbatim: project.path))
-                        }
+                projectChoices
+                    .overlay(alignment: .leading) {
+                        if options.isLoading && options.projects.isEmpty { ProgressView().interfaceControlSize(.small) }
                     }
-                    // Keep the current project visible outside the scrolling
-                    // quick set, just like the sidebar's pinned picker entry.
-                    MacQuickFilterButton(selected: selectedProject != nil) {
-                        projectSummaryLabel
-                    } action: {
-                        showProjects = true
-                    }
-                    .layoutPriority(1)
-                    .accessibilityLabel(Text("session.new.project"))
-                    .accessibilityValue(projectSummaryLabel.title)
-                    .accessibilityIdentifier("corral.newSession.project")
-                    .help(selectedProject.map { Text(verbatim: $0.path) } ?? projectSummaryLabel.title)
-                    .popover(isPresented: $showProjects) {
-                        MacNewSessionProjectPopover(projects: options.projects, selection: $options.selectedProject)
-                    }
-                }
-                .overlay(alignment: .leading) {
-                    if options.isLoading && options.projects.isEmpty { ProgressView().interfaceControlSize(.small) }
-                }
                 creationRecovery
                 if let message = errorMessage ?? options.errorMessage {
                     HStack(alignment: .firstTextBaseline) {
@@ -195,7 +184,7 @@ struct NewSessionSheet: View {
                     }
                 }
             }
-            .disabled(options.isLoading || isCreating)
+            .disabled(options.isLoading || isCreating || isChoosingFolder)
             .interfacePadding(.horizontal, Space.xl)
             .interfacePadding(.top, recentCombos.isEmpty ? 0 : Space.lg)
             .interfacePadding(.bottom, Space.xl)
@@ -205,6 +194,95 @@ struct NewSessionSheet: View {
         }
         .interfaceFrame(width: 560)
         .focusEffectDisabled()
+        .task {
+            guard !MacHostCommand.isSandboxed,
+                  let corral = await MacHostCommand.locateCorral(),
+                  await MacHostCommand.localHostID(corral: corral) == host.hostID,
+                  !Task.isCancelled else { return }
+            localCorral = corral
+        }
+    }
+
+    /// Kept separate from the rest of the dialog: one long modifier chain in
+    /// this position made the accessibility overloads ambiguous (Xcode 27.2).
+    private var projectChoices: some View {
+        HStack(spacing: 6 * interfaceScale) {
+            MacFilterChoices {
+                ForEach(quickProjects) { project in
+                    MacQuickFilterButton(selected: project.path == options.selectedProject) {
+                        Text(verbatim: project.displayName)
+                    } action: {
+                        options.selectedProject = project.path
+                    }
+                    .help(Text(verbatim: project.path))
+                }
+            }
+            // Keep the current project visible outside the scrolling quick
+            // set, just like the sidebar's pinned picker entry.
+            MacQuickFilterButton(selected: selectedProject != nil) {
+                projectSummaryLabel
+            } action: {
+                showProjects = true
+            }
+            .layoutPriority(1)
+            .accessibilityLabel(Text("session.new.project"))
+            .accessibilityValue(projectSummaryLabel.title)
+            .accessibilityIdentifier("corral.newSession.project")
+            .help(selectedProject.map { Text(verbatim: $0.path) } ?? projectSummaryLabel.title)
+            .popover(isPresented: $showProjects) {
+                MacNewSessionProjectPopover(
+                    onOpenFolder: popoverOpenFolder,
+                    projects: macProjects, selection: $options.selectedProject
+                )
+            }
+        }
+    }
+
+    private var popoverOpenFolder: (() -> Void)? {
+        guard localCorral != nil else { return nil }
+        return openFolder
+    }
+
+    private var macProjects: [ProjectEntry] {
+        ProjectEntry.catalog(options.projects, including: customProject)
+    }
+
+    private func openFolder() {
+        guard let corral = localCorral, !isChoosingFolder, !isCreating else { return }
+        showProjects = false
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+        panel.prompt = String(localized: "session.new.project.open_folder")
+        if !options.selectedProject.isEmpty {
+            panel.directoryURL = URL(fileURLWithPath: options.selectedProject, isDirectory: true)
+        }
+        isChoosingFolder = true
+        let completion: (NSApplication.ModalResponse) -> Void = { response in
+            guard response == .OK, let folder = panel.url else {
+                isChoosingFolder = false
+                return
+            }
+            Task { @MainActor in
+                defer { isChoosingFolder = false }
+                do {
+                    let path = try await MacHostCommand.allowProject(folder, hostID: host.hostID, corral: corral)
+                    guard !Task.isCancelled, appModel.connectedHostID == host.hostID else { return }
+                    customProject = ProjectEntry(path: path, name: nil)
+                    options.selectedProject = path
+                    errorMessage = nil
+                } catch {
+                    errorMessage = error.localizedDescription
+                }
+            }
+        }
+        if let window = NSApp.keyWindow {
+            panel.beginSheetModal(for: window, completionHandler: completion)
+        } else {
+            panel.begin(completionHandler: completion)
+        }
     }
 
     /// An action, not a choice: it never shows a selected state, and a click
@@ -251,7 +329,7 @@ struct NewSessionSheet: View {
     }
 
     private var selectedProject: ProjectEntry? {
-        options.projects.first { $0.path == options.selectedProject }
+        macProjects.first { $0.path == options.selectedProject }
     }
 
     private var projectSummaryLabel: ProjectFilterSummaryLabel {
@@ -450,11 +528,16 @@ struct NewSessionSheet: View {
 
     private func create() async {
         guard canStart else { return }
+        #if os(macOS)
+        let projectName = selectedProject?.name
+        #else
+        let projectName = options.projects.first { $0.path == options.selectedProject }?.name
+        #endif
         await createSession(
             runtimeID: options.selectedRuntime,
             runtimeName: options.runtimes.first { $0.id == options.selectedRuntime }?.name,
             projectPath: options.selectedProject,
-            projectName: options.projects.first { $0.path == options.selectedProject }?.name
+            projectName: projectName
         )
     }
 

@@ -71,7 +71,7 @@ final class TerminalTouchInteraction: NSObject, UIGestureRecognizerDelegate {
     }
 
     @objc private func selectText(_ gesture: UILongPressGestureRecognizer) {
-        guard gesture.state == .began else { return }
+        guard gesture.state == .began, let terminal else { return }
         cancelScrolling()
         // SwiftTerm's original target records the native hit and shows its
         // standard menu. That menu is built before any selection exists, so
@@ -80,8 +80,15 @@ final class TerminalTouchInteraction: NSObject, UIGestureRecognizerDelegate {
         // active selection and offers Copy (owner report 2026-11-04: selected
         // text with handles but no Copy item). Run the Select action after all
         // targets, retaining SwiftTerm's handles/edge scroll.
-        if UIMenuController.shared.isMenuVisible {
-            UIMenuController.shared.hideMenu()
+        // UIMenuController is deprecated since iOS 16 (min is iOS 17): dismiss
+        // via the presenting UIEditMenuInteraction instead.
+        var queue: [UIView] = [terminal]
+        while !queue.isEmpty {
+            let view = queue.removeFirst()
+            for interaction in view.interactions {
+                (interaction as? UIEditMenuInteraction)?.dismissMenu()
+            }
+            queue.append(contentsOf: view.subviews)
         }
         DispatchQueue.main.async { [weak self] in
             guard let terminal = self?.terminal, !terminal.isHidden else { return }

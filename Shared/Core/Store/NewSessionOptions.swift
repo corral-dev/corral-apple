@@ -11,6 +11,14 @@ nonisolated struct ProjectEntry: Codable, Identifiable, Sendable {
         return path.isEmpty ? "—" : (path as NSString).lastPathComponent
     }
 
+    /// A folder chosen through this Mac's native panel is not in the host
+    /// catalog; keep it beside the catalog until the host records it.
+    static func catalog(_ projects: [ProjectEntry], including custom: ProjectEntry?) -> [ProjectEntry] {
+        guard let custom, !custom.path.isEmpty,
+              !projects.contains(where: { $0.path == custom.path }) else { return projects }
+        return [custom] + projects
+    }
+
     /// New Session project search: case-insensitive on the shown name or the path.
     static func matching(_ projects: [ProjectEntry], query: String) -> [ProjectEntry] {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)

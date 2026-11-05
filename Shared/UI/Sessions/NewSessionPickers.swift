@@ -158,6 +158,7 @@ struct MacProjectPickerRow: View {
 /// The whole project catalog behind the New Session dialog's More button:
 /// searchable, and one click (or Return on the first match) chooses and closes.
 struct MacNewSessionProjectPopover: View {
+    var onOpenFolder: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @Environment(\.interfaceScale) private var interfaceScale
     let projects: [ProjectEntry]
@@ -200,6 +201,15 @@ struct MacNewSessionProjectPopover: View {
             .listStyle(.plain)
             .overlay {
                 if visible.isEmpty { ContentUnavailableView.search(text: query) }
+            }
+            if let onOpenFolder {
+                Divider()
+                Button(action: onOpenFolder) {
+                    Label("session.new.project.open_folder", systemImage: "folder")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .accessibilityIdentifier("corral.newSession.openFolder")
+                .padding(Space.md)
             }
         }
         .frame(width: 360, height: 420)

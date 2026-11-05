@@ -91,6 +91,23 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
     var onManualScroll: (@MainActor @Sendable () -> Void)?
     private var readScrollMonitor: Any?
     private var frontObservers: [NSObjectProtocol] = []
+    private var metalEnableAttempted = false
+
+    /// Metal is disabled by default in SwiftTerm 1.99.1 and must be enabled
+    /// after the view gains a window (`setUseMetal` throws on no device /
+    /// pipeline). Failure keeps the existing CoreGraphics path, so a missing
+    /// GPU never breaks the terminal. Called from `viewDidMoveToWindow`.
+    private func enableMetalIfNeeded() {
+        guard !metalEnableAttempted, window != nil else { return }
+        metalEnableAttempted = true
+        do {
+            try terminal.setUseMetal(true)
+        } catch {
+            #if DEBUG
+            debugTrace("metal enablement fell back to CoreGraphics: \(error)")
+            #endif
+        }
+    }
 
     init() {
         terminal = StreamTerminalView(frame: .zero, font: TerminalAppearance.font(size: TerminalAppearance.baseSize))
@@ -381,6 +398,7 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
         removeReadScrollMonitor()
         observeReadScrollIfNeeded()
         observeFront()
+        if window != nil { enableMetalIfNeeded() }
         // The pinned emulator owns its native render loop and visibility pause.
         guard window != nil, wantsKeyboardFocus else { return }
         focusTerminal()

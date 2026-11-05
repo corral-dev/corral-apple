@@ -4442,6 +4442,23 @@
         }
       }
     },
+    "session.new.project.open_folder" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open Folder…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开文件夹…"
+          }
+        }
+      }
+    },
     "session.new.project.search" : {
       "extractionState" : "manual",
       "localizations" : {

@@ -6,6 +6,30 @@ next version's section. A `Release: minor` or `Release: major` line requests a
 larger version step; `Release: hold <reason>` keeps the changes unreleased until
 the named acceptance is done.
 
+## Mac 0.3.164 (169)
+
+### English
+
+- Terminal panes now try the Metal GPU renderer first (falling back to CoreGraphics when unavailable), targeting choppy Pi TUI scrolling and streaming output. This is experimental pending frame-pacing acceptance; if rendering regresses, report the session and window state.
+- New Session can open any local folder from the More menu, not just registered projects.
+
+### 简体中文
+
+- 终端面板现在优先尝试 Metal GPU 渲染（不可用时回落 CoreGraphics），目标是 Pi TUI 滚动与流式输出卡顿。该改动为实验性，待帧率验收；如遇到渲染回退请上报会话与窗口状态。
+- 新建会话可从 More 菜单打开任意本地文件夹，不限于已登记项目。
+
+## iPhone 1.0.213 (225)
+
+### English
+
+- Sending photos without text now submits the turn on iPhone too: images send first, then an empty-text submit flushes them in order, so single-image messages arrive instead of sitting in the composer.
+- Long-pressing a word now offers Copy: the stale pre-selection menu is dismissed in the same gesture, so the menu is rebuilt with the selection active (iOS-only; Mac and TUI untouched).
+
+### 简体中文
+
+- iPhone 上纯图片消息现在也会正常发出：图片先发送，再用空文本提交按序刷出，单图不再卡在输入框。
+- 长按单词现在能正常选 Copy：同一手势内先收掉旧的预选菜单，选中后再建的菜单带有有效选区（仅 iPhone；Mac 与 TUI 不受影响）。
+
 ## Mac 0.3.163 (168)
 
 ### English

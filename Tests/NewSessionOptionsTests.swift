@@ -123,6 +123,22 @@ final class NewSessionOptionsTests: XCTestCase {
         XCTAssertFalse(ActiveRuntimeVisibility.isDormant(runtime: "", key: ""))
     }
 
+    func testCustomFolderJoinsCatalogOnceAndDisappearsWithTheChoice() {
+        let catalog = [ProjectEntry(path: "", name: "No project"),
+                       ProjectEntry(path: "/work/app", name: nil)]
+        let chosen = ProjectEntry(path: "/work/scratch", name: nil)
+        XCTAssertEqual(ProjectEntry.catalog(catalog, including: nil).map(\.path),
+                       ["", "/work/app"])
+        XCTAssertEqual(ProjectEntry.catalog(catalog, including: chosen).map(\.path),
+                       ["/work/scratch", "", "/work/app"])
+        // A catalog entry that already lists the folder is not duplicated.
+        XCTAssertEqual(ProjectEntry.catalog(catalog, including: catalog[1]).map(\.path),
+                       ["", "/work/app"])
+        XCTAssertEqual(ProjectEntry.catalog(catalog, including: ProjectEntry(path: "", name: "x")).count, 2)
+        XCTAssertEqual(ProjectEntry.catalog([], including: chosen).map(\.path), ["/work/scratch"])
+        XCTAssertEqual(ProjectEntry.catalog([], including: nil).count, 0)
+    }
+
     func testProjectSearchMatchesNameOrPathIgnoringCase() {
         let entries = [
             ProjectEntry(path: "", name: "No project"),
