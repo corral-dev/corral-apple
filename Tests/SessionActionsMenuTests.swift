@@ -137,6 +137,12 @@ final class SessionActionsMenuTests: XCTestCase {
         XCTAssertFalse(SessionActionsMenu.needsKimiNotice(runtimeID: "claude"))
     }
 
+    func testForkAndHandoffUseDistinctActionSymbols() {
+        XCTAssertEqual(SessionActionsMenu.forkSymbol, "arrow.triangle.branch")
+        XCTAssertEqual(SessionActionsMenu.handoffSymbol, "arrowshape.turn.up.right")
+        XCTAssertNotEqual(SessionActionsMenu.forkSymbol, SessionActionsMenu.handoffSymbol)
+    }
+
     // MARK: - 方法常量
 
     func testSessionCopyMethodName() {

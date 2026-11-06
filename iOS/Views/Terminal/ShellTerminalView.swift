@@ -11,16 +11,19 @@ struct ShellTerminalView: UIViewRepresentable {
     var isPresented = true
     var allowsInput = true
     var isAgent = false
+    var usesIdentityBackground = false
 
     func makeUIView(context: Context) -> ShellTerminalHost {
         let view = ShellTerminalHost(frame: .zero)
-        view.configure(presented: isPresented, allowsInput: allowsInput, isAgent: isAgent)
+        view.configure(presented: isPresented, allowsInput: allowsInput, isAgent: isAgent,
+                       usesIdentityBackground: usesIdentityBackground)
         view.bind(stream)
         return view
     }
 
     func updateUIView(_ view: ShellTerminalHost, context: Context) {
-        view.configure(presented: isPresented, allowsInput: allowsInput, isAgent: isAgent)
+        view.configure(presented: isPresented, allowsInput: allowsInput, isAgent: isAgent,
+                       usesIdentityBackground: usesIdentityBackground)
         if view.stream !== stream { view.bind(stream) }
     }
 
@@ -41,6 +44,7 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
     private var presented = true
     private var allowsInput = true
     private var isAgent = false
+    private var usesIdentityBackground = false
     private var scheme = TerminalColorScheme.dark
     private var touchInteraction: TerminalTouchInteraction?
     private var wheelBytes: [UInt8]?
@@ -81,7 +85,12 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
         stream = nil
     }
 
-    func configure(presented: Bool, allowsInput: Bool, isAgent: Bool) {
+    func configure(presented: Bool, allowsInput: Bool, isAgent: Bool,
+                   usesIdentityBackground: Bool = false) {
+        if self.usesIdentityBackground != usesIdentityBackground {
+            self.usesIdentityBackground = usesIdentityBackground
+            applyScheme()
+        }
         let revealed = !self.presented && presented
         self.presented = presented
         self.allowsInput = allowsInput
@@ -123,6 +132,7 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
         let changed = next.background != scheme.background
         scheme = next
         nativeBackgroundColor = Self.color(next.background)
+        backgroundOpacity = usesIdentityBackground ? 0 : 1
         nativeForegroundColor = Self.color(next.foreground)
         installColors(next.ansi.map { SwiftTerm.Color(red8: UInt16($0.red), green8: UInt16($0.green), blue8: UInt16($0.blue)) })
         keyboardAppearance = traitCollection.userInterfaceStyle == .dark ? .dark : .light

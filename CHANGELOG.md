@@ -6,6 +6,22 @@ next version's section. A `Release: minor` or `Release: major` line requests a
 larger version step; `Release: hold <reason>` keeps the changes unreleased until
 the named acceptance is done.
 
+## Mac 0.3.166 (172) / iPhone 1.0.215 (228)
+
+### English
+
+- Handoff no longer remains on a loading placeholder after catalog failures: show the cause and Retry, reload replaced connections, and share one catalog across Mac panes.
+- Fork Session now uses a branch symbol. Handoff uses a distinct onward arrow on iPhone and Mac.
+- Session panes now show a large, faint copy of the session title's emoji at the bottom-right of Chat and the agent terminal, on Mac and iPhone, to help recognize sessions without rereading titles. It stays behind text and never covers messages, terminal output, selections, or input.
+- Mac pane clicks focus the shown pane even when its frame sits under a migrated alias; message hover Copy pastes the original markdown, and existing local paths link to their folders. On iPhone, Copy pastes the message markdown source.
+
+### 简体中文
+
+- 接力目录加载失败后不再一直显示加载中：展示原因并提供重试，连接替换后重新加载，Mac 各分屏共用同一份目录。
+- 分叉会话改用分支图标，接力改用独立的向右交接箭头，iPhone 与 Mac 保持一致。
+- 会话面板右下角现在显示标题 emoji 的淡化大图标，Mac 与 iPhone 的聊天和原生终端都生效，不读标题也能认出会话。图标始终在文字底层，不遮挡消息、终端输出、选区与输入区。
+- Mac 点击分屏可正确聚焦可见面板；消息悬停复制粘贴原文，已存在的本地路径链接到其文件夹。iPhone 上复制粘贴消息的 markdown 原文。
+
 ## Mac 0.3.165 (170) / iPhone 1.0.214 (226)
 
 ### English

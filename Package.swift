@@ -81,6 +81,7 @@ let package = Package(
                 "PushEnvironmentTests.swift",
                 "RecentSessionComboStoreTests.swift",
                 "NewSessionOptionsTests.swift",
+                "RuntimeCatalogTests.swift",
                 "SessionCreationCoordinatorTests.swift",
                 "RemoteClientLifecycleTests.swift",
                 "ConnectionRecoveryTests.swift",

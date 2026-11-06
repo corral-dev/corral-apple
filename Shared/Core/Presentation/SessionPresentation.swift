@@ -5,6 +5,16 @@ import Foundation
 /// 工作目录就是展示用位置：`cwdDisplay` 优先（开发机已把 `~` 展开成可读
 /// 前缀），否则用 `cwd`。不做「项目根猜测」——子目录会话仍按真实目录展示。
 enum SessionPresentation {
+    /// Reuse one complete title emoji, never a runtime logo or an ASCII digit.
+    static func titleIcon(in title: String) -> String? {
+        title.first { character in
+            character.unicodeScalars.contains { scalar in
+                (scalar.properties.isEmoji && scalar.value > 0x7F)
+                    || scalar.value == 0x20E3 // Keycap sequence, not its bare digit.
+            }
+        }.map(String.init)
+    }
+
     /// 缩写目录里需要补父级才能认出的末级名（如 ios / cli / app-macos）。
     /// 命中即带父级；其余只取末级。过滤器引擎复用同一集合做无副作用的
     /// 路径标注；行展示仍走下方的共享窗口消歧表。

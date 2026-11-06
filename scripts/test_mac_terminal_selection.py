@@ -22,6 +22,15 @@ if not module.is_dir() or not library.is_file():
 
 with tempfile.TemporaryDirectory(prefix="corral-mac-terminal-selection-") as directory:
     executable = str(Path(directory) / "probe")
+    # Match the context-menu probe: the live IME anchor uses these exact metrics.
+    appearance = (ROOT / 'macOS/Terminal/TerminalEmulatorView.swift').read_text()
+    metric = appearance[appearance.index('    static func cellSize('):
+                        appearance.index('    static func widthFittingFontSize(')]
+    font = appearance[appearance.index('    static func font(size:'):
+                      appearance.index('    /// Pane background around the emulator')]
+    helper = Path(directory) / 'TerminalAppearance.swift'
+    helper.write_text('import AppKit\nimport CoreText\nenum TerminalAppearance {\n'
+                      + metric + font + '}\n')
     # Compile the production outcome enum without the unrelated network owner.
     stream_source = (ROOT / "Shared/Core/Terminal/RemoteTerminalStream.swift").read_text()
     outcome = Path(directory) / "TerminalPromptOutcome.swift"
@@ -30,7 +39,7 @@ with tempfile.TemporaryDirectory(prefix="corral-mac-terminal-selection-") as dir
     outcome.write_text("import Foundation\n" + stream_source[begin:end] + "\n")
     subprocess.run([
         "swiftc", "-swift-version", "6", "-default-isolation", "MainActor",
-        "-parse-as-library", "-I", str(products),
+        "-parse-as-library", "-I", str(products), str(helper),
         str(ROOT / "Shared/UI/Platform/MacSessionContextMenu.swift"),
         str(ROOT / "Shared/UI/Terminal/TerminalHostFeed.swift"),
         str(outcome),

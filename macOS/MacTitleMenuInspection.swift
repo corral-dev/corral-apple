@@ -24,6 +24,15 @@ enum MacTitleMenuInspection {
             "toolbarItems": window.toolbar?.items.map { "\($0.itemIdentifier.rawValue) \(type(of: $0)) \($0.label)" } ?? [],
             "views": views,
             "sessionMenu": sessionMenuImages(appModel: appModel, workspace: workspace, session: session()),
+            "runtimeCatalog": [
+                "loaded": workspace.runtimeCatalog.isLoaded,
+                "loading": workspace.runtimeCatalog.isLoading,
+                "error": workspace.runtimeCatalog.errorMessage ?? "",
+                "runtimes": workspace.runtimes.map(\.id),
+            ] as [String: Any],
+            "actionSymbols": [SessionActionsMenu.forkSymbol, SessionActionsMenu.handoffSymbol].map {
+                ["name": $0, "available": NSImage(systemSymbolName: $0, accessibilityDescription: nil) != nil] as [String: Any]
+            },
         ]
         if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: URL(fileURLWithPath: "/tmp/corral-title-menu.json"), options: .atomic)

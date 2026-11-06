@@ -8,11 +8,23 @@ import QuartzCore
 private final class EdgeFadeTextView: UITextView {
     private static let fadeLength: CGFloat = 28
     private var fadeMask: CAGradientLayer?
+    /// Original markdown source for Copy. When set, Copy puts this instead of
+    /// the rendered plain text so a selection pastes as markdown.
+    var sourceMarkdown: String?
     /// Tells SwiftUI whether hidden text remains below, for the scroll-more arrow.
     var onMoreBelowChange: ((Bool) -> Void)?
     private var reportedMoreBelow: Bool?
 
     override func copy(_ sender: Any?) {
+        if let source = sourceMarkdown, !source.isEmpty {
+            // Prefer the original markdown over the rendered/plain conversion.
+            super.copy(sender)
+            var items = UIPasteboard.general.items
+            if items.isEmpty { items = [[:]] }
+            items[0]["public.utf8-plain-text"] = source
+            UIPasteboard.general.items = items
+            return
+        }
         if let plain = ChatDiagramAttachment.plainText(attributedText, range: selectedRange) {
             // Keep the native rich/image representations alongside source text.
             super.copy(sender)
@@ -120,6 +132,8 @@ struct SelectableAttributedText: View {
     var maxHeight: CGFloat? = nil
     /// Reports whether capped text still has hidden content below the visible part.
     var onMoreBelowChange: ((Bool) -> Void)? = nil
+    /// Original markdown source; iOS Copy puts this so selection pastes as markdown.
+    var sourceMarkdown: String? = nil
 
     @Environment(\.sessionTextScale) private var sessionTextScale
     @Environment(\.interfaceScale) private var interfaceScale
@@ -131,7 +145,8 @@ struct SelectableAttributedText: View {
             foreground: UIColor(foreground),
             tint: UIColor(tint),
             maxHeight: maxHeight,
-            onMoreBelowChange: onMoreBelowChange
+            onMoreBelowChange: onMoreBelowChange,
+            sourceMarkdown: sourceMarkdown
         )
         .accessibilityLabel(Text(String(attributed.characters)))
     }
@@ -144,6 +159,7 @@ private struct SelectableTextView: UIViewRepresentable {
     let tint: UIColor
     let maxHeight: CGFloat?
     let onMoreBelowChange: ((Bool) -> Void)?
+    let sourceMarkdown: String?
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -227,6 +243,7 @@ private struct SelectableTextView: UIViewRepresentable {
 
     private func apply(to view: UITextView, coordinator: Coordinator) {
         let ns = converted(coordinator)
+        if let stable = view as? EdgeFadeTextView { stable.sourceMarkdown = sourceMarkdown }
         if coordinator.appliedText !== ns {
             if let stable = view as? EdgeFadeTextView { stable.replaceContent(ns) }
             else { view.attributedText = ns }
@@ -396,6 +413,8 @@ struct SelectableAttributedText: View {
     var fontStyle: SessionFontStyle = .bubbleBody
     var maxHeight: CGFloat? = nil
     var onMoreBelowChange: ((Bool) -> Void)? = nil
+    /// Original markdown source; Mac hover copy uses it (selection copy stays native).
+    var sourceMarkdown: String? = nil
 
     @Environment(\.sessionTextScale) private var sessionTextScale
     @Environment(\.interfaceScale) private var interfaceScale
@@ -413,7 +432,8 @@ struct SelectableAttributedText: View {
             onMoreBelowChange: onMoreBelowChange,
             document: document,
             selectionID: selectionID,
-            measurementOnly: measurementOnly
+            measurementOnly: measurementOnly,
+            sourceMarkdown: sourceMarkdown
         )
         .accessibilityLabel(Text(String(attributed.characters)))
     }
@@ -509,6 +529,8 @@ private struct MacSelectableTextView: NSViewRepresentable {
     /// Off-screen row measurement: size through the same detached TextKit
     /// path, but never take the document-owned text view from a live row.
     var measurementOnly = false
+    /// Original markdown source (hover copy uses it; selection copy stays native).
+    var sourceMarkdown: String? = nil
 
     /// Conversion to NSAttributedString and measurement are the cost of a
     /// window resize (SwiftUI measures each visible bubble several times per
@@ -761,6 +783,10 @@ private struct MacSelectableTextView: NSViewRepresentable {
 
 /// Shared conversion for measurement, drawing and the conversation text network.
 private enum MacMessageTextRenderer {
+    /// Bare absolute paths become file links to their parent folder (or the
+    /// folder itself) so a click opens Finder. Existing markdown links win.
+    /// Paths are dev-machine-local: only link when the target's parent folder
+    /// exists on this Mac; iOS never gets these links (remote paths).
     static func convert(_ attributed: AttributedString, font: NSFont, foreground: NSColor) -> NSAttributedString {
         let mutable = NSMutableAttributedString(attributedString: NSAttributedString(attributed))
         let full = NSRange(location: 0, length: mutable.length)
@@ -780,7 +806,61 @@ private enum MacMessageTextRenderer {
             mutable.setAttributes(next, range: range)
         }
         MacMarkdownTable.apply(to: mutable, source: attributed, bodyFont: font)
+        linkLocalPaths(in: mutable)
         return mutable
+    }
+
+    private static let pathRegex: NSRegularExpression? = try? NSRegularExpression(
+        pattern: "(?:~\\/[\\w\\-.+@=%:,/]*|/(?:Users|tmp|private|var|opt|usr|home|data|workspace|work|Codes|projects?|src|etc)[\\w\\-.+@=%:,/]*)",
+        options: []
+    )
+
+    private static func linkLocalPaths(in mutable: NSMutableAttributedString) {
+        guard let regex = pathRegex else { return }
+        let string = mutable.string as NSString
+        let full = NSRange(location: 0, length: string.length)
+        guard full.length > 0, full.length < 32_768 else { return }
+        let matches = regex.matches(in: mutable.string, options: [], range: full)
+        guard !matches.isEmpty else { return }
+        let fm = FileManager.default
+        // Walk backwards so earlier ranges stay valid as we add attributes.
+        for match in matches.reversed() {
+            var range = match.range
+            // Trim trailing punctuation the chat text leaves after a path.
+            while range.length > 1 {
+                let last = string.character(at: NSMaxRange(range) - 1)
+                let scalar = UnicodeScalar(last)
+                let ch = scalar.map { Character($0) }
+                if ch.map({ ".,:;!?)]}'\"".contains($0) }) == true {
+                    range.length -= 1
+                } else { break }
+            }
+            guard range.length > 2 else { continue }
+            // Skip ranges that already carry a markdown link.
+            var hasLink = false
+            mutable.enumerateAttribute(.link, in: range, options: []) { value, _, stop in
+                if value != nil { hasLink = true; stop.pointee = true }
+            }
+            if hasLink { continue }
+            let raw = string.substring(with: range)
+            let expanded: String
+            if raw.hasPrefix("~") {
+                expanded = (raw as NSString).expandingTildeInPath
+            } else {
+                expanded = raw
+            }
+            var isDir: ObjCBool = false
+            let target: String?
+            if fm.fileExists(atPath: expanded, isDirectory: &isDir) {
+                target = isDir.boolValue ? expanded : (expanded as NSString).deletingLastPathComponent
+            } else {
+                let parent = (expanded as NSString).deletingLastPathComponent
+                var parentIsDir: ObjCBool = false
+                target = (!parent.isEmpty && fm.fileExists(atPath: parent, isDirectory: &parentIsDir) && parentIsDir.boolValue) ? parent : nil
+            }
+            guard let folder = target, !folder.isEmpty else { continue }
+            mutable.addAttribute(.link, value: URL(fileURLWithPath: folder, isDirectory: true), range: range)
+        }
     }
 }
 

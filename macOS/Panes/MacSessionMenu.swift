@@ -51,10 +51,24 @@ struct MacSessionMenuItems: View {
         Button {
             Task { await workspace.fork(session) }
         } label: {
-            Label("session.actions.copy", systemImage: "doc.on.doc")
+            Label("session.actions.copy", systemImage: SessionActionsMenu.forkSymbol)
         }
         .disabled(readonly)
         Menu {
+            if workspace.runtimeCatalog.isLoading {
+                Text("session.actions.handoff.loading")
+            } else if let error = workspace.runtimeCatalog.errorMessage {
+                Text(verbatim: error)
+                Button("action.retry", systemImage: "arrow.clockwise") {
+                    Task { await workspace.retryRuntimes() }
+                }
+            } else if !workspace.runtimeCatalog.isLoaded {
+                Button("action.retry", systemImage: "arrow.clockwise") {
+                    Task { await workspace.retryRuntimes() }
+                }
+            } else if SessionActionsMenu.handoffTargets(from: runtimes).isEmpty {
+                Text("session.actions.handoff.empty")
+            }
             ForEach(SessionActionsMenu.handoffTargets(from: runtimes)) { runtime in
                 Button {
                     Task { await workspace.handoff(session, to: runtime.id) }
@@ -68,9 +82,9 @@ struct MacSessionMenuItems: View {
                 }
             }
         } label: {
-            Label("mac.session.continue_with", systemImage: "arrow.triangle.branch")
+            Label("mac.session.continue_with", systemImage: SessionActionsMenu.handoffSymbol)
         }
-        .disabled(runtimes.isEmpty || readonly)
+        .disabled(readonly || appModel.client?.state != .ready)
         Button {
             Task { await workspace.restart(session.key) }
         } label: {

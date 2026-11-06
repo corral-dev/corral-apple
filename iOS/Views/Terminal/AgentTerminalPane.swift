@@ -28,13 +28,17 @@ struct AgentTerminalPane: View {
             if let stream {
                 ShellTerminalView(stream: stream, isPresented: isPresented,
                                   allowsInput: isActive && isReady && !isReadonly && !inputSuspended && stream.phase == .live,
-                                  isAgent: true)
+                                  isAgent: true,
+                                  usesIdentityBackground: SessionPresentation.titleIcon(in: session.title) != nil)
             }
             if isPresented { status }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .allowsHitTesting(isPresented)
         .accessibilityHidden(!isPresented)
+        .background {
+            if isPresented { SessionIdentityBackground(title: session.title) }
+        }
         .background {
             if isPresented { background }
         }

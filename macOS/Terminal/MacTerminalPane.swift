@@ -39,12 +39,16 @@ struct MacTerminalPane: View {
             if let terminal, showsEmulator(terminal.stream) {
                 // Clicks focus the pane through the window's click monitor (MacRootView).
                 TerminalEmulator(host: terminal.view, isFocusedPane: isFocused,
-                                 isPresented: isPresented)
+                                 isPresented: isPresented,
+                                 usesIdentityBackground: SessionPresentation.titleIcon(in: session.title) != nil)
                     .chatReadableColumn()
             }
             if isPresented { status }
         }
         .interfaceFrame(maxWidth: .infinity, maxHeight: .infinity)
+        .background {
+            if isPresented { SessionIdentityBackground(title: session.title) }
+        }
         .background {
             if isPresented { Color(nsColor: TerminalAppearance.background) }
         }

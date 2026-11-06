@@ -3857,6 +3857,22 @@
         }
       }
     },
+    "session.actions.handoff.loading" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Loading assistants…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在加载助手…"
+          }
+        }
+      }
+    },
     "session.actions.handoff.kimi_notice" : {
       "localizations" : {
         "en" : {

@@ -100,6 +100,9 @@ struct MessageBubbleView: View, Equatable {
 
     /// Capped text still has hidden lines below its fade.
     @State private var hasMoreBelow = false
+    #if os(macOS)
+    @State private var hovering = false
+    #endif
 
     private var isUser: Bool { message.role.lowercased() == "user" }
     private var isFailedUser: Bool {
@@ -188,7 +191,8 @@ struct MessageBubbleView: View, Equatable {
                     tint: isUser ? userForeground : Palette.accent,
                     fontStyle: .bubbleBody,
                     maxHeight: bubbleTextCap,
-                    onMoreBelowChange: { hasMoreBelow = $0 }
+                    onMoreBelowChange: { hasMoreBelow = $0 },
+                    sourceMarkdown: text
                 )
                 #if os(macOS)
                 .environment(\.macMessageSelectionID, message.seq)
@@ -216,6 +220,10 @@ struct MessageBubbleView: View, Equatable {
                 alignment: isUser ? .trailing : .leading
             )
             .background(hasBubble ? bubbleFill : Color.clear, in: bubbleShape)
+            #if os(macOS)
+            .overlay(alignment: .topTrailing) { hoverCopyButton(source: text) }
+            .onHover { hovering = $0 }
+            #endif
             .task(id: "\(imageLoader.map(ObjectIdentifier.init).map(String.init(describing:)) ?? "")|\(colorScheme)|\(text)") {
                 await imageLoader?.diagrams.prepare(text: text, dark: colorScheme == .dark)
                 if message.seq > 0 {
@@ -224,6 +232,28 @@ struct MessageBubbleView: View, Equatable {
             }
         }
     }
+
+    #if os(macOS)
+    /// Hover copy: copies the original markdown source, not the rendered text.
+    @ViewBuilder
+    private func hoverCopyButton(source: String) -> some View {
+        if hovering {
+            Button {
+                PlatformPasteboard.copy(source)
+            } label: {
+                Image(systemName: "doc.on.doc")
+                    .interfaceFont(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.secondary)
+                    .interfacePadding(Space.xs)
+                    .background(Color(nsColor: .windowBackgroundColor).opacity(0.9), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .help(Text("action.copy"))
+            .accessibilityLabel(Text("action.copy"))
+            .interfacePadding(Space.xs)
+        }
+    }
+    #endif
 
     /// Sits on the bottom fade: more text scrolls inside this bubble. Hint only —
     /// never intercepts the inner scroll or text selection.

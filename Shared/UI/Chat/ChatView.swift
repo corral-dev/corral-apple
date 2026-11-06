@@ -45,6 +45,7 @@ struct ChatView: View {
     @Environment(\.timeZone) private var timeZone
     @Bindable var store: ConversationStore
     var runtimeID: String? = nil
+    var sessionTitle = ""
     /// Retained native text network from the Mac pane cache (nil outside Mac
     /// panes, where the selection modifier owns a private document).
     #if os(macOS)
@@ -134,6 +135,7 @@ struct ChatView: View {
     init(
         store: ConversationStore,
         runtimeID: String? = nil,
+        sessionTitle: String = "",
         sessionMarker: SessionPresentation.StatusMarker? = nil,
         isConnected: Bool = true,
         isSending: Bool = false,
@@ -146,6 +148,7 @@ struct ChatView: View {
     ) {
         self.store = store
         self.runtimeID = runtimeID
+        self.sessionTitle = sessionTitle
         self.sessionMarker = sessionMarker
         self.isConnected = isConnected
         self.isSending = isSending
@@ -160,6 +163,7 @@ struct ChatView: View {
     var body: some View {
         conversationBody
             .interfaceFrame(maxWidth: .infinity, maxHeight: .infinity)
+            .background { SessionIdentityBackground(title: sessionTitle) }
             .background(Color(.systemGroupedBackground))
             .task(id: historyRequested) {
                 guard historyRequested else { return }

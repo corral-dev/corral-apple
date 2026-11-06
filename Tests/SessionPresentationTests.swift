@@ -4,6 +4,24 @@ import XCTest
 
 @MainActor
 final class SessionPresentationTests: XCTestCase {
+    func testTitleIconKeepsCompleteEmojiGraphemes() {
+        for icon in ["🔍", "⚙️", "👩🏽‍💻", "🇨🇳", "1️⃣", "❤️"] {
+            XCTAssertEqual(SessionPresentation.titleIcon(in: "Project \(icon) investigation 🛠️"), icon)
+        }
+    }
+
+    func testTitleIconDoesNotInventIdentityFromTextOrDigits() {
+        for title in ["", "  ", "Fix Corral 123", "#1 * task", "普通会话", "e\u{301}"] {
+            XCTAssertNil(SessionPresentation.titleIcon(in: title))
+        }
+    }
+
+    func testTitleIconReflectsRenameAndRemoval() {
+        XCTAssertEqual(SessionPresentation.titleIcon(in: "🔍 Inspect"), "🔍")
+        XCTAssertEqual(SessionPresentation.titleIcon(in: "🛠️ Repair"), "🛠️")
+        XCTAssertNil(SessionPresentation.titleIcon(in: "Repair"))
+    }
+
     func testRelativeTimeJustNowWithinThreeMinutes() {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let label = SessionPresentation.relativeTimeLabel(

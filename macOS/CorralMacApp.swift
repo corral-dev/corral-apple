@@ -93,6 +93,7 @@ struct CorralMacApp: App {
                 .modifier(MacUpdateInspection())
                 #endif
                 .task { await MacResizeInspection.runIfRequested() }
+                .task { await MacSessionIdentityInspection.runIfRequested() }
                 .task { await MacChatMediaInspection.runIfRequested(model: appModel) }
                 #endif
         }

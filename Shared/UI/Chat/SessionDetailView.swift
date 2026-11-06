@@ -70,8 +70,7 @@ struct SessionDetailView: View {
     @State private var isActionBusy = false
     @State private var isInterrupting = false
     @State private var restartFailed = false
-    @State private var runtimes: [RuntimeEntry] = []
-    @State private var runtimesLoaded = false
+    @State private var runtimeCatalog = RuntimeCatalog()
     @State private var scrollToLatestRequest = 0
     @State private var loadEarlierPullProgress: Double?
     @State private var composerError: String?
@@ -158,11 +157,9 @@ struct SessionDetailView: View {
         }
         .task {
             let conv = prepareConversationIfNeeded()
-            async let runtimesLoad: Void = loadRuntimes()
             async let readMark: Void = injectedStore == nil ? conv.markRead() : ()
             async let chatStart: Void = startIfOwned(conv)
             await chatStart
-            await runtimesLoad
             await readMark
 #if DEBUG
             await inspectDeliveryIfRequested(conv)
@@ -188,13 +185,11 @@ struct SessionDetailView: View {
         .onChange(of: draft) { _, newValue in
             persistDraft(newValue)
         }
-        .task(id: isHostReady) {
-            // First appear often races the connection: the initial load finds
-            // no client and quits. Retry once the host is ready, until the
-            // catalog lands (loadRuntimes no-ops once loaded).
-            if isHostReady, !runtimesLoaded {
-                await loadRuntimes()
-            }
+        .task(id: runtimeCatalogClientID) {
+            // Invalidate before starting: a cancelled predecessor may still be
+            // unwinding its RPC when a ready replacement task begins.
+            runtimeCatalog.reset()
+            await loadRuntimes()
         }
         .task(id: scrollRequest) {
             // A request made before this view existed (terminal → chat) waits
@@ -241,8 +236,11 @@ struct SessionDetailView: View {
     private var actionsMenu: some View {
         SessionActionsMenuView(
             session: session,
-            runtimes: runtimes,
-            runtimesLoaded: runtimesLoaded,
+            runtimes: runtimeCatalog.runtimes,
+            runtimesLoaded: runtimeCatalog.isLoaded,
+            runtimesLoading: runtimeCatalog.isLoading,
+            runtimesError: runtimeCatalog.errorMessage,
+            onRetryRuntimes: { Task { await loadRuntimes(retry: true) } },
             access: appModel.connectedAccess,
             clientReady: isHostReady,
             isBusy: isSending || isActionBusy,
@@ -431,6 +429,7 @@ struct SessionDetailView: View {
             ChatView(
                 store: store,
                 runtimeID: session.runtime,
+                sessionTitle: SessionPresentation.displayTitle(for: session),
                 sessionMarker: SessionPresentation.activityMarker(for: session),
                 isConnected: isHostReady,
                 isSending: isSending || isActionBusy,
@@ -588,32 +587,16 @@ struct SessionDetailView: View {
         return appModel.isConnected(to: host) && appModel.client?.state == .ready
     }
 
-    /// 右上复制/接力菜单的数据与动作（状态机与文案见 SessionActionsMenu）。
-    /// Single-flight retry: a transient `runtimes.list` failure (cold scan,
-    /// bounded-worker `unavailable`, reconnect race) must stay on "loading",
-    /// never flip to "no assistants". Success — even an empty catalog — flips
-    /// `runtimesLoaded` so the empty text only means "truly nothing installed".
-    private func loadRuntimes() async {
-        if runtimesLoaded { return }
-        guard let client = appModel.client else { return }
-        let captured = client
-        var attempt = 0
-        while !runtimesLoaded, !Task.isCancelled {
-            guard appModel.client === captured else { return }
-            if let data = try? await captured.call(WireProtocol.mRuntimesList) as? [String: Any],
-               let items = data["runtimes"] as? [[String: Any]] {
-                guard appModel.client === captured, !Task.isCancelled else { return }
-                // 逐条解码以保留 `available`：缺字段按可用，false 整行隐藏（不断言）；仅保留活跃运行时。
-                runtimes = items.compactMap { try? RemoteJSONDecoder.decode(RuntimeEntry.self, from: $0) }.filter(\.isActive)
-                runtimesLoaded = true
-                return
-            }
-            attempt += 1
-            // Cold scan can hold the bounded worker past the 20s RPC deadline;
-            // back off instead of hammering, give up after ~15s and let the
-            // `isHostReady` re-trigger retry on the next reconnect/foreground.
-            if attempt >= 8 { return }
-            try? await Task.sleep(for: .milliseconds(500 * attempt))
+    /// A replacement client must trigger a new load even if readiness stays true.
+    private var runtimeCatalogClientID: ObjectIdentifier? {
+        guard isHostReady, let client = appModel.client else { return nil }
+        return ObjectIdentifier(client)
+    }
+
+    private func loadRuntimes(retry: Bool = false) async {
+        guard isHostReady, let client = appModel.client else { return }
+        await runtimeCatalog.load(for: client, retry: retry) {
+            try await client.call(WireProtocol.mRuntimesList)
         }
     }
 

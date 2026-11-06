@@ -13,6 +13,7 @@ SOURCES = [
     'Shared/Core/Models/RemoteDecoding.swift',
     'Shared/Core/Models/DesktopLayoutModels.swift',
     'Shared/Core/Store/SessionRestartTracker.swift',
+    'Shared/Core/Store/RuntimeCatalog.swift',
     'Shared/UI/Sessions/FulltextSearchStore.swift',
     'Shared/Core/Presentation/SessionNavigationHistory.swift',
     'macOS/Workspace/MacNavigationState.swift',

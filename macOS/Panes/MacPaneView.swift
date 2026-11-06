@@ -359,7 +359,6 @@ struct MacPaneHeader: View {
     var promptsCount = 0
     @Binding var promptsOpen: Bool
 
-    @State private var runtimes: [RuntimeEntry] = []
     @State private var hovering = false
 
     var body: some View {
@@ -404,15 +403,6 @@ struct MacPaneHeader: View {
         .onHover { hovering = $0 }
         .onTapGesture { focusPane() }
         .accessibilityAddTraits(isFocused ? .isSelected : [])
-        .task { await loadRuntimes() }
-        .onChange(of: workspace.runtimes.map(\.id)) { _, _ in
-            // Workspace catalog lands after panes mount (one fetch per
-            // connection): adopt it so a pane mounted early never stays on an
-            // empty fallback while the workspace already has the list.
-            if runtimes.isEmpty, !workspace.runtimes.isEmpty {
-                runtimes = workspace.runtimes
-            }
-        }
     }
 
     /// The title opens and closes Your prompts; the chevron shows the card's
@@ -464,7 +454,7 @@ struct MacPaneHeader: View {
     /// Kebab: the system ellipsis turned upright (no vertical variant ships).
     private var sessionMenu: some View {
         Menu {
-            MacSessionMenuItems(session: session, runtimes: runtimes, mode: modeBinding,
+            MacSessionMenuItems(session: session, runtimes: workspace.runtimes, mode: modeBinding,
                                 onClose: { workspace.requestClose(session.key) })
         } label: {
             Image(systemName: "ellipsis")
@@ -586,36 +576,7 @@ struct MacPaneHeader: View {
         }
     }
 
-    private func loadRuntimes() async {
-        // The workspace already loads the runtime list once per connection;
-        // per-pane fetch is only a fallback for headers mounted before it.
-        if !workspace.runtimes.isEmpty {
-            runtimes = workspace.runtimes
-            return
-        }
-        if !runtimes.isEmpty { return }
-        guard let client = appModel.client else { return }
-        let captured = client
-        var attempt = 0
-        while runtimes.isEmpty, !Task.isCancelled {
-            guard appModel.client === captured else { return }
-            if !workspace.runtimes.isEmpty {
-                runtimes = workspace.runtimes
-                return
-            }
-            if let data = try? await captured.call(WireProtocol.mRuntimesList) as? [String: Any],
-               let items = data["runtimes"] as? [[String: Any]] {
-                guard appModel.client === captured, !Task.isCancelled else { return }
-                runtimes = items.compactMap { try? RemoteJSONDecoder.decode(RuntimeEntry.self, from: $0) }.filter(\.isActive)
-                // Empty here means the host truly returned nothing usable;
-                // stop retrying and let the disabled menu state stand.
-                return
-            }
-            attempt += 1
-            if attempt >= 8 { return }
-            try? await Task.sleep(for: .milliseconds(500 * attempt))
-        }
-    }
+
 }
 
 extension EnvironmentValues {

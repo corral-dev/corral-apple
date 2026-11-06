@@ -66,7 +66,8 @@ final class MacWorkspace {
     /// A failed action's message for the window alert.
     var actionError: String?
     /// Assistants installed on the host (for "Add pane" and Continue with…).
-    private(set) var runtimes: [RuntimeEntry] = []
+    let runtimeCatalog = RuntimeCatalog()
+    var runtimes: [RuntimeEntry] { runtimeCatalog.runtimes }
     /// Selecting a pane is where the keys go: the pane whose composer should
     /// hold the caret, and a serial bumped on every request.
     private(set) var keyFocusTarget: String?
@@ -146,7 +147,7 @@ final class MacWorkspace {
         paneKeys = []
         focusedKey = nil
         navigation.selectHost(id)
-        runtimes = []
+        runtimeCatalog.reset()
         promptsOpen = [:]
         pendingEntrances = []
         cancelSplitMotion()
@@ -834,14 +835,15 @@ final class MacWorkspace {
         readyHandlerID = client.addReadyHandler { [weak self] in
             guard let self, self.layoutClient === client, self.layoutGeneration == generation else { return }
             Task { await self.pullLayout() }
+            Task { await self.loadRuntimes(client) }
         }
-        Task {
-            await pullLayout()
-            await loadRuntimes(client)
-        }
+        // Catalog loading must not wait behind an unrelated layout request.
+        Task { await pullLayout() }
+        Task { await loadRuntimes(client) }
     }
 
     func stopLayoutWatch() {
+        runtimeCatalog.reset()
         layoutGeneration = UUID()
         layoutTask?.cancel()
         layoutTask = nil
@@ -861,23 +863,15 @@ final class MacWorkspace {
         }
     }
 
-    private func loadRuntimes(_ client: RemoteClient) async {
-        let generation = layoutGeneration
-        let host = hostID
-        var attempt = 0
-        while !Task.isCancelled {
-            guard appModel?.client === client, hostID == host,
-                  layoutGeneration == generation else { return }
-            if let data = try? await client.call(WireProtocol.mRuntimesList) as? [String: Any],
-               let items = data["runtimes"] as? [[String: Any]] {
-                guard !Task.isCancelled, appModel?.client === client, hostID == host,
-                      layoutGeneration == generation else { return }
-                runtimes = items.compactMap { try? RemoteJSONDecoder.decode(RuntimeEntry.self, from: $0) }.filter(\.isActive)
-                return
-            }
-            attempt += 1
-            if attempt >= 8 { return }
-            try? await Task.sleep(for: .milliseconds(500 * attempt))
+    func retryRuntimes() async {
+        guard let client = appModel?.client else { return }
+        await loadRuntimes(client, retry: true)
+    }
+
+    private func loadRuntimes(_ client: RemoteClient, retry: Bool = false) async {
+        guard appModel?.client === client else { return }
+        await runtimeCatalog.load(for: client, retry: retry) {
+            try await client.call(WireProtocol.mRuntimesList)
         }
     }
 
@@ -1032,8 +1026,14 @@ final class MacWorkspace {
     /// can still have a frame under the visible pane and must never take focus.
     func paneKey(atWindowPoint point: CGPoint) -> String? {
         for key in paneKeys {
-            let frameKey = paneFrames[key] != nil ? key : canonicalPaneKey(key)
-            if paneFrames[frameKey]?.contains(point) == true { return frameKey }
+            if paneFrames[key]?.contains(point) == true { return key }
+            let canonical = canonicalPaneKey(key)
+            if canonical != key, paneFrames[canonical]?.contains(point) == true { return key }
+            // Frame stored under an alias (provisional key migrated to canonical):
+            // any frame resolving to this pane still focuses it.
+            for (frameKey, frame) in paneFrames where frame.contains(point) {
+                if frameKey == key || canonicalPaneKey(frameKey) == canonical { return key }
+            }
         }
         return nil
     }

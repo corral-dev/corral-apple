@@ -11,6 +11,7 @@ struct TerminalEmulator: NSViewRepresentable {
     let host: TerminalHostView
     let isFocusedPane: Bool
     let isPresented: Bool
+    var usesIdentityBackground = false
     @Environment(\.interfaceScale) private var interfaceScale
     @Environment(\.conversationScrollReadAction) private var acknowledgeRead
 
@@ -32,6 +33,7 @@ struct TerminalEmulator: NSViewRepresentable {
             guard isPresented else { return }
             slot.adopt(host)
         }
+        host.setIdentityBackgroundEnabled(usesIdentityBackground)
         host.onManualScroll = acknowledgeRead
         host.updateInterfaceScale(interfaceScale)
         host.setPresented(isPresented)
@@ -231,6 +233,15 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
     // MARK: - Appearance
 
     private var palette = TerminalPalette.dark
+    private var usesIdentityBackground = false
+
+    /// Only session panes with a title icon reveal their solid SwiftUI backdrop.
+    /// Project shells and titles without icons keep the original opaque surface.
+    func setIdentityBackgroundEnabled(_ enabled: Bool) {
+        guard usesIdentityBackground != enabled else { return }
+        usesIdentityBackground = enabled
+        applyPalette()
+    }
 
     /// Light or dark with the window; the host learns the colours so agents
     /// that query the terminal background pick the matching theme.
@@ -238,8 +249,9 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
         let next = TerminalPalette.matching(effectiveAppearance)
         let changed = next != palette
         palette = next
-        layer?.backgroundColor = next.background.cgColor
+        layer?.backgroundColor = usesIdentityBackground ? NSColor.clear.cgColor : next.background.cgColor
         next.apply(to: terminal)
+        if usesIdentityBackground { terminal.backgroundOpacity = 0 }
         if changed { stream?.updateTheme(next.theme) }
     }
 

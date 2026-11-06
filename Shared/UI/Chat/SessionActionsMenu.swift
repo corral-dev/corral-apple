@@ -15,6 +15,8 @@ import SwiftUI
 /// - 离线 / client 未 ready 时远程操作禁用；本地显示模式不受此限制；
 /// - Kimi 作目标必须写明：`-p` 非交互跑完即退出，后续回电脑 `kimi -c` 继续，不承诺持续交互。
 enum SessionActionsMenu {
+    static let forkSymbol = "arrow.triangle.branch"
+    static let handoffSymbol = "arrowshape.turn.up.right"
 
     // MARK: - 纯状态机（可单测，不依赖 SwiftUI 环境）
 
@@ -106,11 +108,11 @@ struct SessionActionsMenuView: View {
     let session: SessionSummary
     /// 接力候选（含来源自身；调用方应在 runtimes.list 回来后传入，已做 available 过滤亦可）。
     var runtimes: [RuntimeEntry]
-    /// True once `runtimes.list` has returned (even if the filtered list is
-    /// empty). False means the catalog hasn't loaded yet — the menu must show
-    /// loading, not "no assistants", so a transient fetch failure never reads
-    /// as "nothing installed".
+    /// Empty, pending and failed catalogs have distinct presentations.
     var runtimesLoaded: Bool = false
+    var runtimesLoading: Bool = false
+    var runtimesError: String? = nil
+    var onRetryRuntimes: () -> Void = {}
     var access: String?
     var clientReady: Bool
     var isBusy: Bool
@@ -219,7 +221,7 @@ struct SessionActionsMenuView: View {
                     Text("session.actions.copy")
                 }
             } else {
-                Label("session.actions.copy", systemImage: "doc.on.doc")
+                Label("session.actions.copy", systemImage: SessionActionsMenu.forkSymbol)
             }
         }
         .disabled(!enabled || isBusy)
@@ -227,15 +229,14 @@ struct SessionActionsMenuView: View {
 
     @ViewBuilder
     private var handoffSection: some View {
-        Menu("session.actions.handoff") {
-            if !runtimesLoaded {
-                // Catalog not back yet (first open, reconnect, transient
-                // `unavailable`): show loading so it never reads as "nothing
-                // installed". Reuses the existing loading string, no new key.
-                HStack {
-                    ProgressView().controlSize(.small)
-                    Text("session.new.loading")
-                }
+        Menu {
+            if runtimesLoading {
+                Text("session.actions.handoff.loading")
+            } else if let runtimesError {
+                Text(verbatim: runtimesError)
+                Button("action.retry", systemImage: "arrow.clockwise", action: onRetryRuntimes)
+            } else if !runtimesLoaded {
+                Button("action.retry", systemImage: "arrow.clockwise", action: onRetryRuntimes)
             } else if targets.isEmpty {
                 Text("session.actions.handoff.empty")
             } else {
@@ -255,6 +256,8 @@ struct SessionActionsMenuView: View {
                     .disabled(!enabled)
                 }
             }
+        } label: {
+            Label("session.actions.handoff", systemImage: SessionActionsMenu.handoffSymbol)
         }
         .disabled(!enabled)
     }
