@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// One split pane: header and chat or terminal body. The pane owns the
+/// One split pane: chat or terminal body with the header at the bottom.
+/// The pane owns the
 /// session's conversation so switching between chat and terminal keeps it
 /// live (and its prompts card current) in both views.
 struct MacPaneView: View {
@@ -140,14 +141,6 @@ struct MacPaneView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            MacPaneHeader(
-                session: session,
-                isFocused: workspace.showsFocus(session.key),
-                allowsClose: allowsClose,
-                promptsCount: promptsCount,
-                promptsOpen: promptsOpenBinding
-            )
-            Divider()
             content
                 // Beside the conversation the card takes the trailing margin and
                 // either presentation shifts aside; elsewhere it floats over content.
@@ -165,6 +158,14 @@ struct MacPaneView: View {
                     bodySize = $0
                     workspace.paneSurfaces.existingEntry(for: session.key)?.bodySize = $0
                 }
+            Divider()
+            MacPaneHeader(
+                session: session,
+                isFocused: workspace.showsFocus(session.key),
+                allowsClose: allowsClose,
+                promptsCount: promptsCount,
+                promptsOpen: promptsOpenBinding
+            )
         }
         .onGeometryChange(for: CGRect.self) { proxy in
             proxy.frame(in: .global)
@@ -343,7 +344,7 @@ struct MacPaneView: View {
     }
 }
 
-/// Pane header, single pane or split: the title toggles the session's Your
+/// Pane header at the bottom, single pane or split: the title toggles the session's Your
 /// prompts card, then its attention dots; the kebab (session menu) and Close
 /// show while the pointer is over the header. Focus is the header's surface, never a ring or a tint
 /// on the reading area (design: Window top bar, owner correction 2026-10-18).

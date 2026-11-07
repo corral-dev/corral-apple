@@ -6,6 +6,16 @@ next version's section. A `Release: minor` or `Release: major` line requests a
 larger version step; `Release: hold <reason>` keeps the changes unreleased until
 the named acceptance is done.
 
+## Mac 0.3.168 (174)
+
+### English
+
+- Mac: move per-pane session titles to the bottom, below content and input, keeping the same plain strip without extra redesign.
+
+### 简体中文
+
+- Mac：各分屏会话标题移到分屏底部、内容与输入框下方，保持原有样式，仅做位置下移。
+
 ## Mac 0.3.167 (173) / iPhone 1.0.216 (229)
 
 ### English

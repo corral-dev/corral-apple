@@ -28,11 +28,11 @@ struct MacShellPane: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            Divider()
             content
                 .interfaceFrame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color(nsColor: TerminalAppearance.background))
+            Divider()
+            header
         }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
             workspace.paneFrames[shellKey] = frame
