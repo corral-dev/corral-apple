@@ -6,6 +6,16 @@ next version's section. A `Release: minor` or `Release: major` line requests a
 larger version step; `Release: hold <reason>` keeps the changes unreleased until
 the named acceptance is done.
 
+## Mac 0.3.169 (175)
+
+### English
+
+- Mac: the bottom per-pane session title now sits in the same centered readable column as the conversation and composer, tracking the narrowed column while the Your prompts card is open beside it; the hover-only session menu and close buttons float over the pane edge without reflowing the title.
+
+### 简体中文
+
+- Mac：分屏底部会话标题与对话、输入框共用同一居中阅读列；Your prompts 卡片在旁展开压窄阅读列时标题跟随对齐。悬停才出现的会话菜单与关闭按钮浮于分屏边缘，不再挤动标题。
+
 ## Mac 0.3.168 (174)
 
 ### English

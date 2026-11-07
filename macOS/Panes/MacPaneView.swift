@@ -164,6 +164,7 @@ struct MacPaneView: View {
                 isFocused: workspace.showsFocus(session.key),
                 allowsClose: allowsClose,
                 promptsCount: promptsCount,
+                cardReserve: reservesCardMargin ? MacPromptsCard.reserve : 0,
                 promptsOpen: promptsOpenBinding
             )
         }
@@ -358,9 +359,17 @@ struct MacPaneHeader: View {
     let isFocused: Bool
     var allowsClose = true
     var promptsCount = 0
+    /// Trailing width the conversation yields to a beside prompts card
+    /// (mirrors the content's reserve so the title column tracks the reading
+    /// column, not the full pane). Zero when the card floats or is closed.
+    var cardReserve: CGFloat = 0
     @Binding var promptsOpen: Bool
 
     @State private var hovering = false
+
+    /// Width reserved for the hover-only session menu + close buttons (two
+    /// 24pt icon slots plus the gap), so a long title never runs under them.
+    static let hoverSlotWidth: CGFloat = TouchTarget.iconVisual * 2 + Space.xs
 
     var body: some View {
         HStack(spacing: 0) {
@@ -380,8 +389,22 @@ struct MacPaneHeader: View {
             }
             .frame(maxHeight: .infinity)
             .modifier(MacPaneReorderHandle(key: session.key))
-            // Hover-only (owner correction 2026-10-18); the slots keep their
-            // width so the title never reflows when they appear.
+            // Reserve the hover-only menu/close slots so a long title never
+            // runs under them on narrow panes; they float over the pane edge.
+            .padding(.trailing, Self.hoverSlotWidth * interfaceScale)
+        }
+        // The title lives in the same centered readable column as the
+        // conversation and composer (owner request 2026-11-07: the title's
+        // reading edge aligns with the content, not the pane edge).
+        .chatReadableColumn()
+        // Same yielded space as the conversation above: an open beside card
+        // narrows the reading column, and the title column follows it.
+        .interfacePadding(.trailing, cardReserve)
+        .interfacePadding(.horizontal, Space.md)
+        .overlay(alignment: .trailing) {
+            // Hover-only (owner correction 2026-10-18) pinned to the pane
+            // edge in every card state; the reserved slot keeps its width so
+            // the title never reflows when they appear.
             HStack(spacing: 0) {
                 sessionMenu
                 if allowsClose {
@@ -389,10 +412,10 @@ struct MacPaneHeader: View {
                         .interfacePadding(.leading, Space.xs)
                 }
             }
+            .interfacePadding(.trailing, Space.md)
             .opacity(hovering ? 1 : 0)
             .allowsHitTesting(hovering)
         }
-        .interfacePadding(.horizontal, Space.md)
         .interfaceFrame(height: 40)
         .modifier(MacPaneMoveActions(key: session.key))
         .background(headerSurface)
