@@ -73,7 +73,7 @@ struct SessionUserPromptsResponse: Decodable {
     let generation: Int
 }
 enum ActiveRuntimeVisibility { static func isListVisible(_ session: SessionSummary) -> Bool { true } }
-struct RuntimeEntry: Decodable { var id: String; var isActive: Bool { true } }
+struct RuntimeEntry: Decodable { var id: String; var name: String { id }; var isActive: Bool { true } }
 @MainActor final class AppModel {
     var client: RemoteClient?
     let restarts = SessionRestartTracker()
@@ -711,10 +711,26 @@ struct LifecycleProbe {
             }
             return [:]
         }
-        await workspace.newSessionPane(runtimeID: "claude")
+        var releaseCreation: CheckedContinuation<Void, Never>?
+        client.handler = { method, _ in
+            if method == WireProtocol.mSessionNew {
+                await withCheckedContinuation { releaseCreation = $0 }
+                return ["session": ["key": "new", "cwd": "/tmp/project-a", "hosted": true]]
+            }
+            return [:]
+        }
+        let creationTask = Task { await workspace.newSessionPane(runtimeID: "claude") }
+        try? await Task.sleep(for: .milliseconds(200))
+        check(workspace.paneKeys.contains(where: { MacWorkspace.PendingPane.isPending($0) }),
+              "the reserved pane must appear before the host session exists")
+        check(workspace.paneKeys.contains("new") == false,
+              "the real session must not appear before creation completes")
+        releaseCreation?.resume()
+        await creationTask.value
         let creation = client.calls.first { $0.0 == WireProtocol.mSessionNew }
         check(creation?.1["cwd"] as? String == a.cwd, "quick Add Pane ignored the existing agent project")
         check(workspace.paneKeys.contains("new"), "same-project quick session did not join the split")
+        check(workspace.pendingPanes.isEmpty, "creation left a stale pending pane behind")
         workspace.openCreated(b, asPane: true)
         check(workspace.paneKeys == [b.key], "cross-project creation mixed agents in one split")
         let legacy = DesktopGroup(id: "legacy", name: "", project: a.cwd,
@@ -844,6 +860,31 @@ struct LifecycleProbe {
         workspace.focus("peer")
         check(!workspace.showsFocus("shown") && workspace.showsFocus("peer"),
               "split panes lost their focus distinction")
+        // Owner report 2026-11-06: three-pane split, third-pane click did not
+        // activate the third pane (frame kept under a migrated provisional
+        // alias, click landed on the retained dormant pane underneath).
+        let split = MacWorkspace()
+        split.restorePanes(["first", "second", "third"])
+        let feed = HostSessionFeed()
+        feed.listStore.aliases["third-alias"] = "third"
+        split.feed = feed
+        let third = CGRect(x: 1600, y: 0, width: 800, height: 900)
+        // Alias frame alone still focuses the shown third pane.
+        split.paneFrames = [
+            "first": CGRect(x: 0, y: 0, width: 800, height: 900),
+            "second": CGRect(x: 800, y: 0, width: 800, height: 900),
+            "third-alias": third,
+        ]
+        check(split.paneKey(atWindowPoint: CGPoint(x: 2000, y: 400)) == "third",
+              "third-pane click on its alias frame did not focus the third pane")
+        // A retained dormant frame under the same rect must not steal it.
+        split.paneFrames["dormant"] = third
+        check(split.paneKey(atWindowPoint: CGPoint(x: 2000, y: 400)) == "third",
+              "third-pane click resolved to a dormant pane under the visible one")
+        // An unmapped alias frame takes no click.
+        split.feed = nil
+        check(split.paneKey(atWindowPoint: CGPoint(x: 2000, y: 400)) == nil,
+              "third-pane alias frame without canonical mapping took a click")
         print("PASS shown-pane focus: dormant frames, hidden focus requests, lone-pane header")
     }
 

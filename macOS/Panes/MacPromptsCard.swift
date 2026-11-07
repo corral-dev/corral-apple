@@ -4,7 +4,8 @@ import SwiftUI
 /// The pane's Your prompts card (design: Prompts card). It floats at the
 /// pane's top trailing corner: beside the conversation when the pane has
 /// room (the pane shifts the conversation aside by `reserve`), over it in
-/// narrow panes, where it starts collapsed into the pane header's button.
+/// narrow panes, where it starts collapsed into the circular bubble button
+/// at the same corner.
 /// Over content it behaves like a transient popover: a mouse click outside
 /// it closes it, and the click still reaches its target.
 struct MacPromptsCard: View {
@@ -48,8 +49,8 @@ struct MacPromptsCard: View {
     @State private var cardAnchor = PromptsCardClickAnchor()
 
     var body: some View {
-        // Collapsed, the card is controlled from the pane's session menu, so
-        // nothing floats over the conversation (design: Pane header composition).
+        // Collapsed, only the circular bubble button shows (owned by the
+        // pane); the card itself renders nothing.
         Group {
             if isOpen {
                 card

@@ -6,6 +6,18 @@ next version's section. A `Release: minor` or `Release: major` line requests a
 larger version step; `Release: hold <reason>` keeps the changes unreleased until
 the named acceptance is done.
 
+## Mac 0.3.171 (177)
+
+### English
+
+- Mac: the hover-only session menu and close buttons in the bottom title strip now sit inside the same centered readable column as the title, conversation and composer; their right edge tracks the content column instead of the pane edge, still without reflowing the title.
+- Mac: adding a split pane shows the pane immediately. The slot, its title strip and focus appear at once with "Creating… <assistant>" while the host creates the session; when creation finishes the same slot switches to the live session, and a failed creation withdraws the placeholder with the usual error.
+
+### 简体中文
+
+- Mac：底部标题条里悬停才出现的会话菜单与关闭按钮收进与标题、对话、输入框同一居中阅读列，右缘跟内容列走、不再贴分屏边缘，依然不挤动标题。
+- Mac：加分屏立刻出格子。格子、底部标题条与焦点当场就位并显示「正在创建… <助手>」，会话在后台创建；创建完成后同一个格子直接切换成真实会话，失败则收起占位并照旧报错。
+
 ## Mac 0.3.169 (175)
 
 ### English

@@ -16,6 +16,11 @@ enum SessionCreationCoordinator {
         hostID: String, runtimeID: String, cwd: String, supportsReceipts: Bool,
         call: (String, [String: Any]) async throws -> Any
     ) async throws -> SessionSummary {
+        #if DEBUG
+        // Debug-only reserved-pane inspection: hold the first call so the
+        // reserved pane can be observed on the real window. No-op otherwise.
+        await PendingPaneInspectionGate.waitIfHeld()
+        #endif
         var params: [String: Any] = ["runtime": runtimeID]
         if !cwd.isEmpty { params["cwd"] = cwd }
         let record = supportsReceipts

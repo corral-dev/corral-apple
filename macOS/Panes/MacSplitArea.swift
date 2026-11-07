@@ -35,6 +35,9 @@ struct MacSplitArea: View {
         var sessions: Set<String> = []
         return keys.filter { key in
             if ProjectShell.isShellKey(key) { return true }
+            // A reserved pane draws before its session exists (owner request
+            // 2026-11-07); it is promoted to the real key in the same slot.
+            if MacWorkspace.PendingPane.isPending(key) { return true }
             guard let session = store.session(for: key) else { return false }
             return sessions.insert(session.key).inserted
         }
@@ -83,7 +86,9 @@ private struct MacRetainedPanes: View {
                     Divider().frame(width: (keys.firstIndex(of: key) ?? 0) > 0 ? 1 : 0)
                         .opacity(visible ? 1 : 0)
                     Group {
-                        if ProjectShell.isShellKey(key) {
+                        if let pending = workspace.pendingPane(for: key) {
+                            MacPendingPaneView(pending: pending)
+                        } else if ProjectShell.isShellKey(key) {
                             MacShellPane(shellKey: key)
                         } else if let session = feed.listStore.session(for: key) {
                             MacPaneSurface(session: session, metadataStore: feed.listStore,

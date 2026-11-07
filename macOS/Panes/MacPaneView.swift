@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// One split pane: chat or terminal body with the header at the bottom.
@@ -22,6 +23,10 @@ struct MacPaneView: View {
     @State private var terminalPromptRequest: TerminalPromptRequest?
     @State private var promptStatus: TerminalPromptRowStatus?
     @State private var chatVisited = false
+    /// Tracks the collapsed prompts button's hover so it can show the
+    /// pointing-hand cursor over the terminal/chat text (whose I-beam would
+    /// otherwise show through the floating button).
+    @State private var promptsButtonHover = false
     /// Bumped on every (re)appearance; a disappear-triggered stop only runs
     /// when no reappearance has happened since, so a fast close→reopen can
     /// never stop the revived store from underneath its new start().
@@ -77,21 +82,67 @@ struct MacPaneView: View {
     private var promptsCard: some View {
         let prompts = prompts
         if !prompts.isEmpty, bodySize.width > 0 {
-            MacPromptsCard(
-                prompts: prompts,
-                isOpen: promptsOpenBinding,
-                width: promptsCardWidth,
-                overContent: !cardFitsBeside,
-                onTerminal: mode == .terminal,
-                // Over content the whole card covers about a third of the pane.
-                maxListHeight: max(120, bodySize.height * (cardFitsBeside ? 0.7 : MacPromptsCard.overContentHeightFraction) - 56),
-                status: mode == .terminal ? promptStatus : nil,
-                onSelect: selectPrompt,
-                onJumpLatest: jumpToLatest
-            )
-            .interfacePadding(.top, Space.md)
-            .interfacePadding(.trailing, Space.md)
+            if cardOpen {
+                MacPromptsCard(
+                    prompts: prompts,
+                    isOpen: promptsOpenBinding,
+                    width: promptsCardWidth,
+                    overContent: !cardFitsBeside,
+                    onTerminal: mode == .terminal,
+                    // Over content the whole card covers about a third of the pane.
+                    maxListHeight: max(120, bodySize.height * (cardFitsBeside ? 0.7 : MacPromptsCard.overContentHeightFraction) - 56),
+                    status: mode == .terminal ? promptStatus : nil,
+                    onSelect: selectPrompt,
+                    onJumpLatest: jumpToLatest
+                )
+                .interfacePadding(.top, Space.md)
+                .interfacePadding(.trailing, Space.md)
+            } else {
+                promptsCollapsedButton(count: prompts.count)
+                    .interfacePadding(.top, Space.md)
+                    .interfacePadding(.trailing, Space.md)
+            }
         }
+    }
+
+    /// Collapsed Your prompts: a circular bubble button floating at the
+    /// pane's top trailing corner (48pt circle). The disc stays neutral
+    /// glass so content reads through it; only the bubble glyph takes the
+    /// system accent (green here). The whole button is translucent.
+    /// Tapping it grows the card from the same corner; the pane title no
+    /// longer toggles the card.
+    private func promptsCollapsedButton(count: Int) -> some View {
+        Button {
+            workspace.focus(session.key)
+            workspace.requestKeyFocus(session.key)
+            withAnimation(MacMotion.disclosure(reduceMotion: reduceMotion)) {
+                promptsOpenBinding.wrappedValue = true
+            }
+        } label: {
+            Image(systemName: "bubble")
+                .interfaceFont(.system(size: 20, weight: .semibold))
+                .foregroundStyle(Color.accentColor)
+                .interfaceFrame(width: 48, height: 48)
+                .contentShape(Circle())
+                .background(.bar, in: Circle())
+                .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
+        }
+        .buttonStyle(PressableButtonStyle())
+        .opacity(0.8)
+        .onHover { hovering in
+            guard hovering != promptsButtonHover else { return }
+            promptsButtonHover = hovering
+            if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+        }
+        .onDisappear {
+            // A disappearing hovered button must release its cursor push,
+            // or the hand lingers after the button is gone.
+            if promptsButtonHover { NSCursor.pop(); promptsButtonHover = false }
+        }
+        .help(Text("mac.prompts.show"))
+        .accessibilityLabel(Text("mac.prompts.title \(count)"))
+        .accessibilityIdentifier("corral.prompts.toggle")
+        .transition(.scale(scale: 0.96, anchor: .topTrailing).combined(with: .opacity))
     }
 
     private func selectPrompt(_ prompt: RichMessage) {
@@ -128,10 +179,6 @@ struct MacPaneView: View {
         return min(full, partial, fitting)
     }
 
-    /// Counted once the pane is measured, so the toggle never offers a card
-    /// that cannot be placed yet.
-    private var promptsCount: Int { bodySize.width > 0 ? prompts.count : 0 }
-
     private var promptsOpenBinding: Binding<Bool> {
         Binding(
             get: { cardOpen },
@@ -158,14 +205,11 @@ struct MacPaneView: View {
                     bodySize = $0
                     workspace.paneSurfaces.existingEntry(for: session.key)?.bodySize = $0
                 }
-            Divider()
             MacPaneHeader(
                 session: session,
                 isFocused: workspace.showsFocus(session.key),
                 allowsClose: allowsClose,
-                promptsCount: promptsCount,
-                cardReserve: reservesCardMargin ? MacPromptsCard.reserve : 0,
-                promptsOpen: promptsOpenBinding
+                cardReserve: reservesCardMargin ? MacPromptsCard.reserve : 0
             )
         }
         .onGeometryChange(for: CGRect.self) { proxy in
@@ -345,30 +389,29 @@ struct MacPaneView: View {
     }
 }
 
-/// Pane header at the bottom, single pane or split: the title toggles the session's Your
-/// prompts card, then its attention dots; the kebab (session menu) and Close
-/// show while the pointer is over the header. Focus is the header's surface, never a ring or a tint
-/// on the reading area (design: Window top bar, owner correction 2026-10-18).
+/// Pane header at the bottom, single pane or split: the title focuses the pane,
+/// then its attention dots; the kebab (session menu) and Close
+/// show while the pointer is over the header. Your prompts opens from the
+/// circular bubble button at the pane's top trailing corner, never from the
+/// title. In a split, the focused session's accent title identifies where
+/// typing goes; the reading area and composer stay neutral.
 struct MacPaneHeader: View {
     @Environment(\.interfaceScale) private var interfaceScale
     @Environment(AppModel.self) private var appModel
     @Environment(MacWorkspace.self) private var workspace
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.colorScheme) private var colorScheme
     let session: SessionSummary
     let isFocused: Bool
     var allowsClose = true
-    var promptsCount = 0
     /// Trailing width the conversation yields to a beside prompts card
     /// (mirrors the content's reserve so the title column tracks the reading
     /// column, not the full pane). Zero when the card floats or is closed.
     var cardReserve: CGFloat = 0
-    @Binding var promptsOpen: Bool
 
     @State private var hovering = false
 
-    /// Width reserved for the hover-only session menu + close buttons (two
-    /// 24pt icon slots plus the gap), so a long title never runs under them.
+    /// Fixed trailing slot for the hover-only session menu + close buttons
+    /// (two 24pt icon slots plus the gap), inside the readable column so a
+    /// long title never runs under them.
     static let hoverSlotWidth: CGFloat = TouchTarget.iconVisual * 2 + Space.xs
 
     var body: some View {
@@ -389,22 +432,11 @@ struct MacPaneHeader: View {
             }
             .frame(maxHeight: .infinity)
             .modifier(MacPaneReorderHandle(key: session.key))
-            // Reserve the hover-only menu/close slots so a long title never
-            // runs under them on narrow panes; they float over the pane edge.
-            .padding(.trailing, Self.hoverSlotWidth * interfaceScale)
-        }
-        // The title lives in the same centered readable column as the
-        // conversation and composer (owner request 2026-11-07: the title's
-        // reading edge aligns with the content, not the pane edge).
-        .chatReadableColumn()
-        // Same yielded space as the conversation above: an open beside card
-        // narrows the reading column, and the title column follows it.
-        .interfacePadding(.trailing, cardReserve)
-        .interfacePadding(.horizontal, Space.md)
-        .overlay(alignment: .trailing) {
-            // Hover-only (owner correction 2026-10-18) pinned to the pane
-            // edge in every card state; the reserved slot keeps its width so
-            // the title never reflows when they appear.
+            // Hover-only buttons live in a fixed trailing slot inside the
+            // readable column, so their right edge tracks the conversation
+            // and composer (owner request 2026-11-07); the slot keeps its
+            // width while hidden so the title never reflows when they appear.
+            // Outside the reorder handle: buttons are actions, not drags.
             HStack(spacing: 0) {
                 sessionMenu
                 if allowsClose {
@@ -412,13 +444,20 @@ struct MacPaneHeader: View {
                         .interfacePadding(.leading, Space.xs)
                 }
             }
-            .interfacePadding(.trailing, Space.md)
+            .frame(width: Self.hoverSlotWidth * interfaceScale, alignment: .trailing)
             .opacity(hovering ? 1 : 0)
             .allowsHitTesting(hovering)
         }
+        // The title lives in the same centered readable column as the
+        // conversation and composer (owner request 2026-11-07: both reading
+        // edges align with the content, not the pane edge).
+        .chatReadableColumn()
+        // Same yielded space as the conversation above: an open beside card
+        // narrows the reading column, and the title column follows it.
+        .interfacePadding(.trailing, cardReserve)
+        .interfacePadding(.horizontal, Space.md)
         .interfaceFrame(height: 40)
         .modifier(MacPaneMoveActions(key: session.key))
-        .background(headerSurface)
         .animation(MacMotion.state, value: isFocused)
         .animation(MacMotion.state, value: hovering)
         .animation(MacMotion.state, value: SessionPresentation.activityMarker(for: session))
@@ -429,34 +468,30 @@ struct MacPaneHeader: View {
         .accessibilityAddTraits(isFocused ? .isSelected : [])
     }
 
-    /// The title opens and closes Your prompts; the chevron shows the card's
-    /// state and appears only when the session has prompts.
+    /// The title focuses the pane. Your prompts opens from the circular
+    /// bubble button at the top trailing corner, not from the title.
+    /// A lone pane is the only typing target, so its title stays neutral.
+    /// In a split, accent + weight identify the active pane without adding a
+    /// line, outline, colored surface or dimming the neighboring conversation.
+    private var titleColor: Color {
+        guard workspace.paneKeys.count > 1 else { return .primary }
+        return isFocused ? Palette.accent : .secondary
+    }
+
     private var titleButton: some View {
         Button {
             focusPane()
-            if promptsCount > 0 { promptsBinding.wrappedValue.toggle() }
         } label: {
-            HStack(spacing: 5 * interfaceScale) {
-                Text(verbatim: SessionPresentation.displayTitle(for: session))
-                    .interfaceFont(.system(size: 15, weight: isFocused ? .semibold : .medium))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                if promptsCount > 0 {
-                    Image(systemName: promptsOpen ? "chevron.up" : "chevron.down")
-                        .interfaceFont(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(Color.secondary)
-                        .contentTransition(.symbolEffect(.replace))
-                        .accessibilityHidden(true)
-                }
-            }
-            .foregroundStyle(isFocused ? Color.primary : Color.secondary)
-            .contentShape(Rectangle())
+            Text(verbatim: SessionPresentation.displayTitle(for: session))
+                .interfaceFont(.system(size: 15, weight: isFocused ? .semibold : .medium))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .foregroundStyle(titleColor)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .help(Text(verbatim: titleHelp))
         .accessibilityLabel(Text(verbatim: SessionPresentation.displayTitle(for: session)))
-        .accessibilityValue(promptsCount > 0 ? Text("mac.prompts.title \(promptsCount)") : Text(verbatim: ""))
-        .accessibilityAddTraits(promptsOpen && promptsCount > 0 ? .isSelected : [])
     }
 
     /// The project names the pane among splits; it shortens before the title
@@ -466,7 +501,7 @@ struct MacPaneHeader: View {
         let project = SessionPresentation.projectName(from: session)
         if !project.isEmpty {
             Text(verbatim: project)
-                .interfaceFont(.system(size: 12))
+                .interfaceFont(.system(size: 15, weight: .regular))
                 .foregroundStyle(Color.secondary)
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -520,17 +555,6 @@ struct MacPaneHeader: View {
         }
     }
 
-    /// Focus takes the brighter surface in both appearances: white over the
-    /// grouped gray in light, the raised gray over the page in dark.
-    private var headerSurface: Color {
-        let page = Color(.systemGroupedBackground)
-        let raised = Color(.secondarySystemGroupedBackground)
-        if colorScheme == .dark {
-            return isFocused ? raised : page
-        }
-        return isFocused ? page : raised
-    }
-
     private var modeBinding: Binding<MacWorkspace.PaneMode> {
         Binding(
             get: { workspace.mode(for: session.key) },
@@ -567,17 +591,6 @@ struct MacPaneHeader: View {
         .foregroundStyle(Color.secondary)
         .help(Text("mac.pane.close"))
         .accessibilityLabel(Text("mac.pane.close"))
-    }
-
-    /// The prompt card's collapsed home is the session menu; opening or
-    /// closing it keeps the card's disclosure animation.
-    private var promptsBinding: Binding<Bool> {
-        Binding(
-            get: { promptsOpen },
-            set: { open in
-                withAnimation(MacMotion.disclosure(reduceMotion: reduceMotion)) { promptsOpen = open }
-            }
-        )
     }
 
     /// Activity dot first, then the independent red unread overlay.

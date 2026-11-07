@@ -619,6 +619,9 @@ struct MacRootView: View {
         if ProcessInfo.processInfo.arguments.contains("-CorralInspectInteraction") {
             Task { await MacInteractionInspection.run(feed: current, workspace: workspace) }
         }
+        if ProcessInfo.processInfo.arguments.contains("-CorralInspectPendingPane") {
+            Task { await MacPendingPaneInspection.run(feed: current, workspace: workspace) }
+        }
         if ProcessInfo.processInfo.arguments.contains("-CorralInspectPaneInput") {
             Task { await MacPaneInputInspection.run(feed: current, workspace: workspace) }
         }
@@ -760,7 +763,9 @@ private struct FeedConnectionKey: Hashable {
 /// `CORRAL_INSPECTION_SESSION_KEY`; several keys separated by commas open a
 /// split), `-CorralInspectTerminal` switches the last of them to terminal view,
 /// `-CorralInspectPromptsOpen`
-/// opens every pane's prompts card, `-CorralInspectAddPaneSession` creates a
+/// opens every pane's prompts card, `-CorralInspectPromptsClosed` closes
+/// them (shows the collapsed circular bubble button),
+/// `-CorralInspectAddPaneSession` creates a
 /// Claude session beside the first pane. Release has none.
 enum MacInspection {
     static func apply(feed: HostSessionFeed, workspace: MacWorkspace) {
@@ -794,6 +799,9 @@ enum MacInspection {
         }
         if arguments.contains("-CorralInspectPromptsOpen") {
             for key in workspace.paneKeys { workspace.promptsOpen[key] = true }
+        }
+        if arguments.contains("-CorralInspectPromptsClosed") {
+            for key in workspace.paneKeys { workspace.promptsOpen[key] = false }
         }
         Task { await MacPaneHeaderInspection.run(workspace: workspace) }
     }

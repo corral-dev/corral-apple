@@ -19,6 +19,21 @@ final class MacWorkspace {
 
     static let maxPanes = 4
 
+    /// A pane that is on screen before its host session exists (owner request
+    /// 2026-11-07: the split appears immediately, hosting follows). The key is
+    /// `__pending__:<uuid>`; it is not a session, so it never enters the shared
+    /// layout group, the surface pool or the composer, and it is promoted in
+    /// place when creation completes.
+    struct PendingPane: Equatable {
+        let key: String
+        let runtimeID: String
+        let project: String
+        let title: String
+        static func isPending(_ key: String) -> Bool { key.hasPrefix("__pending__:") }
+    }
+    private(set) var pendingPanes: [String: PendingPane] = [:]
+    func pendingPane(for key: String) -> PendingPane? { pendingPanes[key] }
+
     private(set) var hostID: String?
     @ObservationIgnored private var layoutGeneration = UUID()
 
@@ -411,6 +426,10 @@ final class MacWorkspace {
 
     /// Split: add a session as another pane (replaces the focused pane when full).
     func addPane(_ key: String, project: String) {
+        if PendingPane.isPending(key) {
+            addPendingPane(key)
+            return
+        }
         canonicalizePaneKeys()
         let key = canonicalPaneKey(key)
         if paneKeys.contains(key) {
@@ -441,6 +460,53 @@ final class MacWorkspace {
         syncGroup()
     }
 
+    /// Reserve a slot immediately (owner request 2026-11-07): the pane is on
+    /// screen while the host session is still being created. Layout, focus and
+    /// the entrance glide are the same ones a real pane uses; only the content
+    /// and the shared group membership wait for creation.
+    private func addPendingPane(_ key: String) {
+        guard !paneKeys.contains(key) else {
+            focus(key)
+            return
+        }
+        let project = projectPath(of: key)
+        guard canAddAgent(project: project) || paneKeys.isEmpty else {
+            pendingPanes.removeValue(forKey: key)
+            actionError = String(localized: "mac.split.project_mismatch")
+            return
+        }
+        let before = drawnPaneKeys
+        if paneKeys.count >= Self.maxPanes, let focusedKey,
+           let index = paneKeys.firstIndex(of: focusedKey) {
+            let replaced = paneKeys[index]
+            paneKeys[index] = key
+            let slot = before.firstIndex(of: replaced) ?? index
+            beginLeaving(replaced, slot: slot)
+            paneSurfaces.evict(replaced)
+        } else {
+            paneKeys.append(key)
+        }
+        pendingEntrances.insert(key)
+        glide(from: before, entering: key)
+        focusedKey = key
+        requestKeyFocus(key)
+        // Deliberately no syncGroup(): a pending pane is not a session yet.
+    }
+
+    /// Creation failed or the slot was replaced: withdraw the placeholder.
+    func abortPendingPane(_ key: String) {
+        guard pendingPanes.removeValue(forKey: key) != nil else { return }
+        if let index = paneKeys.firstIndex(of: key) {
+            paneKeys.remove(at: index)
+            pendingEntrances.remove(key)
+            paneSurfaces.evict(key)
+            if focusedKey == key {
+                focusedKey = paneKeys.isEmpty ? nil : paneKeys[min(index, paneKeys.count - 1)]
+                requestKeyFocus(focusedKey)
+            }
+        }
+    }
+
     /// Agent members define a split's project even while a terminal has focus.
     var splitAgentProject: String {
         if let agent = paneKeys.first(where: { !ProjectShell.isShellKey($0) }) {
@@ -454,7 +520,9 @@ final class MacWorkspace {
     }
 
     private func canAddAgent(project: String) -> Bool {
-        guard let existing = paneKeys.first(where: { !ProjectShell.isShellKey($0) }) else { return true }
+        guard let existing = paneKeys.first(where: {
+            !ProjectShell.isShellKey($0) && !PendingPane.isPending($0)
+        }) else { return true }
         return Self.projectIdentity(projectPath(of: existing)) == Self.projectIdentity(project)
     }
 
@@ -467,6 +535,17 @@ final class MacWorkspace {
     /// remaining pane and never jumps to the closed session.
     func closePane(_ key: String) {
         guard let index = paneKeys.firstIndex(of: key) else { return }
+        if PendingPane.isPending(key) {
+            // Nothing is running yet: leave the slot without a group write.
+            paneKeys.remove(at: index)
+            pendingPanes.removeValue(forKey: key)
+            pendingEntrances.remove(key)
+            paneSurfaces.evict(key)
+            if focusedKey == key {
+                focusedKey = paneKeys.isEmpty ? nil : paneKeys[min(index, paneKeys.count - 1)]
+            }
+            return
+        }
         let wasGrouped = paneKeys.count >= 2 && layout.group(containing: key) != nil
         let slot = drawnPaneKeys.firstIndex(of: key) ?? index
         paneKeys.remove(at: index)
@@ -486,6 +565,7 @@ final class MacWorkspace {
         paneFocusSerial &+= 1
         guard focusedKey != key else { return }
         focusedKey = key
+        if PendingPane.isPending(key) { return }
         guard paneKeys.count >= 2, layout.group(containing: key) != nil else { return }
         let project = projectPath(of: key)
         scheduleLayout(WireProtocol.mLayoutSetFocus, ["key": key, "project": project])
@@ -780,7 +860,9 @@ final class MacWorkspace {
 
     /// Only sessions form a TUI group: terminal panes stay local to the Mac.
     private func syncGroup() {
-        let sessionKeys = paneKeys.filter { !ProjectShell.isShellKey($0) }
+        let sessionKeys = paneKeys.filter {
+            !ProjectShell.isShellKey($0) && !PendingPane.isPending($0)
+        }
         guard sessionKeys.count >= 2 else { return }
         let groupProject = Self.projectIdentity(projectPath(of: sessionKeys[0]))
         var params: [String: Any] = ["project": groupProject, "keys": sessionKeys]
@@ -1005,6 +1087,16 @@ final class MacWorkspace {
             return
         }
         let project = splitAgentProject
+        // Reserve the pane before the RPC (owner request 2026-11-07): creation
+        // receipt polling can take seconds, and until now the split showed
+        // nothing for all of it. The placeholder is promoted in place.
+        let pendingKey = "__pending__:\(UUID().uuidString.lowercased().prefix(8))"
+        let title = runtimes.first(where: { $0.id == runtimeID })?.name ?? runtimeID
+        pendingPanes[pendingKey] = PendingPane(
+            key: pendingKey, runtimeID: runtimeID, project: project,
+            title: String(localized: "session.new.creating") + " " + title
+        )
+        addPane(pendingKey, project: project)
         do {
             let created = try await SessionCreationCoordinator.create(
                 hostID: host, runtimeID: runtimeID, cwd: project,
@@ -1012,9 +1104,10 @@ final class MacWorkspace {
                 call: { method, params in try await client.call(method, params: params) }
             )
             guard !Task.isCancelled, appModel?.client === client, hostID == host else { return }
-            openCreated(created, asPane: true)
+            openCreated(created, asPane: true, replacing: pendingKey)
         } catch {
             guard !Task.isCancelled, appModel?.client === client, hostID == host else { return }
+            abortPendingPane(pendingKey)
             actionError = SessionActionsMenu.failureMessage(for: error)
         }
     }
@@ -1025,20 +1118,53 @@ final class MacWorkspace {
     /// Only shown panes, in slot order: a retained dormant or departing host
     /// can still have a frame under the visible pane and must never take focus.
     func paneKey(atWindowPoint point: CGPoint) -> String? {
-        for key in paneKeys {
+        // Canonical key per shown slot, computed once (resolvedKey hits the store).
+        let canonicals = paneKeys.map(canonicalPaneKey)
+        // Cheap path first: direct and canonical frames without scanning aliases.
+        for (index, key) in paneKeys.enumerated() {
             if paneFrames[key]?.contains(point) == true { return key }
-            let canonical = canonicalPaneKey(key)
+            let canonical = canonicals[index]
             if canonical != key, paneFrames[canonical]?.contains(point) == true { return key }
-            // Frame stored under an alias (provisional key migrated to canonical):
-            // any frame resolving to this pane still focuses it.
-            for (frameKey, frame) in paneFrames where frame.contains(point) {
-                if frameKey == key || canonicalPaneKey(frameKey) == canonical { return key }
+        }
+        // Alias frames (a frame stored under a migrated provisional key):
+        // single scan, only frames resolving to a shown pane can claim focus.
+        let shown = Set(canonicals)
+        for (frameKey, frame) in paneFrames where frame.contains(point) {
+            if shown.contains(canonicalPaneKey(frameKey)) {
+                // Slot order wins when overlapping frames resolve alike.
+                for (index, key) in paneKeys.enumerated() {
+                    if canonicals[index] == canonicalPaneKey(frameKey) { return key }
+                }
             }
         }
         return nil
     }
 
-    func openCreated(_ session: SessionSummary, asPane: Bool) {
+    func openCreated(_ session: SessionSummary, asPane: Bool, replacing pendingKey: String? = nil) {
+        if let pendingKey, pendingPanes.removeValue(forKey: pendingKey) != nil,
+           paneKeys.firstIndex(of: pendingKey) == nil {
+            // The person closed the reserved slot while creation ran: the
+            // session exists on the host now, so list it, but do not bring a
+            // pane back that they just dismissed.
+            feed?.listStore.patchSession(session)
+            feed?.listStore.rememberOpened(session)
+            return
+        }
+        if let pendingKey, let index = paneKeys.firstIndex(of: pendingKey) {
+            // Promote in place: same slot, same width, no second column.
+            pendingEntrances.remove(pendingKey)
+            let key = session.key
+            feed?.listStore.patchSession(session)
+            feed?.listStore.rememberOpened(session)
+            applyNewSessionMode(to: key)
+            paneKeys[index] = key
+            paneSurfaces.rename(pendingKey, to: key)
+            if focusedKey == pendingKey { focusedKey = key }
+            if keyFocusTarget == pendingKey { keyFocusTarget = key }
+            paneFrames[pendingKey] = nil
+            syncGroup()
+            return
+        }
         feed?.listStore.patchSession(session)
         feed?.listStore.rememberOpened(session)
         applyNewSessionMode(to: session.key)
@@ -1107,6 +1233,7 @@ final class MacWorkspace {
 
     /// Folder of a pane: the session's project or the shell's start folder.
     func projectPath(of key: String) -> String {
+        if let pending = pendingPanes[key] { return pending.project }
         if ProjectShell.isShellKey(key) { return shells.shell(for: key)?.project ?? "" }
         return feed?.listStore.session(for: key)?.cwd ?? ""
     }

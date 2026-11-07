@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// The session menu behind a pane header's kebab button (design: Window top
-/// bar, owner correction). Your prompts opens from the pane title instead.
+/// bar, owner correction). Your prompts opens from the circular bubble button
+/// at the pane's top trailing corner instead.
 struct MacSessionMenuItems: View {
     @Environment(AppModel.self) private var appModel
     @Environment(MacWorkspace.self) private var workspace
