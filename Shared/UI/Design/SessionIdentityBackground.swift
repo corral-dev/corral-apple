@@ -19,7 +19,7 @@ struct SessionIdentityBackground: View {
                     .font(.system(size: max(1, side * 0.82)))
                     .lineLimit(1)
                     .frame(width: side, height: side)
-                    .opacity(contrast == .increased ? 0.035 : (colorScheme == .dark ? 0.10 : 0.07))
+                    .opacity(contrast == .increased ? 0.05 : (colorScheme == .dark ? 0.14 : 0.10))
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                     .padding(inset)
             }

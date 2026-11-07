@@ -9,7 +9,7 @@ import Observation
     var sends = 0
 }
 
-private struct ComposerScreen: View {
+struct ComposerScreen: View {
     let state: ComposerState
     var body: some View {
         @Bindable var state = state
@@ -124,6 +124,7 @@ private struct ComposerScreen: View {
                      "Shift-Return did not insert at native caret")
         precondition(state.sends == 0, "Inspection sent a prompt")
         print("PASS native Up/Down recall, draft restoration and Shift-Return; no sends")
+        PaneInteractionProbe.run()
         if inspect {
             replaceDraft("Keep typing 中文🙂 right here while messages arrive")
             preserve(NSRange(location: 12, length: 0), label: "visible native composer")

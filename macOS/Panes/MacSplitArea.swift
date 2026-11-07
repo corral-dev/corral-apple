@@ -93,6 +93,17 @@ private struct MacRetainedPanes: View {
                     }
                     .modifier(PaneEntrance(key: key, entering: workspace.pendingEntrances.contains(key)))
                 }
+                .background {
+                    MacPaneInteraction(
+                        isPresented: visible && workspace.isShownPane(key),
+                        isActive: workspace.showsFocus(key),
+                        isChat: !ProjectShell.isShellKey(key) && workspace.mode(for: key) == .chat,
+                        inputRoot: {
+                            guard let session = feed.listStore.session(for: key) else { return nil }
+                            return workspace.paneSurfaces.existingEntry(for: session.key)?.view
+                        },
+                        activate: { workspace.focus(key) })
+                }
                 .modifier(PaneSlot(shift: (workspace.paneShifts[key] ?? 0) + dragOffset(key),
                                    leaving: workspace.leavingPanes[key] != nil,
                                    lifted: workspace.liftedPane == key))

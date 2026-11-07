@@ -24,7 +24,6 @@ struct MacRootView: View {
     @State private var showPairing = false
     @State private var showSearch = false
     @State private var pairingError: String?
-    @State private var clickMonitor: Any?
     @SceneStorage("corral.mac.panesByHost") private var restoredPanesByHost = ""
     /// A manual sidebar choice survives relaunches. Automatic collapse is kept
     /// separately so a narrow relaunch stays collapsed without turning into a
@@ -102,9 +101,7 @@ struct MacRootView: View {
         .onAppear {
             appModel.refreshHosts()
             workspace.attach(appModel: appModel)
-            installClickToFocus()
         }
-        .onDisappear(perform: removeClickToFocus)
         #if DEBUG
         .task {
             let arguments = ProcessInfo.processInfo.arguments
@@ -622,6 +619,9 @@ struct MacRootView: View {
         if ProcessInfo.processInfo.arguments.contains("-CorralInspectInteraction") {
             Task { await MacInteractionInspection.run(feed: current, workspace: workspace) }
         }
+        if ProcessInfo.processInfo.arguments.contains("-CorralInspectPaneInput") {
+            Task { await MacPaneInputInspection.run(feed: current, workspace: workspace) }
+        }
         if ProcessInfo.processInfo.arguments.contains("-CorralInspectSearch") {
             let delay = Double(ProcessInfo.processInfo.environment["CORRAL_INSPECTION_SEARCH_DELAY"] ?? "") ?? 0
             if delay.isFinite, delay > 0 {
@@ -734,31 +734,6 @@ struct MacRootView: View {
         }
         let next = (index + (forward ? 1 : -1) + keys.count) % keys.count
         workspace.open(keys[next], sessions: feed.listStore.windowSessions, takeKeys: true)
-    }
-
-    /// A click anywhere in a pane focuses it, without intercepting the click
-    /// (text selection, buttons and the terminal still receive it).
-    private func installClickToFocus() {
-        guard clickMonitor == nil else { return }
-        clickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak workspace] event in
-            if let workspace, let window = event.window, let content = window.contentView {
-                let point = CGPoint(x: event.locationInWindow.x, y: content.bounds.height - event.locationInWindow.y)
-                if let key = workspace.paneKey(atWindowPoint: point) {
-                    workspace.focus(key)
-                    // Once the click is handled: keep a text selection or the
-                    // pane's composer, else put the caret in the composer.
-                    DispatchQueue.main.async { [weak workspace, weak window] in
-                        if let workspace { workspace.claimKeysAfterClick(in: key, window: window) }
-                    }
-                }
-            }
-            return event
-        }
-    }
-
-    private func removeClickToFocus() {
-        if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
-        clickMonitor = nil
     }
 
     private func pair(url: URL, deviceName: String = UIDeviceName.current) async {

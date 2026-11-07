@@ -6,6 +6,20 @@ next version's section. A `Release: minor` or `Release: major` line requests a
 larger version step; `Release: hold <reason>` keeps the changes unreleased until
 the named acceptance is done.
 
+## Mac 0.3.167 (173) / iPhone 1.0.216 (229)
+
+### English
+
+- Keep agent-terminal glyphs aligned to physical pixels under Metal, preventing intermittent fuzzy text as pane and window geometry changes. SwiftTerm is updated to 1.99.3 on Mac and iPhone.
+- Mac: clicking any region of a split pane activates it, and typing in Chat goes directly to that pane's composer.
+- Session-title emoji backgrounds are slightly easier to recognize while remaining behind messages and terminal content.
+
+### 简体中文
+
+- Agent 终端字形在 Metal 渲染下始终对齐物理像素，避免分屏和窗口几何尺寸变化时偶发字体发虚；Mac 与 iPhone 的 SwiftTerm 均升级至 1.99.3。
+- Mac：点击分屏任意区域都会激活该分屏，在聊天中打字直接进入对应分屏的输入框。
+- 会话标题 emoji 背景图标略微加深，更容易辨认，同时仍位于消息和终端内容底层。
+
 ## Mac 0.3.166 (172) / iPhone 1.0.215 (228)
 
 ### English

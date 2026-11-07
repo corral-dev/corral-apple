@@ -117,10 +117,8 @@ struct NewSessionSheet: View {
     }
 
     #if os(macOS)
-    /// A desktop dialog in the quick filters' form: a Quick Start row of
-    /// one-click combinations, one row of assistant capsules, one row of
-    /// recent-project capsules with More for the whole catalog, then the
-    /// action. Assistant and project selections are single-choice.
+    /// Manual assistant/project choices first, then remembered one-click
+    /// combinations. Assistant and project selections are single-choice.
     private var macContent: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("session.new.title")
@@ -128,22 +126,6 @@ struct NewSessionSheet: View {
                 .interfacePadding(.horizontal, Space.xl)
                 .interfacePadding(.top, Space.xl)
                 .interfacePadding(.bottom, Space.lg)
-
-            if !recentCombos.isEmpty {
-                // Starts need no catalog, so this row does not wait for it.
-                VStack(alignment: .leading, spacing: Space.sm * interfaceScale) {
-                    macFieldLabel("session.new.quick")
-                    MacFilterChoices {
-                        ForEach(recentCombos) { quickStartButton($0) }
-                    }
-                }
-                .interfacePadding(.horizontal, Space.xl)
-                .interfacePadding(.bottom, Space.lg)
-                // Starting now and choosing-then-Start read as two zones; the
-                // rule is inset to the content edges, unlike the footer's.
-                Divider()
-                    .interfacePadding(.horizontal, Space.xl)
-            }
 
             VStack(alignment: .leading, spacing: Space.sm * interfaceScale) {
                 macFieldLabel("session.new.runtime")
@@ -186,8 +168,21 @@ struct NewSessionSheet: View {
             }
             .disabled(options.isLoading || isCreating || isChoosingFolder)
             .interfacePadding(.horizontal, Space.xl)
-            .interfacePadding(.top, recentCombos.isEmpty ? 0 : Space.lg)
-            .interfacePadding(.bottom, Space.xl)
+            .interfacePadding(.bottom, Space.lg)
+
+            if !recentCombos.isEmpty {
+                Divider()
+                    .interfacePadding(.horizontal, Space.xl)
+                // Remembered starts remain usable without waiting for the catalog.
+                VStack(alignment: .leading, spacing: Space.sm * interfaceScale) {
+                    macFieldLabel("session.new.quick")
+                    MacFilterChoices {
+                        ForEach(recentCombos) { quickStartButton($0) }
+                    }
+                }
+                .interfacePadding(.horizontal, Space.xl)
+                .interfacePadding(.vertical, Space.lg)
+            }
 
             Divider()
             macFooter

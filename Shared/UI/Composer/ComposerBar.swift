@@ -209,6 +209,8 @@ struct ComposerBar: View {
         // also observes background message text views on this OS, then applies
         // their ranges to this field when the conversation refreshes.
         TextField("composer.placeholder", text: $text, axis: .vertical)
+            .accessibilityIdentifier("composer.input")
+            .background { MacComposerInputAnchor() }
             .onKeyPress(.return, phases: .down) { press in
                 guard press.modifiers.contains(.shift) else { return .ignored }
                 insertLineBreak()
