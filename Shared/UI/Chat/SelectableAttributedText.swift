@@ -17,13 +17,22 @@ private final class EdgeFadeTextView: UITextView {
 
     override func copy(_ sender: Any?) {
         if let source = sourceMarkdown, !source.isEmpty {
-            // Prefer the original markdown over the rendered/plain conversion.
-            super.copy(sender)
-            var items = UIPasteboard.general.items
-            if items.isEmpty { items = [[:]] }
-            items[0]["public.utf8-plain-text"] = source
-            UIPasteboard.general.items = items
-            return
+            // Full-message Copy pastes the original markdown. A partial
+            // selection keeps the selected fragment so Copy never pastes
+            // more than the user highlighted.
+            let selected = selectedRange
+            let fullLength = (attributedText?.length ?? 0)
+            let coversAll = selected.length > 0
+                && selected.location == 0
+                && selected.length >= fullLength
+            if coversAll {
+                super.copy(sender)
+                var items = UIPasteboard.general.items
+                if items.isEmpty { items = [[:]] }
+                items[0]["public.utf8-plain-text"] = source
+                UIPasteboard.general.items = items
+                return
+            }
         }
         if let plain = ChatDiagramAttachment.plainText(attributedText, range: selectedRange) {
             // Keep the native rich/image representations alongside source text.
@@ -421,6 +430,7 @@ struct SelectableAttributedText: View {
     @Environment(\.macConversationTextDocument) private var document
     @Environment(\.macMessageSelectionID) private var selectionID
     @Environment(\.macRowMeasurement) private var measurementOnly
+    @Environment(\.chatWorkingDirectory) private var workingDirectory
 
     var body: some View {
         MacSelectableTextView(
@@ -433,7 +443,8 @@ struct SelectableAttributedText: View {
             document: document,
             selectionID: selectionID,
             measurementOnly: measurementOnly,
-            sourceMarkdown: sourceMarkdown
+            sourceMarkdown: sourceMarkdown,
+            workingDirectory: workingDirectory
         )
         .accessibilityLabel(Text(String(attributed.characters)))
     }
@@ -531,6 +542,8 @@ private struct MacSelectableTextView: NSViewRepresentable {
     var measurementOnly = false
     /// Original markdown source (hover copy uses it; selection copy stays native).
     var sourceMarkdown: String? = nil
+    /// Session project directory: relative paths in the text resolve against it.
+    var workingDirectory: String? = nil
 
     /// Conversion to NSAttributedString and measurement are the cost of a
     /// window resize (SwiftUI measures each visible bubble several times per
@@ -551,6 +564,7 @@ private struct MacSelectableTextView: NSViewRepresentable {
         let attributed: AttributedString
         let fontSize: CGFloat
         let foreground: NSColor
+        let workingDirectory: String?
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -757,7 +771,7 @@ private struct MacSelectableTextView: NSViewRepresentable {
         if direct {
             return MacDirectMessageTextView(frame: .zero, textContainer: container)
         }
-        return NSTextView(frame: .zero, textContainer: container)
+        return MacMessageTextView(frame: .zero, textContainer: container)
     }
 
     private func converted(_ coordinator: Coordinator) -> NSAttributedString {
@@ -768,11 +782,13 @@ private struct MacSelectableTextView: NSViewRepresentable {
             }
             return text
         }
-        let source = Source(attributed: attributed, fontSize: font.pointSize, foreground: foreground)
+        let source = Source(attributed: attributed, fontSize: font.pointSize, foreground: foreground,
+                            workingDirectory: workingDirectory)
         if coordinator.source == source, let converted = coordinator.converted {
             return converted
         }
-        let ns = MacMessageTextRenderer.convert(attributed, font: font, foreground: foreground)
+        let ns = MacMessageTextRenderer.convert(attributed, font: font, foreground: foreground,
+                                                workingDirectory: workingDirectory)
         coordinator.source = source
         coordinator.converted = ns
         coordinator.sizes.removeAll()
@@ -783,11 +799,8 @@ private struct MacSelectableTextView: NSViewRepresentable {
 
 /// Shared conversion for measurement, drawing and the conversation text network.
 private enum MacMessageTextRenderer {
-    /// Bare absolute paths become file links to their parent folder (or the
-    /// folder itself) so a click opens Finder. Existing markdown links win.
-    /// Paths are dev-machine-local: only link when the target's parent folder
-    /// exists on this Mac; iOS never gets these links (remote paths).
-    static func convert(_ attributed: AttributedString, font: NSFont, foreground: NSColor) -> NSAttributedString {
+    static func convert(_ attributed: AttributedString, font: NSFont, foreground: NSColor,
+                        workingDirectory: String? = nil) -> NSAttributedString {
         let mutable = NSMutableAttributedString(attributedString: NSAttributedString(attributed))
         let full = NSRange(location: 0, length: mutable.length)
         guard full.length > 0 else { return mutable }
@@ -806,61 +819,137 @@ private enum MacMessageTextRenderer {
             mutable.setAttributes(next, range: range)
         }
         MacMarkdownTable.apply(to: mutable, source: attributed, bodyFont: font)
-        linkLocalPaths(in: mutable)
+        MacPathLinks.apply(to: mutable, workingDirectory: workingDirectory)
         return mutable
     }
+}
 
+/// Path mentions in message text become Finder links (owner request
+/// 2026-11-08: clicking a path opens the folder it is in). Covers absolute,
+/// `~/` and project-relative paths (resolved against the session directory),
+/// with `:line[:column]` or `#Lline` suffixes. A path is linked only when it
+/// exists on this Mac, or when its parent folder does (a deleted file still
+/// opens its folder); explicit Markdown links win. The click is handled by
+/// `MacPathLinks.open`: a folder opens, a file is revealed selected in Finder.
+/// iOS never gets these links (paths belong to the dev machine).
+enum MacPathLinks {
     private static let pathRegex: NSRegularExpression? = try? NSRegularExpression(
-        pattern: "(?:~\\/[\\w\\-.+@=%:,/]*|/(?:Users|tmp|private|var|opt|usr|home|data|workspace|work|Codes|projects?|src|etc)[\\w\\-.+@=%:,/]*)",
+        pattern: "(?<![\\w/.~:@-])(?:~?/[\\w\\-.+@=%,]+(?:/[\\w\\-.+@=%,]*)*|(?:\\.{1,2}/)?[\\w\\-.+@]+(?:/[\\w\\-.+@]+)+/?|[\\w\\-+@]+\\.[A-Za-z][A-Za-z0-9]{0,7})(?:(?::\\d+){1,2}|#L\\d+(?:-L?\\d+)?)?",
         options: []
     )
+    private static let locationSuffix: NSRegularExpression? = try? NSRegularExpression(
+        pattern: "(?:(?::\\d+){1,2}|#L\\d+(?:-L?\\d+)?)$", options: []
+    )
+    private static let spaceTokenCharacters = CharacterSet(
+        charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.+@=%,/"
+    )
 
-    private static func linkLocalPaths(in mutable: NSMutableAttributedString) {
+    static func apply(to mutable: NSMutableAttributedString, workingDirectory: String?) {
         guard let regex = pathRegex else { return }
         let string = mutable.string as NSString
         let full = NSRange(location: 0, length: string.length)
         guard full.length > 0, full.length < 32_768 else { return }
         let matches = regex.matches(in: mutable.string, options: [], range: full)
         guard !matches.isEmpty else { return }
-        let fm = FileManager.default
+        let base = workingDirectory.flatMap { $0.isEmpty ? nil : ($0 as NSString).expandingTildeInPath }
         // Walk backwards so earlier ranges stay valid as we add attributes.
         for match in matches.reversed() {
-            var range = match.range
-            // Trim trailing punctuation the chat text leaves after a path.
-            while range.length > 1 {
-                let last = string.character(at: NSMaxRange(range) - 1)
-                let scalar = UnicodeScalar(last)
-                let ch = scalar.map { Character($0) }
-                if ch.map({ ".,:;!?)]}'\"".contains($0) }) == true {
-                    range.length -= 1
-                } else { break }
-            }
+            var range = trimmed(match.range, in: string)
             guard range.length > 2 else { continue }
-            // Skip ranges that already carry a markdown link.
             var hasLink = false
             mutable.enumerateAttribute(.link, in: range, options: []) { value, _, stop in
                 if value != nil { hasLink = true; stop.pointee = true }
             }
             if hasLink { continue }
-            let raw = string.substring(with: range)
-            let expanded: String
-            if raw.hasPrefix("~") {
-                expanded = (raw as NSString).expandingTildeInPath
-            } else {
-                expanded = raw
-            }
-            var isDir: ObjCBool = false
-            let target: String?
-            if fm.fileExists(atPath: expanded, isDirectory: &isDir) {
-                target = isDir.boolValue ? expanded : (expanded as NSString).deletingLastPathComponent
-            } else {
-                let parent = (expanded as NSString).deletingLastPathComponent
-                var parentIsDir: ObjCBool = false
-                target = (!parent.isEmpty && fm.fileExists(atPath: parent, isDirectory: &parentIsDir) && parentIsDir.boolValue) ? parent : nil
-            }
-            guard let folder = target, !folder.isEmpty else { continue }
-            mutable.addAttribute(.link, value: URL(fileURLWithPath: folder, isDirectory: true), range: range)
+            range = extendOverSpaces(range, in: string, base: base)
+            guard let url = target(for: string.substring(with: range), base: base) else { continue }
+            mutable.addAttribute(.link, value: url, range: range)
         }
+    }
+
+    /// Opens a path link in Finder; false for any other link.
+    @discardableResult
+    static func open(_ link: Any) -> Bool {
+        guard let url = link as? URL ?? (link as? String).flatMap(URL.init(string:)), url.isFileURL else {
+            return false
+        }
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), !isDirectory.boolValue {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        } else {
+            NSWorkspace.shared.open(url)
+        }
+        return true
+    }
+
+    /// The file URL a mention points to: the path itself when it exists,
+    /// otherwise its existing parent folder.
+    static func target(for raw: String, base: String?) -> URL? {
+        var path = raw
+        if let suffix = locationSuffix?.firstMatch(in: path, range: NSRange(location: 0, length: (path as NSString).length)) {
+            path = (path as NSString).substring(to: suffix.range.location)
+        }
+        guard let resolved = resolve(path, base: base) else { return nil }
+        let fm = FileManager.default
+        var isDirectory: ObjCBool = false
+        if fm.fileExists(atPath: resolved, isDirectory: &isDirectory) {
+            return URL(fileURLWithPath: resolved, isDirectory: isDirectory.boolValue)
+        }
+        // Only an explicit path (with a folder part) falls back to its folder.
+        guard path.contains("/") else { return nil }
+        let parent = (resolved as NSString).deletingLastPathComponent
+        guard !parent.isEmpty, parent != "/", fm.fileExists(atPath: parent, isDirectory: &isDirectory),
+              isDirectory.boolValue else { return nil }
+        return URL(fileURLWithPath: parent, isDirectory: true)
+    }
+
+    private static func resolve(_ path: String, base: String?) -> String? {
+        if path.hasPrefix("~") { return (path as NSString).expandingTildeInPath }
+        if path.hasPrefix("/") { return path }
+        guard let base else { return nil }
+        return ((base as NSString).appendingPathComponent(path) as NSString).standardizingPath
+    }
+
+    /// Drop sentence punctuation the chat text leaves after a path.
+    private static func trimmed(_ range: NSRange, in string: NSString) -> NSRange {
+        var range = range
+        while range.length > 1 {
+            let last = string.character(at: NSMaxRange(range) - 1)
+            guard let scalar = UnicodeScalar(last), ".,;!?)]}'\"".unicodeScalars.contains(scalar) else { break }
+            range.length -= 1
+        }
+        return range
+    }
+
+    /// Paths with spaces ("My Documents"): the regex stops at the first space,
+    /// so extend over ` + token` while the extended path exists on disk.
+    private static func extendOverSpaces(_ range: NSRange, in string: NSString, base: String?) -> NSRange {
+        var range = range
+        let total = string.length
+        while NSMaxRange(range) < total {
+            let cursor = NSMaxRange(range)
+            guard string.character(at: cursor) == 32 /* space */ else { break }
+            var next = cursor + 1
+            while next < total && string.character(at: next) == 32 { next += 1 }
+            var end = next
+            while end < total, let scalar = UnicodeScalar(string.character(at: end)),
+                  spaceTokenCharacters.contains(scalar) { end += 1 }
+            guard end > next else { break }
+            let candidate = string.substring(with: NSRange(location: range.location, length: end - range.location))
+            guard let resolved = resolve(candidate, base: base),
+                  FileManager.default.fileExists(atPath: resolved) else { break }
+            range.length = end - range.location
+        }
+        return range
+    }
+}
+
+/// Message text view outside the conversation network (capped rows); path
+/// links open Finder like the network's own text views.
+final class MacMessageTextView: NSTextView {
+    override func clicked(onLink link: Any, at charIndex: Int) {
+        if MacPathLinks.open(link) { return }
+        super.clicked(onLink: link, at: charIndex)
     }
 }
 
@@ -885,6 +974,10 @@ extension EnvironmentValues {
 
     /// Set only by the conversation table's off-screen row measurement.
     @Entry var macRowMeasurement = false
+
+    /// Project directory of the session a conversation belongs to (Mac panes);
+    /// relative path mentions resolve against it.
+    @Entry var chatWorkingDirectory: String? = nil
 }
 
 struct MacConversationTextSelection: ViewModifier {
@@ -897,6 +990,7 @@ struct MacConversationTextSelection: ViewModifier {
     var mediaRevisions: [Int: Int] = [:]
     @Environment(\.sessionTextScale) private var sessionTextScale
     @Environment(\.interfaceScale) private var interfaceScale
+    @Environment(\.chatWorkingDirectory) private var workingDirectory
     @State private var document = MacConversationTextDocument()
 
     func body(content: Content) -> some View {
@@ -915,7 +1009,8 @@ struct MacConversationTextSelection: ViewModifier {
         document.update(identity: identity, sources: sources, style: style) { source in
             MacMessageTextRenderer.convert(
                 renderText?(source.text, source.id) ?? ChatMarkdown.attributed(source.text), font: font,
-                foreground: source.isUser ? style.userForeground : style.foreground
+                foreground: source.isUser ? style.userForeground : style.foreground,
+                workingDirectory: workingDirectory
             )
         }
         return content

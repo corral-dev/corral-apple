@@ -65,6 +65,12 @@ final class MacDirectMessageTextView: NSTextView {
         nextResponder?.scrollWheel(with: event)
     }
 
+    /// Path mentions open Finder (`MacPathLinks`); other links stay native.
+    override func clicked(onLink link: Any, at charIndex: Int) {
+        if MacPathLinks.open(link) { return }
+        super.clicked(onLink: link, at: charIndex)
+    }
+
     /// A plain press-and-drag selects across the conversation's message
     /// blocks. Word/paragraph clicks, modified clicks and links keep native
     /// handling.

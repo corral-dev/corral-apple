@@ -5,6 +5,11 @@ import AppKit
 @MainActor
 enum MacCopyInspection {
     static func run(key: String, workspace: MacWorkspace) async {
+        if ProcessInfo.processInfo.arguments.contains("-CorralInspectPathLink"),
+           ProcessInfo.processInfo.environment["CORRAL_INSPECTION_SESSION_KEY"] == key {
+            await clickPathLink()
+            return
+        }
         let acrossBlocks = ProcessInfo.processInfo.arguments.contains("-CorralInspectCrossBlockCopy")
         guard acrossBlocks || ProcessInfo.processInfo.arguments.contains("-CorralInspectCopy"),
               ProcessInfo.processInfo.environment["CORRAL_INSPECTION_SESSION_KEY"] == key else { return }
@@ -85,6 +90,37 @@ enum MacCopyInspection {
             return
         }
         try? "{\"error\":\"No visible message text\"}".write(toFile: "/tmp/corral-mac-copy.json", atomically: true, encoding: .utf8)
+    }
+
+    /// `-CorralInspectPathLink` + `CORRAL_INSPECTION_PATH_LINK=<visible link text>`:
+    /// finds that path link in the shown conversation and clicks it through the
+    /// text view's own `clicked(onLink:at:)`, the same entry a pointer click uses.
+    /// Writes the links found and the clicked target to /tmp/corral-mac-path-link.json.
+    private static func clickPathLink() async {
+        let wanted = ProcessInfo.processInfo.environment["CORRAL_INSPECTION_PATH_LINK"] ?? ""
+        for _ in 0..<40 {
+            try? await Task.sleep(for: .milliseconds(250))
+            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.title == "Corral" }),
+                  let content = window.contentView else { continue }
+            var found: [String: String] = [:]
+            var hit: (NSTextView, Any, Int)?
+            for text in descendants(content).compactMap({ $0 as? NSTextView }) {
+                guard let storage = text.textStorage, storage.length > 0 else { continue }
+                storage.enumerateAttribute(.link, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+                    guard let url = value as? URL, url.isFileURL else { return }
+                    let label = (storage.string as NSString).substring(with: range)
+                    found[label] = url.path
+                    if label == wanted, hit == nil { hit = (text, value as Any, range.location) }
+                }
+            }
+            guard !found.isEmpty else { continue }
+            if let (text, link, index) = hit { text.clicked(onLink: link, at: index) }
+            let result: [String: Any] = ["links": found, "clicked": hit != nil ? found[wanted] ?? "" : ""]
+            if let data = try? JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]) {
+                try? data.write(to: URL(fileURLWithPath: "/tmp/corral-mac-path-link.json"))
+            }
+            return
+        }
     }
 
     private static func descendants(_ root: NSView) -> [NSView] {

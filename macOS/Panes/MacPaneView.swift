@@ -308,6 +308,7 @@ struct MacPaneView: View {
                             onDidCreateSession: { created in workspace.openCreated(created, asPane: true) }
                         )
                         .environment(\.macConversationTextDocument, workspace.paneSurfaces.entry(for: session.key).textDocument())
+                        .environment(\.chatWorkingDirectory, session.cwd)
                         .id(ObjectIdentifier(store))
                         .environment(\.composerRecedes, composerRecedes)
                         .animation(MacMotion.state, value: composerRecedes)
@@ -393,8 +394,8 @@ struct MacPaneView: View {
 /// then its attention dots; the kebab (session menu) and Close
 /// show while the pointer is over the header. Your prompts opens from the
 /// circular bubble button at the pane's top trailing corner, never from the
-/// title. In a split, the focused session's accent title identifies where
-/// typing goes; the reading area and composer stay neutral.
+/// title. The focused session's accent title identifies where typing goes in
+/// both a lone pane and a split; the reading area and composer stay neutral.
 struct MacPaneHeader: View {
     @Environment(\.interfaceScale) private var interfaceScale
     @Environment(AppModel.self) private var appModel
@@ -470,12 +471,10 @@ struct MacPaneHeader: View {
 
     /// The title focuses the pane. Your prompts opens from the circular
     /// bubble button at the top trailing corner, not from the title.
-    /// A lone pane is the only typing target, so its title stays neutral.
-    /// In a split, accent + weight identify the active pane without adding a
-    /// line, outline, colored surface or dimming the neighboring conversation.
+    /// Accent + weight identify the current session in a lone pane or split,
+    /// without a line, outline, colored surface or conversation dimming.
     private var titleColor: Color {
-        guard workspace.paneKeys.count > 1 else { return .primary }
-        return isFocused ? Palette.accent : .secondary
+        isFocused ? Palette.accent : .secondary
     }
 
     private var titleButton: some View {

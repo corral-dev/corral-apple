@@ -102,6 +102,7 @@ struct MessageBubbleView: View, Equatable {
     @State private var hasMoreBelow = false
     #if os(macOS)
     @State private var hovering = false
+    @State private var copied = false
     #endif
 
     private var isUser: Bool { message.role.lowercased() == "user" }
@@ -119,10 +120,19 @@ struct MessageBubbleView: View, Equatable {
         VStack(alignment: .trailing, spacing: Space.xs * interfaceScale) {
             HStack(alignment: .bottom, spacing: Space.sm * interfaceScale) {
                 if isUser {
-                    Spacer(minLength: Space.xxl * interfaceScale)
+                    Spacer(minLength: userLeadingMinimum * interfaceScale)
+                    #if os(macOS)
+                    copySlot
+                    #endif
                 }
                 messageBubble
+                #if os(macOS)
+                if !isUser { copySlot }
+                #endif
             }
+            #if os(macOS)
+            .onHover { hovering = $0 }
+            #endif
             if isFailedUser {
                 deliveryFeedback
             }
@@ -220,10 +230,6 @@ struct MessageBubbleView: View, Equatable {
                 alignment: isUser ? .trailing : .leading
             )
             .background(hasBubble ? bubbleFill : Color.clear, in: bubbleShape)
-            #if os(macOS)
-            .overlay(alignment: .topTrailing) { hoverCopyButton(source: text) }
-            .onHover { hovering = $0 }
-            #endif
             .task(id: "\(imageLoader.map(ObjectIdentifier.init).map(String.init(describing:)) ?? "")|\(colorScheme)|\(text)") {
                 await imageLoader?.diagrams.prepare(text: text, dark: colorScheme == .dark)
                 if message.seq > 0 {
@@ -233,25 +239,54 @@ struct MessageBubbleView: View, Equatable {
         }
     }
 
+    /// Leading room a user bubble keeps free. On the Mac the copy slot sits in
+    /// that room, so the bubble's widest size is unchanged.
+    private var userLeadingMinimum: CGFloat {
+        #if os(macOS)
+        max(0, Space.xxl - TouchTarget.iconVisual - Space.sm)
+        #else
+        Space.xxl
+        #endif
+    }
+
     #if os(macOS)
-    /// Hover copy: copies the original markdown source, not the rendered text.
+    /// Hover copy (owner request 2026-11-08): copies the message's original
+    /// Markdown. It follows the pane title's hover buttons: a borderless 24 pt
+    /// secondary icon in a slot that is always laid out and only fades in, so
+    /// hovering never moves text. The slot sits beside the message on its open
+    /// side (left of a user bubble, right of assistant text), bottom-aligned
+    /// where reading ends; it never covers text.
     @ViewBuilder
-    private func hoverCopyButton(source: String) -> some View {
-        if hovering {
+    private var copySlot: some View {
+        if let source = message.text, !source.allSatisfy(\.isWhitespace) {
             Button {
                 PlatformPasteboard.copy(source)
+                copied = true
+                AccessibilityNotification.Announcement(String(localized: "chat.copied")).post()
             } label: {
-                Image(systemName: "doc.on.doc")
-                    .interfaceFont(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color.secondary)
-                    .interfacePadding(Space.xs)
-                    .background(Color(nsColor: .windowBackgroundColor).opacity(0.9), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                    .interfaceFont(.system(size: 11, weight: .semibold))
+                    .interfaceFrame(width: TouchTarget.iconVisual, height: TouchTarget.iconVisual)
+                    .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            .help(Text("action.copy"))
-            .accessibilityLabel(Text("action.copy"))
-            .interfacePadding(Space.xs)
+            .buttonStyle(.borderless)
+            .foregroundStyle(Color.secondary)
+            .help(Text(copied ? "chat.copied" : "chat.copy_markdown"))
+            .accessibilityLabel(Text("chat.copy_markdown"))
+            .opacity(copyVisible ? 1 : 0)
+            .allowsHitTesting(copyVisible)
+            .accessibilityHidden(!copyVisible)
+            .animation(MacMotion.state, value: copyVisible)
+            .task(id: copied) {
+                guard copied else { return }
+                try? await Task.sleep(for: .seconds(1.5))
+                copied = false
+            }
         }
+    }
+
+    private var copyVisible: Bool {
+        hovering || copied || MessageCopyInspection.alwaysVisible
     }
     #endif
 
@@ -300,3 +335,17 @@ private struct CompactHitTarget: ViewModifier {
             .interfacePadding(-slop)
     }
 }
+
+#if os(macOS)
+/// Debug-only `-CorralInspectMessageCopy`: show every hover copy slot so a
+/// window capture can inspect it without driving the pointer.
+enum MessageCopyInspection {
+    static let alwaysVisible: Bool = {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("-CorralInspectMessageCopy")
+        #else
+        false
+        #endif
+    }()
+}
+#endif

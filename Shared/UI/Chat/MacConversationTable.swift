@@ -839,6 +839,7 @@ private struct InheritedEnvironment: ViewModifier {
             .environment(\.dynamicTypeSize, environment.dynamicTypeSize)
             .environment(\.macConversationTextDocument, environment.macConversationTextDocument)
             .environment(\.chatImageLoader, environment.chatImageLoader)
+            .environment(\.chatWorkingDirectory, environment.chatWorkingDirectory)
     }
 }
 

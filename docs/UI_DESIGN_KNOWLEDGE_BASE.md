@@ -350,6 +350,49 @@ The initially blank terminal capture was a locked-session rendering limit: the h
 
 Local delivery keeps marketing versions unchanged and increments only the internal builds to distinguish these artifacts. No public release is requested. Physical iPhone/iPad screenshots, keyboard gestures and multi-pane interaction remain unverified while the phone is unavailable and the iPad is locked; AppShelf upload is not installation or visual acceptance.
 
+## Mac message copy and path links (owner request, 2026-11-08)
+
+- **Hover copy.** Hovering a message on the Mac shows a copy control that copies
+  the message's original Markdown. The 2026-11-06 version overlaid a square,
+  90%-opaque button on the bubble's top-right corner and covered text; the owner
+  found it ugly. It now follows the pane title's hover buttons
+  (`MacPaneHeader`): a borderless 24 pt secondary `doc.on.doc` icon, no
+  background, in a slot that is always laid out and only fades in
+  (`MacMotion.state`), so hovering never moves text. The slot sits on the
+  message's open side, bottom-aligned where reading ends: left of a user bubble
+  (the bubble's leading minimum shrinks by the slot, so its widest size is
+  unchanged) and right of assistant text. After a click the icon becomes a
+  checkmark for 1.5 s and VoiceOver announces "Copied"; tooltip "Copy Markdown".
+  iPhone keeps the native text-selection Copy (full-message Copy pastes the
+  Markdown source; a partial selection pastes only the fragment).
+- **Path links.** Paths in message text open Finder on click: a folder opens, a
+  file is revealed selected in its folder. Covered forms: absolute, `~/`,
+  project-relative (resolved against the session's directory through
+  `chatWorkingDirectory`), bare file names that exist in the project, and
+  `:line[:column]` / `#Lline` suffixes. A path links only when it exists on this
+  Mac, or when its folder does (an explicitly pathed deleted file opens its
+  folder); explicit Markdown links win; prose such as `and/or`, `e.g.` or
+  `Node.js` stays plain. Implementation: `MacPathLinks` in
+  `SelectableAttributedText.swift`, with `NSTextView.clicked(onLink:at:)`
+  overridden in `MacDirectMessageTextView` and `MacMessageTextView`. iPhone has
+  no links (paths belong to the development machine). The TUI equivalent is in
+  the [terminal UI KB](https://github.com/corral-dev/corral/blob/main/docs/TERMINAL_UI_KNOWLEDGE_BASE.md#path-clicks-open-finder-owner-request-2026-11-08).
+- Debug `-CorralInspectMessageCopy` shows every copy slot for window captures.
+- Verification (2026-11-08, source `b9ed6c0`): a Debug window on a real
+  OpenCode session with `-CorralInspectMessageCopy` showed the borderless icon
+  left of user bubbles and right of assistant text, bottom-aligned, covering no
+  text. Path fixtures linked `docs/guide.md:3`, `README.md`, an absolute path,
+  `~/…/control.py:120`, a folder and a deleted file's folder, and left
+  `and/or`, `e.g.`, `Node.js` plain; `-CorralInspectPathLink` clicked
+  `docs/guide.md:3` through `clicked(onLink:at:)` and Finder opened `docs` with
+  `guide.md` selected. Mac Debug and iOS Release builds add no diagnostics
+  beyond the retained ChatMarkdown/AppIntents/PairingScanner ones; 593
+  localization usages and the Mac lifecycle probe pass. Same-identity Release
+  0.3.171 (177) from `b9ed6c0` is installed (executable `3374d537…`, local
+  connection ready); iPhone build installed on the paired iPhone and uploaded
+  (AppShelf release 449). Not exercised: a physical hover/click on the copy
+  icon and its checkmark, and the iPhone partial-selection Copy on the device.
+
 ## Conversation alignment (WeChat-style, 2026-09-14)
 
 Short transcripts rest at the **top** of the conversation area with the empty space below (user ruling 2026-09-14) — never sunk to the composer with a blank band above. Implementation: `defaultScrollAnchor(.top, for: .alignment)` in `ChatScrollView`; initial entry into a long transcript still lands on the latest via the bottom initial offset, and size changes keep following the bottom only while the user reads the latest. The header always leads the scroll content; no viewport overlay is needed since the empty band is below the messages now. `ChatLatestFollowPolicy.shouldScrollToEdge` is the companion guard — see "Send white-screen" below.

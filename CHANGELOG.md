@@ -6,6 +6,20 @@ next version's section. A `Release: minor` or `Release: major` line requests a
 larger version step; `Release: hold <reason>` keeps the changes unreleased until
 the named acceptance is done.
 
+## Mac 0.3.172 (178) / iPhone 1.0.217 (230)
+
+### English
+
+- Mac: message hover copy follows the pane-title hover buttons — a borderless icon beside the message (left of user bubbles, right of assistant text, bottom-aligned) that fades in, never covers text, shows a checkmark after copying, and copies the original Markdown; iPhone full-message Copy pastes the Markdown source.
+- Path mentions open in Finder: folders open, files are revealed selected; absolute, `~/`, project-relative, bare file names and `:line` / `#Lline` suffixes are supported, while prose and explicit Markdown links stay untouched.
+- Mac: the focused pane keeps its title accent in single-pane view.
+
+### 简体中文
+
+- Mac：消息悬停复制与分屏标题悬停按钮一致——消息旁常驻占位的无框图标（用户气泡左侧、助手正文右侧、底部对齐），悬停淡入、不遮文字，复制后打钩，复制原文 Markdown；iPhone 整条复制粘贴 Markdown 原文。
+- 路径提及可在 Finder 中打开：文件夹直接打开，文件选中揭示；支持绝对路径、`~/`、项目相对路径、裸文件名与 `:line` / `#Lline` 后缀，普通措辞与显式 Markdown 链接不受影响。
+- Mac：单分屏下聚焦格保留标题高亮。
+
 ## Mac 0.3.171 (177)
 
 ### English
