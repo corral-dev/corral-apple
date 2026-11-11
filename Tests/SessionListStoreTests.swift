@@ -243,6 +243,23 @@ final class SessionListStoreTests: XCTestCase {
         XCTAssertEqual(store.session(for: row.key)?.title, row.title)
     }
 
+    func testRemoteMetadataHitOutsideWindowJoinsTextSearch() throws {
+        let store = SessionListStore()
+        let window = try session(key: "pi:current", title: "Current work")
+        let historical = try session(key: "pi:ba4e6d77", title: "调研Agent消息风暴问题")
+        store.updateSessions([window])
+        store.searchQuery = "消息"
+        XCTAssertTrue(store.filteredSessions.isEmpty)
+
+        store.applySearchHits([historical], query: "消息")
+
+        XCTAssertEqual(store.filteredSessions.map(\.key), [historical.key])
+        XCTAssertFalse(store.windowSessions.contains { $0.key == historical.key })
+        store.searchQuery = ""
+        XCTAssertEqual(store.windowSessions.map(\.key), [window.key])
+        XCTAssertNil(store.session(for: historical.key))
+    }
+
     func testReplacedSearchAndWindowReleaseUnownedMetadata() throws {
         let store = SessionListStore()
         let opened = try session(key: "claude:opened", title: "Opened")

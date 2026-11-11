@@ -41,8 +41,20 @@ struct MacSidebar: View {
     }
 
     private var sessions: [SessionSummary] { feed.listStore.windowSessions }
+    /// Text search uses the same host-catalog hits as the iPhone. The ordinary
+    /// 80-row display window is only the immediate/local fallback, not the
+    /// boundary of what the user can find.
+    private var searchScopedSessions: [SessionSummary] {
+        if filter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return sessions }
+        return feed.listStore.filteredSessions
+    }
     private var filteredSessions: [SessionSummary] {
-        quickFilter.apply(sessions: sessions, runtimes: runtimeFilter, projects: projectFilter)
+        quickFilter.apply(sessions: searchScopedSessions, runtimes: runtimeFilter, projects: projectFilter)
+    }
+    private func updateFilter(_ query: String) {
+        filter = query
+        feed.listStore.searchQuery = query
+        feed.scheduleRemoteSearch(query)
     }
     private var hasActiveScope: Bool {
         !filter.isEmpty || quickFilter != .all || !runtimeFilter.isEmpty || !projectFilter.isEmpty
@@ -59,6 +71,10 @@ struct MacSidebar: View {
             .task {
                   feed.listStore.refreshCalendar()
                 #if DEBUG
+                  if ProcessInfo.processInfo.arguments.contains("-CorralInspectSidebarSearch") {
+                      await inspectSidebarSearch()
+                      return
+                  }
                   if ProcessInfo.processInfo.arguments.contains("-CorralInspectSearchNavigation") {
                       filter = "__corral_navigation_conflicting_filter__"
                       quickFilter = .attention
@@ -118,9 +134,10 @@ struct MacSidebar: View {
                 }
                 #endif
             }
-            .searchable(text: $filter, placement: .sidebar, prompt: Text("mac.sidebar.filter"))
+            .searchable(text: Binding(get: { filter }, set: updateFilter), placement: .sidebar,
+                        prompt: Text("mac.sidebar.filter"))
             .onChange(of: feed.host.id) { _, _ in
-                filter = ""
+                updateFilter("")
                 quickFilter = .all
                 runtimeFilter.removeAll()
                 projectFilter.removeAll()
@@ -368,7 +385,7 @@ struct MacSidebar: View {
     private func revealNavigationTarget() -> String? {
         guard let key = workspace.navigation.host.revealKey,
               let session = feed.listStore.session(for: key) else { return nil }
-        if !DesktopSidebarProjection.matches(session, filter: filter) { filter = "" }
+        if !DesktopSidebarProjection.matches(session, filter: filter) { updateFilter("") }
         if SessionListFiltering.apply(sessions: [session], runtimes: runtimeFilter,
                                       projects: [], attentionOnly: false).isEmpty { runtimeFilter = [] }
         if SessionListFiltering.apply(sessions: [session], runtimes: [],
@@ -384,6 +401,58 @@ struct MacSidebar: View {
     }
 
     #if DEBUG
+    /// Drives the real sidebar binding and host metadata search without pointer
+    /// input. The expected session must start outside the ordinary host window
+    /// to reproduce the owner-reported miss; the report keeps that distinction.
+    private func inspectSidebarSearch() async {
+        let environment = ProcessInfo.processInfo.environment
+        guard let output = environment["CORRAL_INSPECTION_SIDEBAR_SEARCH_OUTPUT"],
+              let query = environment["CORRAL_INSPECTION_SEARCH"],
+              let expected = environment["CORRAL_INSPECTION_SESSION_KEY"] else { return }
+        for _ in 0..<100 where sessions.isEmpty {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        let original = filter
+        let originalFilteredExpansion = filteredSectionExpansion
+        let outsideInitialWindow = !sessions.contains { $0.key == expected }
+        updateFilter(query)
+        var found = false
+        for _ in 0..<100 {
+            if filteredSessions.contains(where: { $0.key == expected }) {
+                found = true
+                break
+            }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        // Search deliberately does not auto-expand date groups in production.
+        // Expand only this inspection's target section so the capture proves
+        // the mounted row as well as the model hit.
+        let targetSection = sidebarSections.first { $0.items.contains { $0.session.key == expected } }
+        if let targetSection { filteredSectionExpansion[targetSection.id] = true }
+        let rowVisible = visibleKeys.contains(expected)
+        let report: [String: Any] = [
+            "query": query,
+            "expected": expected,
+            "outsideInitialWindow": outsideInitialWindow,
+            "found": found,
+            "rowVisible": rowVisible,
+            "section": targetSection?.id ?? "",
+            "matchingKeys": filteredSessions.map(\.key),
+            "passed": outsideInitialWindow && found && rowVisible,
+        ]
+        let url = URL(fileURLWithPath: output)
+        try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
+            .write(to: url, options: .atomic)
+        // Leave the result mounted for a fresh window capture. The harness
+        // creates this sentinel after capture; filter state is then restored.
+        for _ in 0..<300 {
+            if FileManager.default.fileExists(atPath: output + ".capture-done") { break }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        updateFilter(original)
+        filteredSectionExpansion = originalFilteredExpansion
+    }
+
     private func recordNavigationReveal(_ key: String) {
         func marker(_ view: NSView) -> NativeSidebarSelection.SelectionAppearanceView? {
             if let found = view as? NativeSidebarSelection.SelectionAppearanceView, found.debugKey == key {

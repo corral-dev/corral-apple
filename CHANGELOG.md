@@ -6,6 +6,16 @@ next version's section. A `Release: minor` or `Release: major` line requests a
 larger version step; `Release: hold <reason>` keeps the changes unreleased until
 the named acceptance is done.
 
+## Mac 0.3.173 (179)
+
+### English
+
+- Mac: the sidebar search now queries the host's complete session catalog, so matching sessions outside the current display window can be found and opened instead of disappearing from results.
+
+### 简体中文
+
+- Mac：侧栏搜索现在查询开发机的完整会话目录，超出当前显示窗口的匹配会话也能找到并打开，不再从搜索结果里消失。
+
 ## Mac 0.3.172 (178) / iPhone 1.0.217 (230)
 
 ### English
