@@ -15,6 +15,7 @@ Claude 此前唯一的陶土橙（Clay）已下线，改用 Anthropic 官方单�
 
 | 助手 | 浅色底文件 | 深色底文件 | 官方来源 |
 |------|------------|------------|----------|
+| Antigravity | `source/antigravity-light.svg` | `source/antigravity-dark.svg` | [antigravity.google/press](https://antigravity.google/press) 官方单色标（One Color / White） |
 | Claude | `source/claude-light.svg` | `source/claude-dark.svg` | Anthropic press kit 官方单色标（黑/白） |
 | Codex | `source/codex-light.svg` | `source/codex-dark.svg` | OpenAI 2025 符号（Wikimedia 转自 openai.com/brand） |
 | Cursor | `source/cursor-light.svg` | `source/cursor-dark.svg` | [cursor.com/brand](https://cursor.com/brand) 立方体 |
@@ -27,3 +28,10 @@ Claude 此前唯一的陶土橙（Clay）已下线，改用 Anthropic 官方单�
 ```bash
 python3 design/runtime-logos/normalize.py
 ```
+
+Environment notes (verified 2026-11-14):
+
+- `cairosvg` needs the Homebrew cairo library; with `uv`'s standalone Python run
+  `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib uv run --with cairosvg --with pillow python3 design/runtime-logos/normalize.py`.
+- The script rewrites every runtime's PNGs. A newer Pillow re-compresses unrelated runtimes (e.g. Claude, OpenCode) byte-wise; restore those from `git show HEAD:<path>` and commit only the runtime you changed.
+- Antigravity's one-color and white marks come from the press page's `antigravity-icon__one-color.svg` / `antigravity-icon__white.svg`; there is no colored variant in the monochrome set, so the brand cyan (`#22D3EE`) lives only in `Palette`/`theme.py`.

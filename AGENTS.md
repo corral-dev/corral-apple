@@ -2,7 +2,7 @@
 
 iPhone + native Mac session-handoff app: scan-pair with the development machine, browse and reply to sessions, locally-decrypted push. Both ends share the code and resources under `Shared/`. The iPhone session More menu switches between chat and the native agent terminal (see constraint 9); the Mac client ships a terminal view where each pane switches between chat and the agent's native interface.
 
-Product overview and cross-component rules live in the terminal repository: `https://github.com/corral-dev/corral` (SessKit session-semantics ownership, five-runtime allowlist, dormant compatibility). Generic launch/input/lifecycle and durable execution belong to AgentSessionControl, consumed through explicit Corral host adapters; see the [delegation design](https://github.com/corral-dev/corral/blob/main/docs/design/AGENT_SESSION_DELEGATION_DESIGN.md#reusable-control-extraction-and-acp-owner-approved-2026-10-30). This file keeps Apple-client-only engineering rules.
+Product overview and cross-component rules live in the terminal repository: `https://github.com/corral-dev/corral` (SessKit session-semantics ownership, six-runtime allowlist, dormant compatibility). Generic launch/input/lifecycle and durable execution belong to AgentSessionControl, consumed through explicit Corral host adapters; see the [delegation design](https://github.com/corral-dev/corral/blob/main/docs/design/AGENT_SESSION_DELEGATION_DESIGN.md#reusable-control-extraction-and-acp-owner-approved-2026-10-30). This file keeps Apple-client-only engineering rules.
 
 ## Apple documentation
 

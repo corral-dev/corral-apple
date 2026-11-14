@@ -24,7 +24,7 @@ extension LifecycleProbe {
     }
 
     @MainActor static func terminalRecoveryRegressions() async {
-        for runtime in ["pi", "claude", "codex", "opencode", "cursor"] {
+        for runtime in ["pi", "claude", "codex", "opencode", "cursor", "antigravity"] {
             let key = runtime + ":late-resync", client = RemoteClient(), gate = Gate(), sink = Sink()
             client.handler = { method, _ in
                 if method == WireProtocol.mTerminalResync { return try await gate.wait() }

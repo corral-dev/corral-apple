@@ -7,6 +7,7 @@ import XCTest
 final class RuntimeLogoTests: XCTestCase {
     func testKnownRuntimesHaveOfficialLogoAssets() {
         let expected: [(String, String)] = [
+            ("antigravity", "RuntimeAntigravity"),
             ("claude", "RuntimeClaude"),
             ("codex", "RuntimeCodex"),
             ("cursor", "RuntimeCursor"),
@@ -29,6 +30,7 @@ final class RuntimeLogoTests: XCTestCase {
     }
 
     func testRuntimeDisplayNamesAreBrandLabels() {
+        XCTAssertEqual(Palette.runtimeDisplayName("antigravity"), "Antigravity")
         XCTAssertEqual(Palette.runtimeDisplayName("claude"), "Claude")
         XCTAssertEqual(Palette.runtimeDisplayName("CURSOR"), "Cursor")
         XCTAssertEqual(Palette.runtimeDisplayName("opencode"), "OpenCode")
@@ -38,6 +40,7 @@ final class RuntimeLogoTests: XCTestCase {
 
     func testPiUsesSameYellowAsDesktop() {
         XCTAssertEqual(Palette.runtime("pi"), Palette.pi)
+        XCTAssertEqual(Palette.runtime("antigravity"), Palette.antigravity)
     }
 
     /// 机主规则 2026-10-15：用户可见的助手标识一律黑白化，不搞特殊。
@@ -45,6 +48,7 @@ final class RuntimeLogoTests: XCTestCase {
     /// 且不得含有橙色像素（Claude 的陶土橙已下线）。Kimi dormant 不可见，不在此列。
     func testActiveRuntimeLogosAreMonochrome() {
         let active: [(id: String, name: String)] = [
+            ("antigravity", "RuntimeAntigravity"),
             ("claude", "RuntimeClaude"),
             ("codex", "RuntimeCodex"),
             ("cursor", "RuntimeCursor"),

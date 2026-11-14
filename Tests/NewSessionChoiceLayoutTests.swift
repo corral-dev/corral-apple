@@ -23,10 +23,10 @@ nonisolated final class NewSessionChoiceLayoutTests: XCTestCase {
             host.view.setNeedsLayout()
             host.view.layoutIfNeeded()
             for _ in 0..<30 {
-                if frames.values.count == 14 { break }
+                if frames.values.count == 15 { break }
                 try await Task.sleep(for: .milliseconds(50))
             }
-            XCTAssertEqual(frames.values.count, 14)
+            XCTAssertEqual(frames.values.count, 15)
             for rect in frames.values.values {
                 XCTAssertGreaterThanOrEqual(rect.height, 44)
                 XCTAssertGreaterThanOrEqual(rect.minX, 15)
@@ -68,7 +68,8 @@ nonisolated final class NewSessionChoiceLayoutTests: XCTestCase {
 private struct ChoiceFixture: View {
     let frames: ChoiceFrames
     private let assistants = [("claude", "Claude"), ("codex", "Codex"),
-                              ("opencode", "OpenCode"), ("cursor", "Cursor"), ("pi", "Pi")]
+                              ("opencode", "OpenCode"), ("cursor", "Cursor"),
+                              ("pi", "Pi"), ("antigravity", "Antigravity")]
     private let projects = ["Corral", "Codes", "WaterfallNotes"]
     private let recent = [("codex", "Corral"), ("codex", "ProxyAgent"),
                           ("opencode", "Codes"), ("opencode", "Corral"), ("opencode", "ProxyAgent")]

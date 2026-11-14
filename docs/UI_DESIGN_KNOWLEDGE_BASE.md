@@ -253,11 +253,11 @@ Owner decisions, recorded before implementation:
 4. **未知助手**：没有官方标识时才回退系统符号，不得给未知 id 编一个「看起来像」的图。
 5. **新增助手**：先登记官方来源，再归一化入库；没有可下载的官方图形就不上图标。
 
-当前六家的官方来源、浅/深色底文件与重跑命令见 [`design/runtime-logos/SOURCES.md`](../design/runtime-logos/SOURCES.md)。
+当前七家的官方来源、浅/深色底文件与重跑命令见 [`design/runtime-logos/SOURCES.md`](../design/runtime-logos/SOURCES.md)。
 
 ### Dormant 运行时无界面入口（2026-10-01）
 
-活跃 allowlist 为 claude / codex / opencode / cursor / pi（根 `AGENTS.md` 运行时支持节）。dormant 兼容（如 kimi）的实现、资源、本地化别名、存量历史保留且不维护；在手机 UI 的任何入口都不得出现：新建/接力选择、会话列表、搜索结果、事件补丁、通知点按直查、别名解析、可恢复详情。
+活跃 allowlist 为 claude / codex / opencode / cursor / pi / antigravity（根 `AGENTS.md` 运行时支持节）。dormant 兼容（如 kimi）的实现、资源、本地化别名、存量历史保留且不维护；在手机 UI 的任何入口都不得出现：新建/接力选择、会话列表、搜索结果、事件补丁、通知点按直查、别名解析、可恢复详情。
 
 已验证的泄漏症状（2026-10-01，coordinator 用当前精确产品源码编译的 macOS 验收可执行文件复现）：此前只过滤了目录/新建/接力选择器；`SessionSummary(runtime: kimi)` 经 `updateSessions` 直接进列表分区，旧快照经 `loadPersisted` 同样进分区，`session(for:)` 可解析并路由进详情。旧开发机列表、离线旧缓存、搜索/事件、通知直查、别名、恢复详情都是可达入口。仅过滤选择器不等于修完。
 
@@ -437,7 +437,7 @@ The runtime regression inserts variable-height messages after the empty screen m
 
 | 语义 | CLI 来源 | 色值（手机 `Palette`） |
 |------|----------|------------------------|
-| 助手 Claude / Codex / Cursor / Kimi / OpenCode / Pi | `cli/src/corral/theme.py` → `RUNTIME_LABEL_STYLES` | `#D97757` / `#60A5FA` / `#A78BFA` / `#F472B6` / `#34D399` / `#FBBF24` |
+| 助手 Antigravity / Claude / Codex / Cursor / Kimi / OpenCode / Pi | `cli/src/corral/theme.py` → `RUNTIME_LABEL_STYLES` | `#22D3EE` / `#D97757` / `#60A5FA` / `#A78BFA` / `#F472B6` / `#34D399` / `#FBBF24` |
 | 等你回复 | `cli/src/corral/ui/session_list.py` → `waiting` = `bold yellow` | `#EAB308` |
 | 运行中 | 同上 → `working` = `bold green` | `#22C55E` |
 | 有新结果 | 同上 → `unread` = `bold red` | `#EF4444` |

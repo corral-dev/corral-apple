@@ -843,10 +843,16 @@ final class TerminalInputSender {
                     // Transport blip: one requeue, then give up to avoid a hot loop.
                     retriedHead = true
                     queue.insert(next, at: 0)
+                    #if DEBUG
+                    inspectionTiming?("retry", revision, queue.count)
+                    #endif
                     try? await Task.sleep(for: .milliseconds(300))
                 } else {
                     // Second failure: drop this batch, allow the next one its own retry.
                     retriedHead = false
+                    #if DEBUG
+                    inspectionTiming?("drop", revision, queue.count)
+                    #endif
                 }
             }
         }

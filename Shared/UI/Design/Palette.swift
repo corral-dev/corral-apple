@@ -29,6 +29,7 @@ enum Palette {
 
     // MARK: - 助手配色（电脑端同源）
 
+    static let antigravity = Color(hex: 0x22D3EE)
     static let claude = Color(hex: 0xD97757)
     static let codex = Color(hex: 0x60A5FA)
     static let cursor = Color(hex: 0xA78BFA)
@@ -41,6 +42,7 @@ enum Palette {
 
     static func runtime(_ id: String?) -> Color {
         switch (id ?? "").lowercased() {
+        case "antigravity": antigravity
         case "claude": claude
         case "codex": codex
         case "cursor": cursor
@@ -54,6 +56,7 @@ enum Palette {
     /// Asset Catalog 中的官方标识名；没有官方图形时返回 nil，界面回退系统符号。
     static func runtimeLogoName(_ id: String?) -> String? {
         switch (id ?? "").lowercased() {
+        case "antigravity": "RuntimeAntigravity"
         case "claude": "RuntimeClaude"
         case "codex": "RuntimeCodex"
         case "cursor": "RuntimeCursor"
@@ -67,6 +70,7 @@ enum Palette {
     /// 仅未知助手使用。已知助手必须走 `runtimeLogoName` 的官方图形。
     static func runtimeSymbol(_ id: String?) -> String {
         switch (id ?? "").lowercased() {
+        case "antigravity": "paperplane.fill"
         case "claude": "sparkles"
         case "codex": "terminal.fill"
         case "cursor": "cursorarrow"
@@ -81,6 +85,7 @@ enum Palette {
     static func runtimeDisplayName(_ id: String?) -> String {
         let raw = (id ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         switch raw.lowercased() {
+        case "antigravity": return "Antigravity"
         case "claude": return "Claude"
         case "codex": return "Codex"
         case "cursor": return "Cursor"

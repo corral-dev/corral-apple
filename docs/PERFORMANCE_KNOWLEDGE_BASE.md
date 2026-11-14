@@ -11,6 +11,7 @@ Also covers native Mac split resizing and sidebar switching, including measured 
 - [高频事件处理](#高频事件处理)
 - [Capped message scrolling](#capped-message-scrolling-owner-report-2026-10-27)
 - [Main-thread budget](#main-thread-budget-2026-10-05)
+- [Mac agent-terminal scrolling](#mac-agent-terminal-scrolling-owner-request-2026-11-12)
 - [Mac sidebar switching investigation](#mac-sidebar-switching-requirement-2026-10-10)
 - [Identity and asynchronous result safety](#identity-and-asynchronous-result-safety)
 - [连接层审查清单](#连接层审查清单)
@@ -20,6 +21,26 @@ Also covers native Mac split resizing and sidebar switching, including measured 
 - [验收](#验收)
 - [离线能力表](#离线能力表全局-offline-first--ios-基线-b9)
 - [跨规范备注](#跨规范备注展示元数据--基线豁免)
+
+## Mac agent-terminal scrolling (owner request, 2026-11-12)
+
+The owner reports that vertical scrolling in a Mac agent TUI still feels discontinuous after several optimization rounds, unlike the immediate, smooth movement of the same kind of TUI in iTerm2; an earlier Corral implementation felt fluid. Restore that real interaction, not merely a lower average CPU reading. Identify the historical/rendering-path change that explains the regression and attribute wheel/trackpad delivery, remote traffic, terminal parsing, text/layout work, renderer presentation and main-thread stalls separately before choosing a fix.
+
+Acceptance uses a fixed, reproducible scroll workload on the actual visible Mac window, with fresh sequential frames or video plus payload-free event/frame timings. Report event-to-presentation latency, frame intervals, long main-thread stalls and missed presentations, not only mean CPU or isolated parser throughput. Compare like-for-like CoreGraphics/Metal or historical builds where available, keep timing runs separate from profiler/capture overhead, and do not claim physical trackpad feel from synthetic or model-only checks. Preserve SwiftTerm's native terminal semantics, selection, mouse reporting, input/output order, sizing votes and existing appearance; do not hide the problem by lowering frame rate, dropping output or disabling terminal features. The owner-requested reference is iTerm2, and the existing maintained SwiftTerm renderer remains the implementation boundary unless evidence establishes a specific upstream defect.
+
+Scope is the Mac agent terminal and any demonstrably shared terminal-feed root cause. Check the iPhone terminal and desktop TUI for the same measured mechanism; do not infer a cross-client fix from a Mac-only renderer change. The unrelated uncommitted `MacRootView.swift` search-icon edit belongs to another task and is excluded.
+
+Reference inspection before the A/B implementation: iTerm2's current `iTermScrollAccumulator.m` uses the OS-accelerated `deltaY` on its fast-trackpad path, and `PTYSession.m` expands up to 32 wheel reports into one write; Pi's `wheel-scroll.ts` and `tui-alt-screen.ts` scroll once per SGR report and coalesce their own render requests. SwiftTerm's current `MacTerminalView.scrollWheel` instead divides precise deltas by cell height and applies the 100 reports/second budget from upstream #657. The experiment is limited to a terminal that has enabled mouse reporting: preserve the accelerated distance, cap one event at 32 reports, deliver the reports together through SwiftTerm's public `sendMouseEvent`, and leave modifier/local-scrollback routes on SwiftTerm's implementation. Do not copy private mouse encoding, replace the renderer, or adopt this merely because iTerm2 uses it; acceptance requires improved event-to-frame timing and complete final position on the same workload. Sources: https://github.com/gnachman/iTerm2/blob/master/sources/FixBrokenAppleCrap/iTermScrollAccumulator.m, https://github.com/gnachman/iTerm2/blob/master/sources/PTYSession/PTYSession.m, https://github.com/badlogic/pi-mono/blob/main/packages/tui/src/wheel-scroll.ts, https://github.com/badlogic/pi-mono/blob/main/packages/tui/src/tui-alt-screen.ts, and SwiftTerm's public `AppleTerminalView.sendMouseEvent` in the pinned 1.99.3 source.
+
+### Measured result (2026-11-12): attribution, no fix yet
+
+Release-optimized client, Metal render loop, real host, disposable Pi alternate-screen session with mouse reporting, 180 pixel-precise wheel events at 60 Hz (134 whole lines). The input and parse stages are already fast: 134 batches queued, 98–105 RPC dispatches, zero rate-limit retries or dropped batches, acknowledgement median ~3 ms, native scroll handler p95 under 1 ms, event → changed host content median 7–12 ms (p95 ~42 ms). The cost sits after that: event → completed native frame median 30–40 ms, p95 64–91 ms, and only 24–38 content frames per second against a 60 Hz display.
+
+Three candidate causes were measured and rejected, so do not re-propose them without new evidence: Metal against CoreGraphics in the same binary (CoreGraphics 19.8/23.8 fps versus Metal 26.5/34.8, plus upstream `Tools/RenderBench --scenario scroll` at 187–210 versus 161–195 MB/s in an A-B-B-A run); the title watermark's `backgroundOpacity = 0` transparent terminal surface (33.2/26.8 versus 34.8/40.9 fps, overlapping tails); and the iTerm2-style accelerated wheel reporting described above (delivered travel rose 134 → 313 lines and host feeds to 618–694 while content frames/s stayed level or fell, 23.8 → 24.1 and 33.2 → 27.1 in paired runs). The accelerated-wheel experiment was removed from source; it is a speed policy, not a cadence fix.
+
+Measurement constraint: reading `terminalContentSnapshot(region: .viewport)` after each feed to prove content changed inflated the event → frame p95 from 64–91 ms to 632 ms with a 767 ms maximum on the same workload. Content verification must run separately from timing, as with the typing inspection.
+
+The blocking limitation is environmental: every automated run had `NSApp.isActive == false` and no `.visible` in `window.occlusionState` even after `makeKeyAndOrderFront` plus `orderFrontRegardless`, because the agent session drives a virtual display. `renders / frames ≈ 0.58–0.60` in that state is consistent with WindowServer withholding drawables from inactive or occluded windows and is not product evidence; do not convert it into a renderer fix. The next measurement needs a genuinely active, unoccluded window. Reproduction harness, optional switches and the ordered next levers are in the [troubleshooting record](../troubleshooting/2026-11-12-mac-agent-tui-scroll-cadence.md). No behavior change or release came from this round.
 
 ## CPU optimization acceptance (owner approval, 2026-10-25)
 

@@ -24,10 +24,11 @@ enum SessionRuntimeFilter: String, Hashable, CaseIterable, Sendable {
     case opencode
     case cursor
     case pi
+    case antigravity
 
-    /// Fixed slot order: All first, then the five active runtimes.
+    /// Fixed slot order: All first, then the six active runtimes.
     static let ordered: [SessionRuntimeFilter] = [
-        .all, .claude, .codex, .opencode, .cursor, .pi,
+        .all, .claude, .codex, .opencode, .cursor, .pi, .antigravity,
     ]
 
     /// Case-insensitive runtime match. Unknown or missing runtimes only pass

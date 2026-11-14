@@ -77,6 +77,9 @@ final class SessionListFilteringTests: XCTestCase {
         XCTAssertTrue(
             SessionRuntimeFilter.cursor.matches(summary(key: "cursor:b", runtime: "CURSOR"))
         )
+        XCTAssertTrue(
+            SessionRuntimeFilter.antigravity.matches(summary(key: "antigravity:z", runtime: "Antigravity"))
+        )
         // Unknown or missing runtimes only pass under All.
         let unknown = summary(key: "next:x", runtime: "next-agent")
         XCTAssertTrue(SessionRuntimeFilter.all.matches(unknown))

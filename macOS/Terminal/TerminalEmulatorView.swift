@@ -273,6 +273,21 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
     var inspectionHasKeyboardFocus: Bool { window?.firstResponder === terminal }
     var inspectionFontSize: CGFloat { fontSize }
     var inspectionUsesMetal: Bool { terminal.isUsingMetalRenderer }
+    var inspectionUsesIdentityBackground: Bool { usesIdentityBackground }
+    var inspectionBackgroundOpacity: Double { terminal.backgroundOpacity }
+    func inspectionSetIdentityBackground(_ enabled: Bool) {
+        setIdentityBackgroundEnabled(enabled)
+        terminal.backgroundOpacity = enabled ? 0 : 1
+    }
+    var inspectionUsesRenderLoop: Bool { terminal.isUsingRenderLoop }
+    var inspectionDiagnostics: SwiftTerm.TerminalView.Diagnostics { terminal.diagnostics }
+    func inspectionResetDiagnostics() { terminal.resetDiagnostics() }
+    func inspectionUseMetal(_ enabled: Bool) throws {
+        guard terminal.isUsingMetalRenderer != enabled else { return }
+        try terminal.setUseMetal(enabled)
+    }
+    var inspectionMouseMode: String { String(describing: terminal.currentMouseMode) }
+    var inspectionCellHeight: CGFloat { cell.height }
     var inspectionSuspendsRenderingWhenNotVisible: Bool {
         get { terminal.suspendsRenderingWhenNotVisible }
         set { terminal.suspendsRenderingWhenNotVisible = newValue }
@@ -328,6 +343,16 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
               let event = NSEvent(cgEvent: cgEvent) else { return false }
         terminal.scrollWheel(with: event)
         return true
+    }
+
+    /// A pixel-precise trackpad event handed straight to SwiftTerm, without
+    /// posting to the system event stream or moving the pointer.
+    func inspectionScrollWheel(pixels: Int32) -> (precise: Bool, delta: Double)? {
+        guard let cgEvent = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1,
+                                    wheel1: pixels, wheel2: 0, wheel3: 0),
+              let event = NSEvent(cgEvent: cgEvent) else { return nil }
+        terminal.scrollWheel(with: event)
+        return (event.hasPreciseScrollingDeltas, event.scrollingDeltaY)
     }
     var inspectionScrollPosition: Double { terminal.scrollPosition }
     var inspectionGrid: TerminalGrid? { grid }

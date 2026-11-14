@@ -574,12 +574,13 @@ final class SessionListStoreTests: XCTestCase {
             try session(key: "opencode:c", title: "C", runtime: "opencode"),
             try session(key: "cursor:d", title: "D", runtime: "cursor"),
             try session(key: "pi:e", title: "E", runtime: "pi"),
+            try session(key: "antigravity:h", title: "H", runtime: "antigravity"),
             try session(key: "next:f", title: "F", runtime: "next-agent"),
             try session(key: "noruntime:g", title: "G"),
         ])
         let visible = store.sections.flatMap(\.sessions).map(\.key)
         XCTAssertFalse(visible.contains("kimi:kept-history"))
-        for key in ["claude:a", "codex:b", "opencode:c", "cursor:d", "pi:e", "next:f", "noruntime:g"] {
+        for key in ["claude:a", "codex:b", "opencode:c", "cursor:d", "pi:e", "antigravity:h", "next:f", "noruntime:g"] {
             XCTAssertTrue(visible.contains(key), key)
             XCTAssertNotNil(store.session(for: key), key)
         }

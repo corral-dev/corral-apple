@@ -613,6 +613,9 @@ struct MacRootView: View {
         if ProcessInfo.processInfo.arguments.contains("-CorralInspectTerminalTyping") {
             Task { await MacTerminalTypingInspection.run(workspace: workspace, appModel: appModel, feed: current) }
         }
+        if ProcessInfo.processInfo.arguments.contains("-CorralInspectTerminalScroll") {
+            Task { await MacTerminalScrollInspection.run(workspace: workspace, appModel: appModel, feed: current) }
+        }
         if ProcessInfo.processInfo.arguments.contains("-CorralInspectModeSwitch") {
             Task { await MacModeSwitchInspection.run(workspace: workspace, feed: current) }
         }

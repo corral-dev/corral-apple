@@ -6,7 +6,8 @@ import XCTest
 final class RuntimeCatalogTests: XCTestCase {
     private let payload: [String: Any] = ["runtimes": [
         ["id": "claude", "name": "Claude", "available": true],
-        ["id": "pi"], ["id": "cursor", "available": false],
+        ["id": "pi"], ["id": "antigravity", "name": "Antigravity", "available": true],
+        ["id": "cursor", "available": false],
         ["id": "kimi"], ["id": "unapproved"],
     ]]
 
@@ -27,8 +28,8 @@ final class RuntimeCatalogTests: XCTestCase {
         XCTAssertTrue(catalog.isLoaded)
         XCTAssertFalse(catalog.isLoading)
         XCTAssertNil(catalog.errorMessage)
-        XCTAssertEqual(catalog.runtimes.map(\.id), ["claude", "pi", "cursor"])
-        XCTAssertFalse(catalog.runtimes[2].isUsable)
+        XCTAssertEqual(catalog.runtimes.map(\.id), ["claude", "pi", "antigravity", "cursor"])
+        XCTAssertFalse(catalog.runtimes[3].isUsable)
     }
 
     func testEmptySuccessIsNotFailureAndDoesNotRefetch() async {

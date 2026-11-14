@@ -36,7 +36,7 @@ enum MacConnectionInspection {
             params: ["limit": 10000], as: SessionsListResponse.self)
         let acceptanceSessions = full?.sessions ?? feed.listStore.windowSessions
         checks["full_table_received"] = full != nil
-        for runtime in ["claude", "codex", "opencode", "cursor", "pi"] {
+        for runtime in ["claude", "codex", "opencode", "cursor", "pi", "antigravity"] {
             let candidates = acceptanceSessions.filter { $0.runtime == runtime }
             var count = 0
             for session in candidates.prefix(20) {

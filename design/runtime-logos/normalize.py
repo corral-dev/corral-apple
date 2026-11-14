@@ -26,6 +26,7 @@ SCALES = (("1x", 36), ("2x", 72), ("3x", 108))
 
 # (asset 名, 浅色底源, 深色底源；深色为 None 表示深浅共用)
 ITEMS: list[tuple[str, str, str | None]] = [
+    ("RuntimeAntigravity", "antigravity-light.svg", "antigravity-dark.svg"),
     ("RuntimeClaude", "claude-light.svg", "claude-dark.svg"),
     ("RuntimeCodex", "codex-light.svg", "codex-dark.svg"),
     ("RuntimeCursor", "cursor-light.svg", "cursor-dark.svg"),

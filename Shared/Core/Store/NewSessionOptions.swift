@@ -36,7 +36,7 @@ nonisolated struct RuntimeEntry: Codable, Identifiable, Sendable {
     var available: Bool? = nil
     var isUsable: Bool { available != false }
     /// Corral 产品侧活跃运行时 allowlist；dormant 兼容（如 kimi）保留于服务端但不在手机 UI 中出现。
-    static let activeIDs: Set<String> = ["claude", "codex", "opencode", "cursor", "pi"]
+    static let activeIDs: Set<String> = ["claude", "codex", "opencode", "cursor", "pi", "antigravity"]
     /// Catalog membership stays a strict allowlist: unknown ids must never be
     /// listed, auto-selected, or creatable in new-session/handoff pickers.
     var isActive: Bool { Self.activeIDs.contains(id.lowercased()) }

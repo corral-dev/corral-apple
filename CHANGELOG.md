@@ -6,6 +6,16 @@ next version's section. A `Release: minor` or `Release: major` line requests a
 larger version step; `Release: hold <reason>` keeps the changes unreleased until
 the named acceptance is done.
 
+## Mac 0.3.174 (180) / iPhone 1.0.218 (231)
+
+### English
+
+- Added Google Antigravity (`agy`) support across Mac and iPhone: official monochrome light/dark assistant marks, sidebar runtime filters, New Session and handoff pickers, conversation rendering, and terminal recovery.
+
+### 简体中文
+
+- Mac 与 iPhone 新增 Google Antigravity（`agy`）支持：内置官方单色浅/深色图标，全面接入侧栏助手筛选、新建会话与接力选择器、对话消息展示及终端恢复。
+
 ## Mac 0.3.173 (179)
 
 ### English
