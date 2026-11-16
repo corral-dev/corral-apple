@@ -70,8 +70,11 @@ struct MacPaneView: View {
         bodySize.width - MacPromptsCard.reserve * interfaceScale >= MacPromptsCard.minimumReadingWidth * interfaceScale
     }
 
+    /// This session's own remembered card state; before the person chooses,
+    /// the pane default applies (terminal shows it, chat only where it fits
+    /// beside the conversation). Never derived from another pane.
     private var cardOpen: Bool {
-        workspace.promptsOpen[session.key] ?? (mode == .terminal || cardFitsBeside)
+        workspace.promptsCardChoice(for: session.key) ?? (mode == .terminal || cardFitsBeside)
     }
 
     private var reservesCardMargin: Bool {
@@ -85,7 +88,7 @@ struct MacPaneView: View {
             if cardOpen {
                 MacPromptsCard(
                     prompts: prompts,
-                    isOpen: promptsOpenBinding,
+                    isOpen: promptsCardBinding,
                     width: promptsCardWidth,
                     overContent: !cardFitsBeside,
                     onTerminal: mode == .terminal,
@@ -116,7 +119,7 @@ struct MacPaneView: View {
             workspace.focus(session.key)
             workspace.requestKeyFocus(session.key)
             withAnimation(MacMotion.disclosure(reduceMotion: reduceMotion)) {
-                promptsOpenBinding.wrappedValue = true
+                workspace.setPromptsCardOpen(true, for: session.key)
             }
         } label: {
             Image(systemName: "bubble")
@@ -179,10 +182,10 @@ struct MacPaneView: View {
         return min(full, partial, fitting)
     }
 
-    private var promptsOpenBinding: Binding<Bool> {
+    private var promptsCardBinding: Binding<Bool> {
         Binding(
             get: { cardOpen },
-            set: { workspace.promptsOpen[session.key] = $0 }
+            set: { workspace.setPromptsCardOpen($0, for: session.key) }
         )
     }
 

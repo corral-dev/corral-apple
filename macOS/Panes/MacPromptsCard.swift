@@ -6,8 +6,10 @@ import SwiftUI
 /// room (the pane shifts the conversation aside by `reserve`), over it in
 /// narrow panes, where it starts collapsed into the circular bubble button
 /// at the same corner.
-/// Over content it behaves like a transient popover: a mouse click outside
-/// it closes it, and the click still reaches its target.
+/// Only its own surface collapses it (header, count, collapse button, a
+/// terminal prompt row and, over content, the footer). A click outside it —
+/// in this pane or in another split pane — never closes it and never changes
+/// another session's card (owner correction 2026-11-15).
 struct MacPromptsCard: View {
     @Environment(\.interfaceScale) private var interfaceScale
     let prompts: [RichMessage]
@@ -45,8 +47,6 @@ struct MacPromptsCard: View {
     @State private var hoveredID: RichMessage.ID?
     @State private var hoveredLatest = false
     @State private var currentID: RichMessage.ID?
-    @State private var clickMonitor: Any?
-    @State private var cardAnchor = PromptsCardClickAnchor()
 
     var body: some View {
         // Collapsed, only the circular bubble button shows (owned by the
@@ -57,46 +57,6 @@ struct MacPromptsCard: View {
                     .transition(.scale(scale: 0.96, anchor: .topTrailing).combined(with: .opacity))
             }
         }
-        .onAppear { updateClickMonitor() }
-        .onChange(of: isOpen) { _, _ in updateClickMonitor() }
-        .onChange(of: overContent) { _, _ in updateClickMonitor() }
-        .onDisappear { removeClickMonitor() }
-    }
-
-    // MARK: - Outside dismissal (design: Prompts card, rule 5)
-
-    /// A card floating over content closes on a mouse click outside it,
-    /// like a transient popover; the click still reaches its target, so no
-    /// second click is needed. A card docked beside the conversation is not
-    /// a popup and never closes this way.
-    private func updateClickMonitor() {
-        guard overContent && isOpen else {
-            removeClickMonitor()
-            return
-        }
-        guard clickMonitor == nil else { return }
-        let anchor = cardAnchor
-        let presentation = $isOpen
-        let motion = reduceMotion
-        clickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { event in
-            guard let view = anchor.view, let window = view.window else { return event }
-            // A click into another window of this app closes a transient
-            // popup too.
-            guard event.window === window else {
-                withAnimation(MacMotion.disclosure(reduceMotion: motion)) { presentation.wrappedValue = false }
-                return event
-            }
-            let cardRect = view.convert(view.bounds, to: nil)
-            if !cardRect.contains(event.locationInWindow) {
-                withAnimation(MacMotion.disclosure(reduceMotion: motion)) { presentation.wrappedValue = false }
-            }
-            return event
-        }
-    }
-
-    private func removeClickMonitor() {
-        if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
-        clickMonitor = nil
     }
 
     // MARK: - Open
@@ -140,14 +100,6 @@ struct MacPromptsCard: View {
             shape.fill(onTerminal ? Color(nsColor: TerminalAppearance.background) : Color(.systemGroupedBackground))
             shape.fill(Color.primary.opacity(colorScheme == .dark ? 0.075 : 0.045))
         }
-        // Live window rect for the outside-click monitor. It fills the card
-        // but never takes part in hit testing, so clicks inside the card
-        // keep reaching the card's own controls.
-        .background {
-            PromptsCardAnchorView(anchor: cardAnchor)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-        }
         .overlay {
             RoundedRectangle(cornerRadius: Self.cornerRadius * interfaceScale, style: .continuous)
                 .strokeBorder(Color.primary.opacity(colorScheme == .dark ? 0.12 : 0.09), lineWidth: 0.5)
@@ -173,6 +125,7 @@ struct MacPromptsCard: View {
             .buttonStyle(.borderless)
             .help(Text("mac.prompts.hide"))
             .accessibilityLabel(Text("mac.prompts.hide"))
+            .accessibilityIdentifier("corral.prompts.hide")
         }
         .interfacePadding(.horizontal, Space.md + Self.rowInset / 2)
         .interfacePadding(.top, Space.md)
@@ -209,12 +162,12 @@ struct MacPromptsCard: View {
     }
 
     /// Fixed footer: returns the pane to the latest position, never to a
-    /// prompt (owner requirement 2026-10-25). A docked card stays open; one
-    /// floating over content closes first so the landing is actually seen.
+    /// prompt (owner requirement 2026-10-25). The card stays open in both
+    /// presentations (owner correction 2026-11-15): jumping is not a
+    /// dismissal, so a floating card no longer closes first.
     private var latestRow: some View {
         Button {
             onJumpLatest()
-            if overContent { setOpen(false) }
         } label: {
             HStack(spacing: Space.sm * interfaceScale) {
                 Image(systemName: "arrow.down.to.line.compact")
@@ -329,28 +282,5 @@ struct MacPromptsCard: View {
         formatter.locale = .autoupdatingCurrent
         formatter.dateFormat = format
         return formatter
-    }
-}
-
-/// Holds the floating card's AppKit view so the outside-click monitor can
-/// test a mouse-down against the card's live window rect instead of a stale
-/// snapshot. The reference is weak; the monitor is removed with the view.
-private final class PromptsCardClickAnchor: NSObject {
-    weak var view: NSView?
-}
-
-/// Fills the card's bounds as a background. Hit testing stays disabled, so
-/// this view never becomes a click target; only its window rect is read.
-private struct PromptsCardAnchorView: NSViewRepresentable {
-    let anchor: PromptsCardClickAnchor
-
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        anchor.view = view
-        return view
-    }
-
-    func updateNSView(_ view: NSView, context: Context) {
-        anchor.view = view
     }
 }

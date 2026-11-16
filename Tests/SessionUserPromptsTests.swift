@@ -78,6 +78,34 @@ final class SessionUserPromptsTests: XCTestCase {
         XCTAssertEqual(merged.map(\.seq), [11, 14])
     }
 
+    /// Owner report 2026-11-15: the Mac card showed "Your prompts 4" for three
+    /// real prompts because the host list had the confirmed copy and the local
+    /// echo survived beside it.
+    func testHostListAndLocalEchoAreOnePrompt() throws {
+        let loaded = try RemoteJSONDecoder.decode(SessionMessagesResponse.self, from: [
+            "messages": [
+                ["seq": 85, "role": "assistant", "text": "thinking"],
+                ["seq": -2, "role": "user", "text": "4.\t归档候选", "local_after_seq": 85],
+                ["seq": 87, "role": "user", "text": "4.    归档候选"],
+            ], "generation": 4, "oldest_seq": 85, "newest_seq": 87,
+        ]).messages
+        let host = [RichMessage(seq: 87, role: "user", text: "4.    归档候选")]
+        let merged = ConversationMessagePolicy.userPrompts(loaded: loaded, session: host)
+        XCTAssertEqual(merged.map(\.seq), [87])
+    }
+
+    func testHostListKeepsAnUnconfirmedEcho() throws {
+        let loaded = try RemoteJSONDecoder.decode(SessionMessagesResponse.self, from: [
+            "messages": [
+                ["seq": 85, "role": "assistant", "text": "thinking"],
+                ["seq": -2, "role": "user", "text": "还在路上", "local_after_seq": 85],
+            ], "generation": 4, "oldest_seq": 85, "newest_seq": 85,
+        ]).messages
+        let host = [RichMessage(seq: 83, role: "user", text: "早先那句")]
+        let merged = ConversationMessagePolicy.userPrompts(loaded: loaded, session: host)
+        XCTAssertEqual(merged.map(\.seq), [83, -2])
+    }
+
     func testHelloDecodesUserPromptsCapability() throws {
         let hello = try RemoteJSONDecoder.decode(HelloResponse.self, from: [
             "paired": true, "capabilities": ["user_prompts": true],

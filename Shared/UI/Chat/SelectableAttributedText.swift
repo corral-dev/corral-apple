@@ -995,7 +995,10 @@ struct MacConversationTextSelection: ViewModifier {
 
     func body(content: Content) -> some View {
         let sources = messages.compactMap { message -> MacConversationTextDocument.Source? in
-            guard let text = message.text, !text.allSatisfy(\.isWhitespace) else { return nil }
+            // The retained document is what a Mac bubble shows, so it renders
+            // the same body the bubble does (a user turn's pasted attachment
+            // paths stay out of the text).
+            guard let text = message.chatBodyText, !text.allSatisfy(\.isWhitespace) else { return nil }
             return .init(id: message.seq, text: text, isUser: message.role.lowercased() == "user",
                          mediaRevision: mediaRevisions[message.seq] ?? 0)
         }

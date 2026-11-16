@@ -74,7 +74,7 @@ enum MacTerminalPromptInspection {
                 "onlyInitialAndFinal": frames.allSatisfy { $0 == before || $0 == final },
                 "noFindUI": frames.allSatisfy { !$0.contains("Find:") && !$0.contains("Find ·") },
                 "firstNativeContent": String(first),
-                "cardOpen": workspace.promptsOpen[session.key] == true,
+                "cardOpen": workspace.promptsCardChoice(for: session.key) == true,
                 "draftPreserved": view.inspectionContains("UNSENT_DRAFT_CODEX"),
                 "keyboardFocusPreserved": view.inspectionHasKeyboardFocus,
             ])

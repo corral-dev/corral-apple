@@ -56,6 +56,17 @@ final class StreamTerminalView: SwiftTerm.TerminalView {
     }
 
     #if DEBUG
+    private var inspectionMouseEventType: NSEvent.EventType?
+
+    /// Direct fixture delivery has no NSApp.currentEvent of its own. Scope the
+    /// event type to this native call instead of borrowing unrelated live input.
+    func inspectionScrollWheel(with event: NSEvent) {
+        let previous = inspectionMouseEventType
+        inspectionMouseEventType = .scrollWheel
+        defer { inspectionMouseEventType = previous }
+        scrollWheel(with: event)
+    }
+
     /// Streaming diagnostics; compiled out of Release. `setNeedsDisplay` is the
     /// row range SwiftTerm asks AppKit to repaint, so counting its height in
     /// rows tells whether a frame's damage is a few rows or the whole screen.
@@ -87,7 +98,12 @@ final class StreamTerminalView: SwiftTerm.TerminalView {
         guard Thread.isMainThread else { return }
         MainActor.assumeIsolated {
             guard !feedingHost, onMouseReport != nil else { return }
-            let bytes = Array(data), type = NSApp.currentEvent?.type
+            let bytes = Array(data)
+            #if DEBUG
+            let type = inspectionMouseEventType ?? NSApp.currentEvent?.type
+            #else
+            let type = NSApp.currentEvent?.type
+            #endif
             DispatchQueue.main.async { [weak self] in self?.onMouseReport?(bytes[...], type) }
         }
     }

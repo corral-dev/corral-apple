@@ -538,6 +538,23 @@
         }
       }
     },
+    "chat.image.sending" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Image sending"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "图片发送中"
+          }
+        }
+      }
+    },
     "chat.image.open_hint" : {
       "extractionState" : "manual",
       "localizations" : {

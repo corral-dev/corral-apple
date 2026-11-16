@@ -15,6 +15,10 @@ enum MacChatMediaInspection {
             await inspectCancellation()
             return
         }
+        if ProcessInfo.processInfo.arguments.contains("-CorralInspectChatEcho") {
+            inspectEcho()
+            return
+        }
         if ProcessInfo.processInfo.arguments.contains("-CorralInspectMediaLive") {
             await inspectLive(model: model)
             return
@@ -145,6 +149,30 @@ enum MacChatMediaInspection {
         print("[chat-media] attachments=\(attachments.count) sourceCopy=\(report["sourceCopy"] ?? false)")
     }
 
+    /// One pending send on a real `ConversationStore`: its typed text plus the
+    /// staged images, as the composer's send now stages them. The host turn has
+    /// not landed yet, so the bubble previews its own payloads.
+    private static func inspectEcho() {
+        let environment = ProcessInfo.processInfo.environment
+        let store = ConversationStore(sessionKey: "echo-inspection", client: nil, live: false)
+        let payload = environment["CORRAL_ECHO_IMAGE"]
+            .flatMap { try? Data(contentsOf: URL(fileURLWithPath: $0)) } ?? Data()
+        store.enqueueLocalUser(
+            "这不对 最新消息早就不是这条报错了",
+            commandID: "echo-inspection", reusingSeq: nil, images: [payload]
+        )
+        let document = MacConversationTextDocument()
+        let root = NSHostingView(rootView: ChatView(store: store, runtimeID: "pi")
+            .environment(\.macConversationTextDocument, document))
+        let window = NSWindow(contentRect: NSRect(x: 140, y: 140, width: 620, height: 520),
+                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.title = "Corral Chat Echo"
+        window.isReleasedWhenClosed = false
+        window.contentView = root
+        window.orderBack(nil)
+        self.window = window
+    }
+
     private static func inspectCancellation() async {
         let renderer = ChatDiagramRenderer.shared
         let host = "media-cancellation-\(UUID().uuidString)"
@@ -190,25 +218,34 @@ enum MacChatMediaInspection {
               let key = ProcessInfo.processInfo.environment["CORRAL_MEDIA_SESSION"] else { return }
         do {
             // The handoff session's cited image can sit far beyond the newest
-            // entries; keep the fixture window wide enough to cover it.
-            let snapshot = try await client.call(WireProtocol.mSessionMessages, params: ["key": key, "limit": 400], as: SessionMessagesResponse.self)
+            // page; walk older pages until a message cites one.
+            let (snapshot, page) = try await attachmentPage(client: client, key: key)
             let host = model.connectedHostID ?? model.selectedHost?.hostID ?? ""
             let loader = ChatImageLoader(client: client, hostID: host, sessionKey: key)
             let store = ConversationStore(sessionKey: key, client: client, live: true)
             var loaded = 0
-            for message in snapshot.messages {
-                for reference in ChatImageReference.references(in: message.text) {
+            for message in page {
+                for reference in citations(in: message) {
                     if case .image = await loader.load(seq: message.seq, ref: reference.ref, tier: loader.inlineTier()) { loaded += 1 }
                 }
             }
-            // Show the actual cited-image message so the acceptance capture
-            // covers the table row path, not only the loader's return value.
-            let imageMessage = snapshot.messages.last { !ChatImageReference.references(in: $0.text).isEmpty }
-            let visible = imageMessage.map { [$0] } ?? snapshot.messages
+            // Show the actual cited-image message plus the turn that follows it,
+            // so the acceptance capture covers the real conversation surface.
+            // Prefer the human turn a phone send produced: its images are the
+            // host's pasted paths, which is the case that used to show three
+            // bubbles and a temp path.
+            let imageMessage = page.last {
+                $0.role.lowercased() == "user" && !HostPasteAttachment.paths(in: $0.text).isEmpty
+            } ?? page.last { !citations(in: $0).isEmpty }
+            let visible = imageMessage.map { message in
+                let tail = page.drop { $0.seq < message.seq }
+                return Array(tail.prefix(3))
+            } ?? page
             store.applySnapshot(filteredSnapshot(visible, like: snapshot) ?? snapshot)
             report["imagesLoaded"] = loaded
             report["messages"] = snapshot.messages.count
             report["shownImageSeq"] = imageMessage?.seq ?? -1
+            report["shownBody"] = imageMessage.map { ConversationMessageMerge.displayBody($0) } ?? ""
             let document = MacConversationTextDocument()
             let root = NSHostingView(rootView: ChatView(store: store, runtimeID: "pi")
                 .environment(model).environment(\.chatImageLoader, loader)
@@ -230,6 +267,49 @@ enum MacChatMediaInspection {
             }
             report["imageCount"] = imageCount
         } catch { report["failed"] = true }
+    }
+
+    /// Newest page first, then older pages via `before_seq`: a long session
+    /// keeps its cited images far from the tail.
+    private static func attachmentPage(
+        client: RemoteClient, key: String
+    ) async throws -> (SessionMessagesResponse, [RichMessage]) {
+        var newest = try await client.call(
+            WireProtocol.mSessionMessages, params: ["key": key, "limit": 400],
+            as: SessionMessagesResponse.self
+        )
+        var page = newest.messages
+        for _ in 0..<40 {
+            if page.contains(where: isUserPaste) || page.isEmpty { break }
+            let oldest = page.map(\.seq).min() ?? 0
+            guard oldest > 1 else { break }
+            newest = try await client.call(
+                WireProtocol.mSessionMessages,
+                params: ["key": key, "limit": 400, "before_seq": oldest],
+                as: SessionMessagesResponse.self
+            )
+            let older = newest.messages.filter { $0.seq < oldest }
+            guard !older.isEmpty else { break }
+            page = older + page
+        }
+        return (newest, page)
+    }
+
+    /// A human turn that carries host-pasted image paths (`input.image`).
+    private static func isUserPaste(_ message: RichMessage) -> Bool {
+        message.role.lowercased() == "user"
+            && !HostPasteAttachment.paths(in: message.text).isEmpty
+    }
+
+    /// Images a message cites, including the host's pasted attachment paths
+    /// (`input.image` pastes a saved path into the agent composer).
+    private static func citations(in message: RichMessage) -> [ChatImageReference] {
+        let parsed = ChatImageReference.references(in: message.text)
+        let known = Set(parsed.map(\.ref))
+        let pasted = HostPasteAttachment.paths(in: message.text)
+            .filter { !known.contains($0) }
+            .map { ChatImageReference(ref: $0, kind: .mention, alt: nil) }
+        return parsed + pasted
     }
 
     private static func filteredSnapshot(_ messages: [RichMessage], like base: SessionMessagesResponse) -> SessionMessagesResponse? {

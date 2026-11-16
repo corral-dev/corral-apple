@@ -55,7 +55,7 @@ enum MacInteractionInspection {
         steps.append(["step": "composer focus A selects A", "focused": workspace.focusedKey ?? "none"])
 
         // Prompts card: open A's, jump to its first prompt, collapse it again.
-        workspace.promptsOpen[a.key] = true
+        workspace.setPromptsCardOpen(true, for: a.key)
         try? await Task.sleep(for: .seconds(pause))
         record("prompts card open on A")
         if let first = MacInteractionInspectionPrompts.shared[a.key]?.first {
@@ -63,7 +63,7 @@ enum MacInteractionInspection {
             steps.append(["step": "jump A to first prompt", "prompt": String((first.text ?? "").prefix(60))])
         }
         try? await Task.sleep(for: .seconds(pause))
-        workspace.promptsOpen[a.key] = false
+        workspace.setPromptsCardOpen(false, for: a.key)
         try? await Task.sleep(for: .seconds(pause))
         record("prompts card collapsed (capsule)")
 

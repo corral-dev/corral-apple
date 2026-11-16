@@ -66,7 +66,26 @@ enum WireProtocol {
     static let mTerminalTheme = "terminal.theme"
     static func terminalChannel(sessionKey: String) -> String { "term:" + sessionKey }
 }
-struct SessionSummary: Codable { var key: String; var cwd = ""; var hosted = false }
+struct SessionSummary: Codable {
+    var key: String
+    var cwd = ""
+    var hosted = false
+    var live = false
+    init(key: String, cwd: String = "", hosted: Bool = false, live: Bool = false) {
+        self.key = key
+        self.cwd = cwd
+        self.hosted = hosted
+        self.live = live
+    }
+    /// Host payloads omit false flags, so a test double must not require them.
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        key = try container.decode(String.self, forKey: .key)
+        cwd = try container.decodeIfPresent(String.self, forKey: .cwd) ?? ""
+        hosted = try container.decodeIfPresent(Bool.self, forKey: .hosted) ?? false
+        live = try container.decodeIfPresent(Bool.self, forKey: .live) ?? false
+    }
+}
 struct SessionUserPromptsResponse: Decodable {
     struct Prompt: Decodable { let seq: Int; let text: String? }
     let prompts: [Prompt]
@@ -328,7 +347,7 @@ struct LifecycleProbe {
         workspace.startLayoutWatch(); await settle()
         check(workspace.layout.revision == 100, "host A layout did not load")
         workspace.restorePanes(["same", "a"]); workspace.setMode(.terminal, for: "same")
-        workspace.promptsOpen = ["a": true]
+        workspace.setPromptsCardOpen(true, for: "a")
         delayed.value = true; a.ready(); await settle()
         let creating = Task { await workspace.fork(SessionSummary(key: "a")) }
         await settle()
@@ -336,7 +355,7 @@ struct LifecycleProbe {
         check(workspace.layout.revision == 5 && workspace.layout.pinnedSessions["b"] != nil,
               "lower revision on host B was rejected")
         check(workspace.paneKeys.isEmpty && workspace.focusedKey == nil
-              && workspace.promptsOpen.isEmpty && workspace.mode(for: "same") == .chat,
+              && workspace.promptsCardChoice(for: "a") == nil && workspace.mode(for: "same") == .chat,
               "switching hosts retained another machine's workspace state")
         oldLayout.succeed(DesktopLayout(revision: 200, groups: [], pinnedSessions: ["a": 1]))
         fork.succeed(SessionSummary(key: "late-a")); await creating.value; await settle()
@@ -806,6 +825,84 @@ struct LifecycleProbe {
         print("PASS first mode toggle: persisted Chat/Terminal observation and pane isolation")
     }
 
+    /// Settings → "New Sessions Open In" also fills the first open of a session
+    /// this client did not create; explicit choices, sidebar browsing and
+    /// sessions running elsewhere are not overridden.
+    @MainActor static func preferredOpenModeRegressions() {
+        _ = NSApplication.shared
+        let preferenceKey = MacWorkspace.newSessionModeKey
+        let modesKey = "corral.mac.paneModes"
+        let savedPreference = UserDefaults.standard.object(forKey: preferenceKey)
+        let savedModes = UserDefaults.standard.object(forKey: modesKey)
+        defer {
+            if let savedPreference { UserDefaults.standard.set(savedPreference, forKey: preferenceKey) }
+            else { UserDefaults.standard.removeObject(forKey: preferenceKey) }
+            if let savedModes { UserDefaults.standard.set(savedModes, forKey: modesKey) }
+            else { UserDefaults.standard.removeObject(forKey: modesKey) }
+        }
+        UserDefaults.standard.set(MacWorkspace.PaneMode.terminal.rawValue, forKey: preferenceKey)
+        UserDefaults.standard.removeObject(forKey: modesKey)
+        let host = "preferred-open-fixture"
+        let model = AppModel(), feed = HostSessionFeed(), workspace = MacWorkspace()
+        workspace.attach(appModel: model)
+        workspace.selectHost(host)
+        workspace.feed = feed
+        let ended = SessionSummary(key: "ended", cwd: "/tmp/preferred-open")
+        let elsewhere = SessionSummary(key: "elsewhere", cwd: "/tmp/preferred-open", hosted: false, live: true)
+        let remembered = SessionSummary(key: "remembered", cwd: "/tmp/preferred-open")
+        let browsed = SessionSummary(key: "browsed", cwd: "/tmp/preferred-open")
+        for session in [ended, elsewhere, remembered, browsed] { feed.listStore.patchSession(session) }
+
+        workspace.setMode(.chat, for: remembered.key)
+        workspace.open(remembered.key, sessions: [remembered], takeKeys: true)
+        check(workspace.mode(for: remembered.key) == .chat,
+              "the Terminal preference overrode an explicit Chat choice")
+
+        workspace.open(elsewhere.key, sessions: [elsewhere], takeKeys: true)
+        check(workspace.mode(for: elsewhere.key) == .chat,
+              "a session running in another terminal opened into the terminal view's dead end")
+
+        workspace.open(browsed.key, sessions: [browsed], takeKeys: false)
+        check(workspace.mode(for: browsed.key) == .chat,
+              "sidebar browsing adopted the Terminal preference")
+
+        workspace.open(ended.key, sessions: [ended], takeKeys: true)
+        check(workspace.mode(for: ended.key) == .terminal,
+              "an externally created session ignored the Terminal preference")
+
+        workspace.setMode(.chat, for: ended.key)
+        workspace.open(browsed.key, sessions: [browsed], takeKeys: true)
+        check(workspace.mode(for: ended.key) == .chat, "an explicit Chat choice changed while its pane was closed")
+        workspace.open(ended.key, sessions: [ended], takeKeys: true)
+        check(workspace.mode(for: ended.key) == .chat,
+              "reopening overrode the choice the person made in the header")
+
+        // A created session keeps its own path: openCreated always sets the
+        // preference, and the alias carries it to the canonical key.
+        let created = SessionSummary(key: "created", cwd: "/tmp/preferred-open")
+        feed.listStore.patchSession(created)
+        workspace.restorePanes([browsed.key])
+        workspace.openCreated(created, asPane: true)
+        check(workspace.mode(for: created.key) == .terminal, "a session created here ignored the preference")
+
+        // Launch restoration draws last run's panes; adopting the preference
+        // there would resume ended sessions without an open.
+        UserDefaults.standard.removeObject(forKey: modesKey)
+        let restored = MacWorkspace()
+        restored.selectHost(host)
+        restored.feed = feed
+        restored.restorePanes([ended.key])
+        check(restored.mode(for: ended.key) == .chat, "restoring a pane adopted the Terminal preference")
+
+        UserDefaults.standard.set(MacWorkspace.PaneMode.chat.rawValue, forKey: preferenceKey)
+        let chatPreference = MacWorkspace()
+        chatPreference.selectHost(host)
+        chatPreference.feed = feed
+        chatPreference.open(browsed.key, sessions: [browsed], takeKeys: true)
+        check(chatPreference.mode(for: browsed.key) == .chat, "a session opened in terminal view with Chat preferred")
+        print("PASS preferred open view: external sessions follow the setting, browsing and explicit choices win")
+    }
+
     @MainActor static func paneActivationRegressions() {
         let workspace = MacWorkspace()
         workspace.restorePanes(["first", "second"])
@@ -942,6 +1039,7 @@ struct LifecycleProbe {
         keyMigrationRegressions()
         await sessionBatchRegressions()
         modeObservationRegressions()
+        preferredOpenModeRegressions()
         await sidebarSplitRestorationRegressions()
         await splitProjectRegressions()
         selectionCopyRegressions()

@@ -87,9 +87,12 @@ final class MacWorkspace {
     /// hold the caret, and a serial bumped on every request.
     private(set) var keyFocusTarget: String?
     private(set) var keyFocusSerial = 0
-    /// A person's open/closed choice for a session's prompts card; without
-    /// one the card is open only where it fits beside the conversation.
-    var promptsOpen: [String: Bool] = [:]
+    /// A person's open/closed choice for a session's prompts card, keyed by
+    /// the host-qualified canonical session (see `promptsCardKey`). A missing
+    /// entry means the pane default. The choice belongs to the session, never
+    /// to a pane or the window: one card's collapse never changes another.
+    private(set) var promptsCardOpen: [String: Bool] =
+        (UserDefaults.standard.dictionary(forKey: MacWorkspace.promptsCardOpenKey) as? [String: Bool]) ?? [:]
     /// Prompts card → scroll that pane's conversation to a prompt.
     private(set) var scrollRequests: [String: ChatScrollRequest] = [:]
     /// Prompts card's last row → return that pane to the latest position.
@@ -111,19 +114,25 @@ final class MacWorkspace {
     @ObservationIgnored weak var feed: HostSessionFeed?
 
     private static let modesKey = "corral.mac.paneModes"
+    private static let promptsCardOpenKey = "corral.mac.promptsCardOpen"
+    private static let promptsCardOrderKey = "corral.mac.promptsCardOpenOrder"
     /// Settings: the view a session created by this client opens in.
     static let newSessionModeKey = "corral.mac.newSessionMode"
     @ObservationIgnored private var modes: [String: String] = UserDefaults.standard.dictionary(forKey: MacWorkspace.modesKey) as? [String: String] ?? [:]
     private static let modeOrderKey = "corral.mac.paneModesOrder"
     /// Stored mode keys, least recently chosen first (pruning order).
     @ObservationIgnored private var modeOrder: [String] = UserDefaults.standard.stringArray(forKey: MacWorkspace.modeOrderKey) ?? []
+    /// Stored prompts-card keys, least recently chosen first (pruning order).
+    @ObservationIgnored private var promptsCardOrder: [String] =
+        UserDefaults.standard.stringArray(forKey: MacWorkspace.promptsCardOrderKey) ?? []
     #if DEBUG
     /// Debug and Release share one defaults domain: an inspection launch may
-    /// switch modes on screen but must never rewrite the person's choices.
-    private static let persistsModes = !ProcessInfo.processInfo.arguments.contains { $0.hasPrefix("-CorralInspect") }
+    /// switch modes or cards on screen but must never rewrite the person's
+    /// choices.
+    private static let persistsSessionChoices = !ProcessInfo.processInfo.arguments.contains { $0.hasPrefix("-CorralInspect") }
         && !ProcessInfo.processInfo.environment.keys.contains { $0.hasPrefix("CORRAL_INSPECTION_") }
     #else
-    private static let persistsModes = true
+    private static let persistsSessionChoices = true
     #endif
     /// Observed per session: one pane's chat/terminal switch must not
     /// re-render every visible and retained pane (each is its own hosting
@@ -163,7 +172,6 @@ final class MacWorkspace {
         focusedKey = nil
         navigation.selectHost(id)
         runtimeCatalog.reset()
-        promptsOpen = [:]
         pendingEntrances = []
         cancelSplitMotion()
         keyFocusTarget = nil
@@ -179,6 +187,55 @@ final class MacWorkspace {
         // pruned lazily on write, signals are cheap to rebuild.
         modeSignals = modeSignals.filter { $0.key.hasPrefix("\(id ?? ""):") }
     }
+
+    // MARK: - Your prompts card open/closed (per session, remembered)
+
+    /// The prompts card's choice key: host-qualified and canonical, so a
+    /// promoted provisional key and a machine switch keep the same session's
+    /// own choice.
+    private func promptsCardKey(_ key: String) -> String {
+        "\(hostID ?? ""):\(feed?.listStore.resolvedKey(key) ?? key)"
+    }
+
+    /// This session's own open/closed choice, or nil before the person makes
+    /// one; without a choice the pane applies its default.
+    func promptsCardChoice(for key: String) -> Bool? {
+        promptsCardOpen[promptsCardKey(key)]
+    }
+
+    /// Record one session's own choice. Only that session's entry changes:
+    /// another pane's card and its remembered choice stay untouched.
+    func setPromptsCardOpen(_ open: Bool, for key: String) {
+        let storageKey = promptsCardKey(key)
+        guard promptsCardOpen[storageKey] != open else { return }
+        promptsCardOpen[storageKey] = open
+        touchPromptsCardOrder(storageKey)
+        prunePromptsCardChoicesIfNeeded()
+        persistPromptsCardChoices()
+    }
+
+    private func touchPromptsCardOrder(_ storageKey: String) {
+        promptsCardOrder.removeAll { $0 == storageKey }
+        promptsCardOrder.append(storageKey)
+    }
+
+    private func persistPromptsCardChoices() {
+        guard Self.persistsSessionChoices else { return }
+        UserDefaults.standard.set(promptsCardOpen, forKey: Self.promptsCardOpenKey)
+        UserDefaults.standard.set(promptsCardOrder, forKey: Self.promptsCardOrderKey)
+    }
+
+    private func prunePromptsCardChoicesIfNeeded(limit: Int = 500) {
+        pruneChoices(&promptsCardOpen, order: &promptsCardOrder,
+                     hostPrefix: "\(hostID ?? ""):", limit: limit)
+    }
+
+    #if DEBUG
+    /// Inspection probes read and restore the whole table; production code
+    /// changes only one session's choice through `setPromptsCardOpen`.
+    func promptsCardChoicesSnapshot() -> [String: Bool] { promptsCardOpen }
+    func restorePromptsCardChoices(_ snapshot: [String: Bool]) { promptsCardOpen = snapshot }
+    #endif
 
     // MARK: - Chat / terminal per session (chat by default, remembered)
 
@@ -214,28 +271,39 @@ final class MacWorkspace {
     }
 
     private func persistModes() {
-        guard Self.persistsModes else { return }
+        guard Self.persistsSessionChoices else { return }
         UserDefaults.standard.set(modes, forKey: Self.modesKey)
         UserDefaults.standard.set(modeOrder, forKey: Self.modeOrderKey)
     }
 
+    /// Cap a host-qualified choice table so it cannot grow without bound
+    /// across machines and history. Other hosts' entries evict first, then
+    /// the least recently chosen; entries stored before the order was
+    /// recorded count as the oldest. Returns the removed keys.
+    @discardableResult
+    private func pruneChoices<Value>(_ table: inout [String: Value], order: inout [String],
+                                     hostPrefix: String, limit: Int) -> [String] {
+        guard table.count > limit else { return [] }
+        let ordered = Set(order)
+        let oldestFirst = table.keys.filter { !ordered.contains($0) }.sorted()
+            + order.filter { table[$0] != nil }
+        let victims = Array((oldestFirst.filter { !$0.hasPrefix(hostPrefix) }
+            + oldestFirst.filter { $0.hasPrefix(hostPrefix) }).prefix(table.count - limit))
+        for key in victims { table.removeValue(forKey: key) }
+        order.removeAll { table[$0] == nil }
+        return victims
+    }
+
     /// Modes are keyed by host+session and would otherwise grow without bound
     /// across machines and history. Cap the table; eviction only forgets a
-    /// remembered chat/terminal choice (defaults back to chat), other hosts'
-    /// and then the least recently chosen first. Entries stored before the
-    /// order was recorded count as the oldest.
+    /// remembered chat/terminal choice (the next open falls back to the Settings
+    /// preference, Chat when unset), other hosts' and then the least recently
+    /// chosen first. Entries stored before the order was recorded count as the
+    /// oldest.
     private func pruneModesIfNeeded(limit: Int = 500) {
-        guard modes.count > limit else { return }
-        let ordered = Set(modeOrder)
-        let oldestFirst = modes.keys.filter { !ordered.contains($0) }.sorted()
-            + modeOrder.filter { modes[$0] != nil }
-        let hostPrefix = "\(hostID ?? ""):"
-        let victims = oldestFirst.filter { !$0.hasPrefix(hostPrefix) } + oldestFirst.filter { $0.hasPrefix(hostPrefix) }
-        for key in victims.prefix(modes.count - limit) {
-            modes.removeValue(forKey: key)
-            modeSignals.removeValue(forKey: key)
-        }
-        modeOrder.removeAll { modes[$0] == nil }
+        let victims = pruneChoices(&modes, order: &modeOrder,
+                                   hostPrefix: "\(hostID ?? ""):", limit: limit)
+        for key in victims { modeSignals.removeValue(forKey: key) }
     }
 
     private func modeSignal(_ storageKey: String) -> ModeSignal {
@@ -246,11 +314,27 @@ final class MacWorkspace {
     }
 
     /// A new session's provisional key becomes canonical after its first
-    /// prompt; its chosen view and its open terminal must survive the rename.
+    /// prompt; its chosen view, prompts-card choice and open terminal must
+    /// survive the rename.
     func sessionMigrated(from oldKey: String, to newKey: String) {
         carryMode(from: oldKey, to: newKey)
+        carryPromptsCardChoice(from: oldKey, to: newKey)
         terminals.migrate(from: oldKey, to: newKey)
         canonicalizePaneKeys()
+    }
+
+    /// Move a session's own card choice to its canonical key. The pane rename
+    /// also does this; the list migration covers sessions not shown in a pane.
+    private func carryPromptsCardChoice(from oldKey: String, to newKey: String) {
+        let old = "\(hostID ?? ""):\(oldKey)"
+        let new = "\(hostID ?? ""):\(newKey)"
+        guard old != new, let open = promptsCardOpen.removeValue(forKey: old) else { return }
+        if promptsCardOpen[new] == nil {
+            promptsCardOpen[new] = open
+            touchPromptsCardOrder(new)
+        }
+        promptsCardOrder.removeAll { $0 == old }
+        persistPromptsCardChoices()
     }
 
     /// Pane identity is the canonical session key (design: One pane per
@@ -284,11 +368,30 @@ final class MacWorkspace {
         persistModes()
     }
 
-    /// Only sessions created here follow the setting; history keeps chat so
-    /// browsing never resumes ended sessions through the terminal view.
-    private func applyNewSessionMode(to key: String) {
-        let preferred = UserDefaults.standard.string(forKey: Self.newSessionModeKey)
+    /// The view a session opens in before the person has chosen one for it:
+    /// the Settings preference, Chat when it was never set.
+    private var preferredNewSessionMode: PaneMode {
+        UserDefaults.standard.string(forKey: Self.newSessionModeKey)
             .flatMap(PaneMode.init(rawValue:)) ?? .chat
+    }
+
+    /// A session created here always starts in the preferred view.
+    private func applyNewSessionMode(to key: String) {
+        let preferred = preferredNewSessionMode
+        if preferred != .chat { setMode(preferred, for: key) }
+    }
+
+    /// A session this client did not create (TUI, phone, the agent's own
+    /// terminal) arrives with no remembered view, so its first deliberate open
+    /// follows the same preference. A header switch is remembered and wins from
+    /// then on. A session still running in another terminal window can only show
+    /// the terminal view's "running elsewhere" note, so it keeps the chat
+    /// preview rather than opening into a dead end.
+    private func adoptPreferredModeIfUnset(for key: String, sessions: [SessionSummary] = []) {
+        guard !ProjectShell.isShellKey(key), modes[modeKey(key)] == nil else { return }
+        let session = sessions.first { $0.key == key } ?? feed?.listStore.session(for: key)
+        if let session, session.live, !session.hosted { return }
+        let preferred = preferredNewSessionMode
         if preferred != .chat { setMode(preferred, for: key) }
     }
 
@@ -308,7 +411,8 @@ final class MacWorkspace {
         if !pendingEntrances.isEmpty { pendingEntrances = [] }
         canonicalizePaneKeys()
         let key = canonicalPaneKey(key)
-        defer { if takeKeys ?? Self.selectionCameFromPointer { requestKeyFocus(key) } }
+        let deliberate = takeKeys ?? Self.selectionCameFromPointer
+        defer { if deliberate { requestKeyFocus(key) } }
         if paneKeys.contains(key) {
             focus(key)
             return
@@ -318,6 +422,7 @@ final class MacWorkspace {
             if members.count >= 2 {
                 cancelSplitMotion()
                 paneKeys = Array(members.prefix(Self.maxPanes))
+                if deliberate { adoptPreferredModes(for: paneKeys, sessions: sessions) }
                 focus(key)
                 return
             }
@@ -325,6 +430,13 @@ final class MacWorkspace {
         cancelSplitMotion()
         paneKeys = [key]
         focusedKey = key
+        // Arrow-key browsing of the sidebar only selects: it never swaps a
+        // session into terminal view, which would resume ended sessions.
+        if deliberate { adoptPreferredModes(for: [key], sessions: sessions) }
+    }
+
+    private func adoptPreferredModes(for keys: [String], sessions: [SessionSummary]) {
+        for key in keys { adoptPreferredModeIfUnset(for: key, sessions: sessions) }
     }
 
     /// Search can find history outside the current list window. Resolve and
@@ -442,6 +554,7 @@ final class MacWorkspace {
             return
         }
         leavingPanes[key] = nil
+        adoptPreferredModeIfUnset(for: key)
         let before = drawnPaneKeys
         if paneKeys.count >= Self.maxPanes, let focusedKey, let index = paneKeys.firstIndex(of: focusedKey) {
             // Full split: the replaced pane fades out of its slot like a close.
@@ -851,7 +964,7 @@ final class MacWorkspace {
                 paneSurfaces.rename(old, to: new)
             }
             pendingEntrances.remove(old)
-            if let open = promptsOpen.removeValue(forKey: old), promptsOpen[new] == nil { promptsOpen[new] = open }
+            carryPromptsCardChoice(from: old, to: new)
             paneFrames[old] = nil
             if keyFocusTarget == old { keyFocusTarget = new }
         }

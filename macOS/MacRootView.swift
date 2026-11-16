@@ -434,7 +434,7 @@ struct MacRootView: View {
             Button {
                 showSearch = true
             } label: {
-                Label("mac.search.title", systemImage: "text.magnifyingglass")
+                Label("mac.search.title", systemImage: "magnifyingglass")
             }
             .help(Text("mac.search.title"))
         }
@@ -622,6 +622,9 @@ struct MacRootView: View {
         if ProcessInfo.processInfo.arguments.contains("-CorralInspectInteraction") {
             Task { await MacInteractionInspection.run(feed: current, workspace: workspace) }
         }
+        if ProcessInfo.processInfo.arguments.contains("-CorralInspectPromptsCard") {
+            Task { await MacPromptsCardInspection.start(feed: current, workspace: workspace) }
+        }
         if ProcessInfo.processInfo.arguments.contains("-CorralInspectPendingPane") {
             Task { await MacPendingPaneInspection.run(feed: current, workspace: workspace) }
         }
@@ -769,11 +772,28 @@ private struct FeedConnectionKey: Hashable {
 /// opens every pane's prompts card, `-CorralInspectPromptsClosed` closes
 /// them (shows the collapsed circular bubble button),
 /// `-CorralInspectAddPaneSession` creates a
-/// Claude session beside the first pane. Release has none.
+/// Claude session beside the first pane, `-CorralInspectPreferredOpen` opens the
+/// requested session the way a person's click does, after the list settles.
+/// Release has none.
 enum MacInspection {
     static func apply(feed: HostSessionFeed, workspace: MacWorkspace) {
         let arguments = ProcessInfo.processInfo.arguments
         let sessions = feed.listStore.windowSessions
+        if arguments.contains("-CorralInspectPreferredOpen") {
+            // The native sidebar selects its first row when the list arrives, so
+            // this open waits for that and starts from an empty workspace: the
+            // capture then shows which view one externally created session took.
+            let requested = (ProcessInfo.processInfo.environment["CORRAL_INSPECTION_SESSION_KEY"] ?? "")
+                .split(separator: ",").map(String.init)
+            guard let first = requested.first else { return }
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(4))
+                workspace.inspectionRestoreWorkspace(keys: [], focus: nil)
+                workspace.open(first, sessions: feed.listStore.windowSessions, takeKeys: true)
+                workspace.focus(first)
+            }
+            return
+        }
         if arguments.contains("-CorralInspectConversation") {
             let requested = (ProcessInfo.processInfo.environment["CORRAL_INSPECTION_SESSION_KEY"] ?? "")
                 .split(separator: ",").map(String.init)
@@ -801,10 +821,10 @@ enum MacInspection {
             }
         }
         if arguments.contains("-CorralInspectPromptsOpen") {
-            for key in workspace.paneKeys { workspace.promptsOpen[key] = true }
+            for key in workspace.paneKeys { workspace.setPromptsCardOpen(true, for: key) }
         }
         if arguments.contains("-CorralInspectPromptsClosed") {
-            for key in workspace.paneKeys { workspace.promptsOpen[key] = false }
+            for key in workspace.paneKeys { workspace.setPromptsCardOpen(false, for: key) }
         }
         Task { await MacPaneHeaderInspection.run(workspace: workspace) }
     }

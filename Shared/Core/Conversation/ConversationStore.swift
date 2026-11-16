@@ -229,7 +229,20 @@ final class ConversationStore {
         guard let snapshot = ConversationTailCache.load(hostID: hostID, sessionKey: sessionKey) else {
             return
         }
-        messages = snapshot.messages
+        var restored = snapshot.messages
+        // Caches written before one-send/one-bubble staged a separate
+        // `[image]` echo per uploaded image. Those bubbles can never pair with
+        // the host's path-carrying user turn, so they would stay forever;
+        // unresolved commands still surface through the error banner.
+        restored.removeAll { message in
+            message.isLocal
+                && ConversationMessageMerge.normalizedRole(message.role) == "user"
+                && !message.hasLocalImages
+                && ConversationMessageMerge.normalizedText(message.text) == "[image]"
+        }
+        // Re-apply the echo invariant the snapshot was written under: a
+        // confirmed turn always wins over the local bubble of the same send.
+        messages = ConversationMessageMerge.consumingLocalEchoes(restored)
         forkMessages = snapshot.forkMessages
         oldestSequence = snapshot.oldestSequence
         newestSequence = snapshot.newestSequence
@@ -263,8 +276,17 @@ final class ConversationStore {
     }
 
     /// 立刻画出自己的气泡。相同正文的失败/发送中气泡复用原序号，避免两条一样的。
+    ///
+    /// One send stages exactly one bubble: its typed text plus the images it
+    /// carries (`images`). Image-only sends have an empty text and are kept as
+    /// bubbles by the timeline through `localImageData`.
     @discardableResult
-    func enqueueLocalUser(_ text: String, commandID: String? = nil, reusingSeq: Int? = nil) -> Int {
+    func enqueueLocalUser(
+        _ text: String,
+        commandID: String? = nil,
+        reusingSeq: Int? = nil,
+        images: [Data] = []
+    ) -> Int {
         if let reusingSeq, let index = messages.firstIndex(where: {
             $0.seq == reusingSeq && $0.isLocal && $0.delivery == .failed
         }) {
@@ -274,11 +296,15 @@ final class ConversationStore {
             messages[index].commandID = commandID
             messages[index].delivery = .pending
             messages[index].failureDetail = nil
+            if !images.isEmpty {
+                messages[index].localImageData = images
+            }
             return messages[index].seq
         }
         let trimmed = ConversationMessageMerge.normalizedText(text)
         if let index = messages.lastIndex(where: { message in
             guard message.isLocal, message.role.lowercased() == "user" else { return false }
+            guard message.localImageData.count == images.count else { return false }
             if let commandID, !commandID.isEmpty {
                 return message.commandID == commandID
                     || (message.delivery == .failed
@@ -307,7 +333,8 @@ final class ConversationStore {
                 delivery: .pending,
                 timestamp: Date().timeIntervalSince1970,
                 commandID: commandID,
-                localAfterSeq: newestOfficialSeq
+                localAfterSeq: newestOfficialSeq,
+                localImageData: images
             )
         )
         return seq
@@ -448,8 +475,13 @@ final class ConversationStore {
 
     /// Runs `operation` after every earlier send in this conversation has left and its
     /// host outcome has settled, so input reaches the assistant in tap order.
+    ///
+    /// `ownCommandIDs` are the identities of the send being delivered right now.
+    /// One send may carry several images plus its text, all sharing a single
+    /// optimistic bubble; that bubble's identity is not an *earlier* send and
+    /// must never delay the rest of its own batch (`won't finish for 120 s`).
     private func inOutboundOrder(
-        excludingCommandID: String? = nil,
+        ownCommandIDs: [String] = [],
         _ operation: @escaping @MainActor () async throws -> Void
     ) async throws {
         let previous = outboundTail
@@ -457,7 +489,7 @@ final class ConversationStore {
         defer { queuedOutboundCount -= 1 }
         let turn = Task { @MainActor [weak self] in
             await previous?.value
-            await self?.waitForEarlierDeliveries(excludingCommandID: excludingCommandID)
+            await self?.waitForEarlierDeliveries(ownCommandIDs: ownCommandIDs)
             try await operation()
         }
         outboundTail = Task { _ = try? await turn.value }
@@ -468,20 +500,21 @@ final class ConversationStore {
     /// command identity inside the settle window. Identity-less echoes and stale
     /// bubbles (e.g. restored from the reopen cache) are never confirmed by
     /// receipt polling, so they must not hold back new sends.
-    private func waitForEarlierDeliveries(excludingCommandID: String?) async {
+    private func waitForEarlierDeliveries(ownCommandIDs: [String]) async {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: Self.outboundSettleTimeout)
         while !hasStopped, clock.now < deadline,
-              hasConfirmingSend(now: Date(), excludingCommandID: excludingCommandID) {
+              hasConfirmingSend(now: Date(), ownCommandIDs: ownCommandIDs) {
             try? await Task.sleep(for: .milliseconds(200))
         }
     }
 
-    private func hasConfirmingSend(now: Date, excludingCommandID: String?) -> Bool {
+    private func hasConfirmingSend(now: Date, ownCommandIDs: [String]) -> Bool {
         let window = Double(Self.outboundSettleTimeout.components.seconds)
+        let own = Set(ownCommandIDs.filter { !$0.isEmpty })
         return messages.contains { message in
-            guard message.isLocal, message.delivery == .accepted, message.commandID != nil,
-                  message.commandID != excludingCommandID,
+            guard message.isLocal, message.delivery == .accepted, let commandID = message.commandID,
+                  !own.contains(commandID),
                   let sentAt = message.timestamp else { return false }
             return now.timeIntervalSince1970 - sentAt < window
         }
@@ -490,8 +523,15 @@ final class ConversationStore {
     /// Send text once, after earlier sends in this conversation. When receipts are
     /// available, callers must already have persisted a pending bubble + `command_id`
     /// and cleared the composer.
-    func sendText(_ text: String, submit: Bool = true, commandID: String? = nil) async throws {
-        try await inOutboundOrder(excludingCommandID: commandID) { [weak self] in
+    func sendText(
+        _ text: String,
+        submit: Bool = true,
+        commandID: String? = nil,
+        ownCommandIDs: [String] = []
+    ) async throws {
+        var own = ownCommandIDs
+        if let commandID { own.append(commandID) }
+        try await inOutboundOrder(ownCommandIDs: own) { [weak self] in
             try await self?.deliverText(text, submit: submit, commandID: commandID)
         }
     }
@@ -594,8 +634,10 @@ final class ConversationStore {
         _ = try await client.call(WireProtocol.mSessionInterrupt, params: ["key": sessionKey])
     }
 
-    func sendImage(base64: String, commandID: String? = nil) async throws {
-        try await inOutboundOrder(excludingCommandID: commandID) { [weak self] in
+    func sendImage(base64: String, commandID: String? = nil, ownCommandIDs: [String] = []) async throws {
+        var own = ownCommandIDs
+        if let commandID { own.append(commandID) }
+        try await inOutboundOrder(ownCommandIDs: own) { [weak self] in
             try await self?.deliverImage(base64: base64, commandID: commandID)
         }
     }
@@ -654,7 +696,17 @@ final class ConversationStore {
 
     func applyCommandStatus(commandID: String, status: String, failureDetail: String? = nil) {
         let delivery = PendingCommandStore.delivery(fromHostStatus: status)
-        updateLocalDelivery(delivery, commandID: commandID, failureDetail: failureDetail)
+        let matched = updateLocalDelivery(
+            delivery, commandID: commandID, failureDetail: failureDetail
+        )
+        // One send stages one bubble carrying several receipt identities (the
+        // images plus the text). An image status resolves through its pending
+        // record to that bubble instead of silently finding nothing.
+        if !matched, !hostID.isEmpty,
+           let record = PendingCommandStore.load(hostID: hostID, sessionKey: sessionKey)
+               .first(where: { $0.commandID == commandID }) {
+            updateLocalDelivery(delivery, seq: record.localSeq, failureDetail: failureDetail)
+        }
         if delivery == .failed || delivery == .needsReview {
             cancelProvisionalWorking()
         }
@@ -1204,13 +1256,16 @@ final class ConversationStore {
         }
     }
 
+    /// Applies a delivery state to the matching local bubble; returns whether
+    /// any bubble matched.
+    @discardableResult
     private func updateLocalDelivery(
         _ delivery: MessageDelivery,
         text: String? = nil,
         seq: Int? = nil,
         commandID: String? = nil,
         failureDetail: String? = nil
-    ) {
+    ) -> Bool {
         let needle = text.map { ConversationMessageMerge.normalizedText($0) }
         for index in messages.indices.reversed() {
             let message = messages[index]
@@ -1224,8 +1279,9 @@ final class ConversationStore {
             } else if delivery == .sent || delivery == .pending || delivery == .accepted {
                 messages[index].failureDetail = nil
             }
-            return
+            return true
         }
+        return false
     }
 
     private func applyAttention(from data: [String: Any]) {

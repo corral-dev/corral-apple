@@ -341,7 +341,11 @@ struct ChatView: View {
                 MessageBubbleView(
                     message: message,
                     runtimeID: runtimeID,
-                    onRetry: { onRetryMessage?(message) },
+                    // An attachment-only send has no text to resend: a retry
+                    // tap would rebuild nothing, so the bubble shows the cause
+                    // without a dead button.
+                    onRetry: message.text?.isEmpty == false
+                        ? { onRetryMessage?(message) } : nil,
                     interfaceScale: interfaceScale,
                     sessionTextScale: sessionTextScale,
                     colorScheme: colorScheme,

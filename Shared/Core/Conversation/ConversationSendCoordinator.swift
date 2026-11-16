@@ -35,14 +35,18 @@ protocol ConversationSendStore: AnyObject {
     var questionSubmissionState: NativeQuestionSubmissionState? { get }
     var questionFailureIsUncertain: Bool { get }
     @discardableResult
-    func enqueueLocalUser(_ text: String, commandID: String?, reusingSeq: Int?) -> Int
+    func enqueueLocalUser(_ text: String, commandID: String?, reusingSeq: Int?, images: [Data]) -> Int
     func recordPendingCommand(commandID: String, text: String, localSeq: Int)
     func applyCommandStatus(commandID: String, status: String, failureDetail: String?)
     func markLocalSent(text: String?, seq: Int?)
     func markLocalFailed(text: String?, seq: Int?, failureDetail: String?)
     func markLocalNeedsReview(text: String?, seq: Int?, failureDetail: String?)
-    func sendText(_ text: String, submit: Bool, commandID: String?) async throws
-    func sendImage(base64: String, commandID: String?) async throws
+    func sendText(
+        _ text: String, submit: Bool, commandID: String?, ownCommandIDs: [String]
+    ) async throws
+    func sendImage(
+        base64: String, commandID: String?, ownCommandIDs: [String]
+    ) async throws
     func submitQuestion(requestID: String, answers: [NativeQuestionAnswer]) async
 }
 
@@ -85,13 +89,22 @@ struct TextSendPlan: Sendable {
     let operationID: UUID
 }
 
-/// Synchronous plan for one composer send (images first, then optional text).
+/// Synchronous plan for one composer send (one bubble: its images, then its text).
 struct ComposerSendPlan: Sendable {
     let images: [StagedSendImage]
     let text: TextSendPlan?
     let trimmedText: String
     let hasText: Bool
+    /// The single optimistic bubble that stands for this whole send (owner
+    /// correction 2026-11-15: one send is one bubble, never text + `[image]`).
+    let echoSeq: Int?
     let operationID: UUID
+
+    /// Every receipt identity this send owns: its images and its text. The
+    /// outbound queue must not wait on its own optimistic bubble.
+    var ownCommandIDs: [String] {
+        (images.compactMap(\.commandID) + [text?.commandID].compactMap { $0 })
+    }
 }
 
 /// Synchronous plan for one native question submission.
@@ -161,6 +174,7 @@ struct ConversationSendCoordinator: Sendable {
                     text: textPlan,
                     trimmedText: trimmed,
                     hasText: true,
+                    echoSeq: textPlan.localSeq,
                     operationID: textPlan.operationID
                 )
             }
@@ -176,6 +190,12 @@ struct ConversationSendCoordinator: Sendable {
             }
             return image
         }
+        // Stage the optimistic echo for the whole send: the body text plus the
+        // image payloads. The host's confirmed turn carries the pasted paths
+        // instead, and `ConversationMessageMerge` matches the two by body.
+        // Keep one entry per image even if a payload will not decode: the
+        // bubble then shows a placeholder tile instead of losing the image.
+        let payloads = imageDrafts.map { Data(base64Encoded: $0.base64) ?? Data() }
         let textPlan = hasText ? prepareTextSend(
             trimmed,
             store: store,
@@ -183,14 +203,43 @@ struct ConversationSendCoordinator: Sendable {
             reuseCommandID: nil,
             reuseSeq: nil,
             clearDraftOnStart: false,
-            operationID: operationID
+            operationID: operationID,
+            images: payloads
         ) : nil
+        let echoSeq = textPlan?.localSeq ?? stageImageEcho(
+            store: store,
+            images: imageDrafts,
+            payloads: payloads
+        )
+        // Every image of this send resolves to its one bubble, so a receipt that
+        // lands after the upload (or during the 95 s poll) still settles it.
+        if let echoSeq {
+            for image in imageDrafts {
+                guard let commandID = image.commandID else { continue }
+                store.recordPendingCommand(commandID: commandID, text: "", localSeq: echoSeq)
+            }
+        }
         return ComposerSendPlan(
             images: imageDrafts,
             text: textPlan,
             trimmedText: trimmed,
             hasText: hasText,
+            echoSeq: echoSeq,
             operationID: operationID
+        )
+    }
+
+    /// An image-only send still owes the user one bubble while the host turn is
+    /// in flight. The first image's receipt identity is that bubble's identity;
+    /// every image identity is recorded against the same seq afterwards.
+    private func stageImageEcho(
+        store: any ConversationSendStore,
+        images: [StagedSendImage],
+        payloads: [Data]
+    ) -> Int? {
+        guard let firstImage = images.first, !payloads.isEmpty else { return nil }
+        return store.enqueueLocalUser(
+            "", commandID: firstImage.commandID, reusingSeq: nil, images: payloads
         )
     }
 
@@ -214,32 +263,24 @@ struct ConversationSendCoordinator: Sendable {
         }
         var sentImageCount = 0
         var textSendStarted = false
+        let ownCommandIDs = plan.ownCommandIDs
         do {
             for image in plan.images {
                 let commandID = image.commandID
-                var imageSeq: Int?
-                if let commandID {
-                    // Give each image its own bubble seq (multi-image failure mapping).
-                    let seq = store.enqueueLocalUser("[image]", commandID: commandID, reusingSeq: nil)
-                    store.recordPendingCommand(
-                        commandID: commandID,
-                        text: "[image]",
-                        localSeq: seq
-                    )
-                    imageSeq = seq
-                }
-                try await store.sendImage(base64: image.base64, commandID: commandID)
+                try await store.sendImage(
+                    base64: image.base64, commandID: commandID, ownCommandIDs: ownCommandIDs
+                )
                 // Legacy hosts never return a receipt: settle like the text path
                 // so the bubble does not stay pending forever.
                 if !store.supportsCommandReceipts, let commandID {
-                    store.markLocalSent(text: nil, seq: imageSeq)
+                    store.markLocalSent(text: nil, seq: plan.echoSeq)
                     store.applyCommandStatus(commandID: commandID, status: "delivered", failureDetail: nil)
                 }
                 sentImageCount += 1
             }
             if let textPlan = plan.text {
                 textSendStarted = true
-                try await finishTextSend(textPlan, store: store)
+                try await finishTextSend(textPlan, store: store, ownCommandIDs: ownCommandIDs)
             } else {
                 // Image-only: `input.image` only pastes the saved path into
                 // the composer, so without a submit the path sits there
@@ -247,10 +288,12 @@ struct ConversationSendCoordinator: Sendable {
                 // image+text worked, because only the text path submitted).
                 // Flush with a submit-only empty text in the same ordered
                 // queue; the host presses one guarded Enter and reports it
-                // under its own receipt, leaving the delivered image bubbles
+                // under its own receipt, leaving the delivered image bubble
                 // untouched.
                 textSendStarted = true
-                try await store.sendText("", submit: true, commandID: nil)
+                try await store.sendText(
+                    "", submit: true, commandID: nil, ownCommandIDs: ownCommandIDs
+                )
             }
             display.clearError()
         } catch {
@@ -282,11 +325,13 @@ struct ConversationSendCoordinator: Sendable {
                         currentDraft: display.composerDraft
                     )
                 }
+                // Image-only: the single echo bubble carries the outcome. The
+                // image RPC may have delivered, so keep the ambiguous status.
                 handleOutboundFailure(
                     error,
                     payload: nil,
                     commandID: nil,
-                    localSeq: nil,
+                    localSeq: plan.echoSeq,
                     restoreDraft: false,
                     store: store,
                     display: display,
@@ -383,7 +428,8 @@ struct ConversationSendCoordinator: Sendable {
         reuseCommandID: String?,
         reuseSeq: Int?,
         clearDraftOnStart: Bool,
-        operationID: UUID
+        operationID: UUID,
+        images: [Data] = []
     ) -> TextSendPlan {
         if clearDraftOnStart {
             display.composerDraft = ""
@@ -400,7 +446,9 @@ struct ConversationSendCoordinator: Sendable {
             // Identity belongs to the user's intent, before hello/capability
             // state can change while this send waits in the outgoing queue.
             commandID = UUID().uuidString
-            localSeq = store.enqueueLocalUser(text, commandID: commandID, reusingSeq: reuseSeq)
+            localSeq = store.enqueueLocalUser(
+                text, commandID: commandID, reusingSeq: reuseSeq, images: images
+            )
             if let commandID, let localSeq {
                 store.recordPendingCommand(commandID: commandID, text: text, localSeq: localSeq)
             }
@@ -416,11 +464,16 @@ struct ConversationSendCoordinator: Sendable {
         )
     }
 
-    private func finishTextSend(_ plan: TextSendPlan, store: any ConversationSendStore) async throws {
+    private func finishTextSend(
+        _ plan: TextSendPlan,
+        store: any ConversationSendStore,
+        ownCommandIDs: [String] = []
+    ) async throws {
         try await store.sendText(
             plan.payload,
             submit: true,
-            commandID: plan.commandID
+            commandID: plan.commandID,
+            ownCommandIDs: ownCommandIDs
         )
         if !store.supportsCommandReceipts {
             store.markLocalSent(text: nil, seq: plan.localSeq)

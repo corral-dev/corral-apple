@@ -15,10 +15,10 @@ enum MacPaneReorderInspection {
     static func run(feed: HostSessionFeed, workspace: MacWorkspace) async {
         guard !claimed else { return }
         claimed = true
-        let original = (workspace.paneKeys, workspace.focusedKey, workspace.promptsOpen)
+        let original = (workspace.paneKeys, workspace.focusedKey, workspace.promptsCardChoicesSnapshot())
         defer {
             workspace.inspectionRestoreWorkspace(keys: original.0, focus: original.1)
-            workspace.promptsOpen = original.2
+            workspace.restorePromptsCardChoices(original.2)
         }
         var report: [String: Any] = ["hostWrites": false, "systemPointerMoved": false]
         do {
@@ -31,7 +31,7 @@ enum MacPaneReorderInspection {
             workspace.inspectionRestoreWorkspace(keys: keys, focus: keys[2])
             for key in keys {
                 workspace.setMode(.chat, for: key)
-                workspace.promptsOpen[key] = false
+                workspace.setPromptsCardOpen(false, for: key)
             }
             for _ in 0..<100 {
                 if keys.allSatisfy({ workspace.paneSurfaces.existingEntry(for: $0)?.view != nil }) { break }

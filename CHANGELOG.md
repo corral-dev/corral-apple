@@ -6,6 +6,26 @@ next version's section. A `Release: minor` or `Release: major` line requests a
 larger version step; `Release: hold <reason>` keeps the changes unreleased until
 the named acceptance is done.
 
+## Mac 0.3.175 (182) / iPhone 1.0.219 (232)
+
+### English
+
+- One photo send is one chat bubble: the typed text and its images share a single bubble instead of leaving the text, an `[image]` placeholder and the confirmed turn as three bubbles. The host's pasted temp path (`.corral-pastes/…`) now renders as the image and never as body text, and pending sends preview their own images.
+- The Mac window's top-right search action now uses the plain magnifying glass instead of the text-with-lines search symbol.
+- On the Mac, "New Sessions Open In" now also decides how a session created elsewhere (the TUI, the phone or the agent's own terminal) opens the first time: a session without a remembered view takes the preference, so Terminal shows the agent's native interface there too. A header switch afterwards still wins, sidebar arrow-key browsing never adopts the preference, and a session running in another terminal window keeps its chat preview.
+- Your prompts no longer lists the same request twice. A prompt typed on the phone or Mac existed as both the pending echo bubble and the confirmed history message; the list now shows one row, and its whitespace tolerance also removes the duplicate bubble the echo left in the conversation.
+- On the Mac, every session keeps its own Your prompts card state: closing one pane's card no longer closes another session's card, and a click outside a floating card no longer dismisses it.
+- Jumping to the latest message keeps the Your prompts card open; it is navigation, not a dismissal.
+
+### 简体中文
+
+- 一条带图消息只显示一条气泡：正文与图片共用同一个气泡，不再出现正文、`[image]` 占位、正式消息三条。宿主粘贴的临时路径（`.corral-pastes/…`）改为显示图片、不再出现在正文里，发送中的气泡直接预览本次的图片。
+- Mac 窗口右上角的搜索按钮改用纯放大镜图标，不再用镜片里带两条横线的搜索图标。
+- Mac 的“新会话打开方式”现在同时决定外部创建的会话（终端界面、手机或助手自己的终端里开的）第一次打开用什么方式：还没有记住选择的会话按这个偏好打开，选终端就直接进入助手原生界面；之后在标签栏切换仍然优先记住，只用方向键浏览侧栏不会改变打开方式，仍在别的终端窗口里运行的会话保持聊天预览。
+- 本会话提示词不再把同一条提问列两次：在手机或 Mac 上发出的一句，之前同时以“发送中气泡”和“历史正式消息”各算一条；现在只留一条，而且不再因为制表符被粘贴成空格就认不出是同一条，对话里那条重复气泡也一起消失。
+- Mac 上每个会话各自记住本会话提示词卡片的开合：关掉一格的卡片不再连带关掉别的会话，点卡片外面也不再收起浮动卡片。
+- 跳到最新消息不再顺带关掉本会话提示词卡片，那只是导航，不是收起。
+
 ## Mac 0.3.174 (180) / iPhone 1.0.218 (231)
 
 ### English

@@ -199,3 +199,63 @@ private struct MessageImageTile: View {
         }
     }
 }
+
+/// Optimistic echo of the images a send carries.
+///
+/// The host confirms a send by writing the agent transcript, and only that
+/// confirmed turn can fetch previews (`media.image` resolves a reference inside
+/// a real message). Until then the bubble shows the staged payloads the
+/// composer encoded, so the pending bubble is already the message the user sent
+/// instead of a second `[image]` placeholder (owner report 2026-11-15).
+struct LocalEchoImagesView: View {
+    @Environment(\.interfaceScale) private var interfaceScale
+    let payloads: [Data]
+    let isUser: Bool
+
+    /// Matches `MessageImageTile`: the swap to the confirmed preview must not
+    /// move the bubble or the messages below it.
+    private static let maxSide: CGFloat = 240
+    private static let placeholderSize = CGSize(width: 200, height: 140)
+
+    var body: some View {
+        VStack(alignment: isUser ? .trailing : .leading, spacing: Space.sm * interfaceScale) {
+            ForEach(Array(payloads.prefix(ChatImageReference.maxPerMessage).enumerated()), id: \.offset) { _, data in
+                tile(for: data)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func tile(for data: Data) -> some View {
+        if let image = PlatformImage(data: data) {
+            Image(platformImage: image)
+                .resizable()
+                .interfaceFrame(width: size(of: image).width, height: size(of: image).height)
+                .clipShape(RoundedRectangle(cornerRadius: Radius.md * interfaceScale, style: .continuous))
+                .accessibilityLabel(Text("chat.image.sending"))
+                .accessibilityAddTraits(.isImage)
+        } else {
+            RoundedRectangle(cornerRadius: Radius.md * interfaceScale, style: .continuous)
+                .fill(isUser ? Palette.userBubbleForeground.opacity(0.12) : Color(.tertiarySystemFill))
+                .interfaceFrame(
+                    width: Self.placeholderSize.width * interfaceScale,
+                    height: Self.placeholderSize.height * interfaceScale
+                )
+                .overlay {
+                    Image(systemName: "photo")
+                        .interfaceFont(.title3)
+                        .foregroundStyle(isUser ? Palette.userBubbleForeground : Color.secondary)
+                }
+                .accessibilityLabel(Text("chat.image.sending"))
+        }
+    }
+
+    private func size(of image: PlatformImage) -> CGSize {
+        // A decoded payload is in pixels; the tile lays it out in points.
+        let width = max(image.size.width, 1)
+        let height = max(image.size.height, 1)
+        let maxSide = Self.maxSide * interfaceScale
+        let scale = min(1, maxSide / width, maxSide / height)
+        return CGSize(width: (width * scale).rounded(), height: (height * scale).rounded())
+    }
+}

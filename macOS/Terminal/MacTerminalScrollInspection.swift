@@ -3,8 +3,9 @@ import AppKit
 import Foundation
 import SwiftTerm
 
-/// Real Pi wheel/trackpad input through the production host and native renderer.
-/// Restricted to an owned disposable session; no system pointer input or payload capture.
+/// Synthetic Pi wheel input through the production host and native renderer.
+/// Restricted to an owned fixture, without system pointer input. Normal reports
+/// contain timings only; explicit fixture feed recording uses a private sidecar.
 @MainActor
 final class MacTerminalScrollInspection {
     private static var started = false
@@ -30,6 +31,7 @@ final class MacTerminalScrollInspection {
     private var inputStages: [[String: Any]] = []
     private var feeds: [Feed] = []
     private var frameTimes: [TimeInterval] = []
+    private var recordedFeeds: [(at: TimeInterval, data: Data)] = []
     private var heartbeatLag: [Double] = []
     private var report: [String: Any] = [:]
     private var lastScreen = ""
@@ -55,7 +57,14 @@ final class MacTerminalScrollInspection {
             return
         }
         let original = (workspace.paneKeys, workspace.focusedKey)
-        defer { workspace.inspectionRestoreWorkspace(keys: original.0, focus: original.1) }
+        var completed = false
+        defer {
+            workspace.inspectionRestoreWorkspace(keys: original.0, focus: original.1)
+            if completed {
+                probe.report["phase"] = "restored"
+                probe.writeReport()
+            }
+        }
         workspace.setMode(.terminal, for: key)
         workspace.inspectionRestoreWorkspace(keys: [key], focus: key)
         guard await wait(seconds: 30, {
@@ -65,8 +74,13 @@ final class MacTerminalScrollInspection {
             probe.save("terminal-not-ready")
             return
         }
-        if let identity = env["CORRAL_INSPECTION_SCROLL_IDENTITY"] {
-            terminal.view.inspectionSetIdentityBackground(identity == "watermark")
+        let window = terminal.view.window
+        let originalFrame = window?.frame
+        defer {
+            if let window, let originalFrame {
+                window.setFrame(originalFrame, display: true)
+                probe.report["windowFrameRestored"] = window.frame == originalFrame
+            }
         }
         if let displayName = env["CORRAL_INSPECTION_SCROLL_DISPLAY"] {
             guard let screen = NSScreen.screens.first(where: { $0.localizedName == displayName }),
@@ -90,6 +104,7 @@ final class MacTerminalScrollInspection {
         let benchmarkVisibility = env["CORRAL_INSPECTION_SCROLL_BENCHMARK_VISIBILITY"] == "1"
         if benchmarkVisibility { terminal.view.inspectionSuspendsRenderingWhenNotVisible = false }
         defer { terminal.view.inspectionSuspendsRenderingWhenNotVisible = visibilityPolicy }
+        NSApp.activate()
         terminal.view.window?.makeKeyAndOrderFront(nil)
         terminal.view.window?.orderFrontRegardless()
         terminal.view.inspectionFocus()
@@ -126,7 +141,9 @@ final class MacTerminalScrollInspection {
             probe?.inputStages.append(["stage": stage, "revision": revision, "queue": queued,
                                        "at": ProcessInfo.processInfo.systemUptime])
         }
-        terminal.view.inspectionFeedTiming = { [weak probe] start, end, _ in
+        let recordFeeds = env["CORRAL_INSPECTION_SCROLL_RECORD_FEEDS"] == "1"
+        terminal.view.inspectionFeedTiming = { [weak probe] start, end, data in
+            if recordFeeds { probe?.recordedFeeds.append((at: end, data: data)) }
             probe?.received(start: start, end: end)
         }
         let oldFrameHandler = SwiftTerm.TerminalView.onFramePresented
@@ -155,10 +172,14 @@ final class MacTerminalScrollInspection {
         try? await Task.sleep(for: .seconds(2))
 
         let cellHeight = terminal.view.inspectionCellHeight
-        let deltas: [Int32] = [3, 5, 8, 13, 21, 8, 5, 34]
-        let eventCount = 180
+        let everyEvent = env["CORRAL_INSPECTION_SCROLL_EVERY_EVENT"] == "1"
+        let deltas: [Int32] = everyEvent ? [Int32(cellHeight.rounded(.up))] : [3, 5, 8, 13, 21, 8, 5, 34]
+        let eventCount = everyEvent ? 360 : 180
+        probe.report["workload"] = everyEvent ? "one-cell-per-event-60hz" : "mixed-pixel-deltas-60hz"
         var accumulator = 0.0
         var expectedLines = 0
+        var allEventsUnoccluded = true
+        var allEventsActive = true
         let origin = ProcessInfo.processInfo.systemUptime
         for index in 0..<eventCount {
             let planned = origin + Double(index) / 60.0
@@ -166,6 +187,8 @@ final class MacTerminalScrollInspection {
             if remaining > 0 { try? await Task.sleep(for: .seconds(remaining)) }
             let direction: Int32 = index < eventCount / 2 ? 1 : -1
             let pixels = deltas[index % deltas.count] * direction
+            allEventsUnoccluded = allEventsUnoccluded && window?.occlusionState.contains(.visible) == true
+            allEventsActive = allEventsActive && NSApp.isActive
             let started = ProcessInfo.processInfo.systemUptime
             guard let delivery = terminal.view.inspectionScrollWheel(pixels: pixels) else { continue }
             accumulator += delivery.delta
@@ -181,13 +204,27 @@ final class MacTerminalScrollInspection {
             }
         }
         probe.report["expectedWheelLines"] = expectedLines
+        probe.report["eventsWithExpectedLines"] = probe.samples.filter { $0.expectedLines > 0 }.count
+        probe.report["allEventsUnoccluded"] = allEventsUnoccluded
+        probe.report["allEventsAppActive"] = allEventsActive
         _ = await wait(seconds: 10, {
             guard let last = probe.samples.last?.event else { return true }
             return probe.feeds.contains { $0.changed && $0.end >= last } &&
                 probe.frameTimes.contains { $0 >= last }
         })
         try? await Task.sleep(for: .seconds(2))
+        if recordFeeds {
+            let path = probe.output.deletingPathExtension().appendingPathExtension("feeds.json")
+            let rows = probe.recordedFeeds.map { ["at": $0.at, "base64": $0.data.base64EncodedString()] }
+            do {
+                try JSONSerialization.data(withJSONObject: rows).write(to: path, options: .atomic)
+                probe.report["recordedFeedPath"] = path.path
+            } catch { debugTrace("terminal scroll feed recording failed: \(error)") }
+        }
+        probe.report["finalWindowOcclusionVisible"] = terminal.view.window?.occlusionState.contains(.visible) == true
+        probe.report["finalAppActive"] = NSApp.isActive
         probe.save("complete")
+        completed = true
         // Leave the completed screen mounted long enough for the outer,
         // non-pointer capture helper to inspect it before workspace restoration.
         try? await Task.sleep(for: .seconds(3))
@@ -208,15 +245,15 @@ final class MacTerminalScrollInspection {
 
     private func save(_ phase: String) {
         report["phase"] = phase
-        report["presentationBoundary"] = "Native frame completion after changed parsed content; not physical trackpad-to-pixel latency."
+        report["presentationBoundary"] = "First native GPU/draw completion after the next parsed batch; not causally matched pixels or display presentation. Without contentProbe, feed changes are not verified."
         report["inputStages"] = inputStages
         report["feedCount"] = feeds.count
         report["feeds"] = feeds.map { ["start": $0.start, "end": $0.end, "changed": $0.changed] }
         report["changedFeedCount"] = feeds.filter(\.changed).count
         if let diagnostics = TerminalHostView.inspectionLatest?.inspectionDiagnostics {
             report["globalFeedCount"] = StreamTerminalView.feedCount - initialGlobalFeedCount
-        report["globalFeedBytes"] = StreamTerminalView.feedBytes - initialGlobalFeedBytes
-        report["rendererDiagnostics"] = [
+            report["globalFeedBytes"] = StreamTerminalView.feedBytes - initialGlobalFeedBytes
+            report["rendererDiagnostics"] = [
                 "bytesFed": diagnostics.bytesFed, "batches": diagnostics.batches,
                 "ticks": diagnostics.ticks, "frames": diagnostics.frames,
                 "idleTicks": diagnostics.idleTicks, "renders": diagnostics.renders,
@@ -249,6 +286,10 @@ final class MacTerminalScrollInspection {
             }
             return row
         }
+        writeReport()
+    }
+
+    private func writeReport() {
         do {
             let data = try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
             try data.write(to: output, options: .atomic)

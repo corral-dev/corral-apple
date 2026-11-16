@@ -387,6 +387,38 @@ final class ConversationTimelineTests: XCTestCase {
         XCTAssertEqual(merged[0].text, "同一句")
     }
 
+    /// Owner report 2026-11-15 (Mac card): one prompt listed twice. The host
+    /// pastes through tmux, which expanded the typed tab into four spaces, so the
+    /// confirmation could not match byte for byte.
+    func testConfirmedEchoWithExpandedWhitespaceIsConsumed() throws {
+        let echo = RichMessage(
+            seq: -2, role: "user", text: "4.\t归档候选", delivery: .pending, localAfterSeq: 85
+        )
+        let official = try message(seq: 87, role: "user", text: "4.    归档候选")
+        let merged = ConversationMessageMerge.combining([echo], with: [official])
+        XCTAssertEqual(merged.map(\.seq), [87])
+        XCTAssertEqual(merged.map(\.text), ["4.    归档候选"])
+    }
+
+    func testUserPromptsListsAConfirmedEchoOnce() throws {
+        let echo = RichMessage(seq: -2, role: "user", text: "同一句\n下一行", localAfterSeq: 1)
+        let messages = try [message(seq: 1, role: "assistant", text: "好的")]
+            + [message(seq: 2, role: "user", text: "同一句   下一行"), echo]
+        let prompts = ConversationMessagePolicy.userPrompts(from: messages)
+        XCTAssertEqual(prompts.map(\.seq), [2])
+        XCTAssertEqual(prompts.map(\.text), ["同一句   下一行"])
+    }
+
+    func testUserPromptsKeepsAnUnconfirmedEcho() throws {
+        let echo = RichMessage(
+            seq: -3, role: "user", text: "还在路上的那句", delivery: .pending, localAfterSeq: 4
+        )
+        let messages = try [message(seq: 4, role: "assistant", text: "工作完成")] + [echo]
+        let prompts = ConversationMessagePolicy.userPrompts(from: messages)
+        XCTAssertEqual(prompts.map(\.seq), [-3])
+        XCTAssertEqual(prompts.map(\.text), ["还在路上的那句"])
+    }
+
     func testEchoDoesNotDuplicateLocalPending() async {
         let store = ConversationStore(sessionKey: "k", client: nil, live: true)
         let seq = store.enqueueLocalUser("刚刚发出去")

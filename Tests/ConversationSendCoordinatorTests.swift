@@ -313,11 +313,15 @@ final class ConversationSendCoordinatorTests: XCTestCase {
         await coordinator.runComposerSend(plan, store: store, display: display)
 
         // The image paste landed; only the submit failed, so nothing returns
-        // to the composer (re-sending would duplicate the turn).
+        // to the composer (re-sending would duplicate the turn). The single
+        // bubble owns the outcome, so the banner stays quiet.
         XCTAssertEqual(store.sentImages.count, 1)
         XCTAssertEqual(store.sentTexts.count, 1)
         XCTAssertTrue(display.restoredImageBatches.isEmpty)
-        XCTAssertEqual(display.errors.count, 1)
+        XCTAssertEqual(store.messages.count, 1)
+        XCTAssertEqual(store.messages.first?.delivery, .needsReview)
+        XCTAssertEqual(display.errors.count, 0)
+        XCTAssertEqual(display.haptics.map(\.haptic), [.committed, .warning])
     }
 
     func testPartialImageFailureRestoresOnlyUnsentSuffix() async throws {
@@ -525,17 +529,21 @@ final class FakeSendStore: ConversationSendStore {
         messages.first(where: { $0.seq == seq })?.delivery
     }
 
-    func enqueueLocalUser(_ text: String, commandID: String?, reusingSeq: Int?) -> Int {
+    func enqueueLocalUser(_ text: String, commandID: String?, reusingSeq: Int?, images: [Data]) -> Int {
         if let reusingSeq, let index = messages.firstIndex(where: { $0.seq == reusingSeq && $0.delivery == .failed }) {
             messages[index].delivery = .pending
             messages[index].commandID = commandID
             messages[index].failureDetail = nil
+            if !images.isEmpty { messages[index].localImageData = images }
             return reusingSeq
         }
         let seq = nextLocalSeq
         nextLocalSeq -= 1
         messages.append(
-            RichMessage(seq: seq, role: "user", text: text, delivery: .pending, commandID: commandID)
+            RichMessage(
+                seq: seq, role: "user", text: text, delivery: .pending,
+                commandID: commandID, localImageData: images
+            )
         )
         return seq
     }
@@ -574,13 +582,15 @@ final class FakeSendStore: ConversationSendStore {
         }
     }
 
-    func sendText(_ text: String, submit: Bool, commandID: String?) async throws {
+    func sendText(
+        _ text: String, submit: Bool, commandID: String?, ownCommandIDs: [String]
+    ) async throws {
         sentTexts.append((text, commandID))
         orderedEvents.append("text:\(text)")
         if let error = sendTextError { throw error }
     }
 
-    func sendImage(base64: String, commandID: String?) async throws {
+    func sendImage(base64: String, commandID: String?, ownCommandIDs: [String]) async throws {
         sentImages.append((base64, commandID))
         orderedEvents.append("image:\(base64)")
         if !sendImageErrors.isEmpty {

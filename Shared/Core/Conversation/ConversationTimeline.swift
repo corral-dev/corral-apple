@@ -18,7 +18,15 @@ enum ConversationTimelineItem: Identifiable, Equatable, Sendable {
 /// 将远端富消息收敛成用户可读的对话时间线。
 enum ConversationMessagePolicy {
     /// 本会话真人提示词（旧→新），与电脑端 Your prompts 同过滤规则。
+    ///
+    /// 已被正式历史确认的本地气泡不再重复列出：自己发的一句在确认前后都是同一条
+    /// 提问，不能因为回显与正式消息同时存在就变成两行（owner report 2026-11-15）。
     static func userPrompts(from messages: [RichMessage]) -> [RichMessage] {
+        ConversationMessageMerge.consumingLocalEchoes(humanPrompts(from: messages))
+    }
+
+    /// 真人提示词过滤本身：只要真人 user 轮次、正文非空、不是运行时注入。
+    private static func humanPrompts(from messages: [RichMessage]) -> [RichMessage] {
         var prompts: [RichMessage] = []
         for message in ConversationMessageMerge.displayOrdered(messages) {
             let role = message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -52,7 +60,9 @@ enum ConversationMessagePolicy {
             let text = current.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             return role == "user" && !text.isEmpty ? current : nil
         }
-        return hosted + userPrompts(from: loaded.filter { $0.seq > newest || $0.seq < 0 })
+        // 本地回显在历史确认前也算一条提问；确认之后它是同一条，不是第二条。
+        let local = humanPrompts(from: loaded.filter { $0.seq > newest || $0.seq < 0 })
+        return ConversationMessageMerge.consumingLocalEchoes(hosted + local)
     }
 
     static func timelineItems(
@@ -89,7 +99,11 @@ enum ConversationMessagePolicy {
                 // Runtimes write internal context as user turns; it must not look
                 // like a human bubble. Corral's own handoff prompt is a human
                 // prompt here and stays visible (see `isInjectedUserPrompt`).
-                guard !text.isEmpty, !isInjectedUserPrompt(text) else { continue }
+                // A send with only images has no body of its own: the host's
+                // pasted paths (official) or the staged payloads (echo) are it.
+                let carriesImages = !message.localImageData.isEmpty
+                    || !HostPasteAttachment.paths(in: text).isEmpty
+                guard !text.isEmpty || carriesImages, !isInjectedUserPrompt(text) else { continue }
                 flushTools()
                 result.append(.message(message))
 
@@ -191,21 +205,61 @@ nonisolated enum ConversationMessageMerge: Sendable {
         return consumingLocalEchoes(displayOrdered(Array(bySequence.values)))
     }
 
-    /// 正式消息（seq>0）按同角色 + 正文吃掉对应的本地负序号气泡。
+    /// 正式消息（seq>0）吃掉对应的本地负序号气泡。
+    ///
+    /// 手机发出的图片由宿主落盘后把路径粘进用户消息正文，历史里的正文因此带
+    /// `<cwd>/.corral-pastes/paste-….jpg` 前缀。比较必须用去掉该路径的正文，
+    /// 否则回显永远匹配不上：一条带图消息会留下「正文 + [image] + 正式」三条
+    /// 气泡（owner report 2026-11-15，截图同序）。
+    ///
+    /// 正式消息按 seq 升序配对，本地气泡只认「发出之后」的正式用户消息
+    /// （`localAfterSeq`），同一句连发不会互相抢占。
     static func consumingLocalEchoes(_ messages: [RichMessage]) -> [RichMessage] {
-        var officialKeys: Set<String> = []
-        officialKeys.reserveCapacity(messages.count)
+        var officialTextKeys: Set<String> = []
+        var officialUsers: [(seq: Int, key: String, hasAttachments: Bool)] = []
         for message in messages where message.seq > 0 {
-            let text = normalizedText(message.text)
-            guard !text.isEmpty else { continue }
-            officialKeys.insert(identityKey(role: message.role, text: text))
+            let role = normalizedRole(message.role)
+            let body = displayBody(message)
+            let key = identityKey(role: role, text: body)
+            if role == "user" {
+                officialUsers.append((message.seq, key, !HostPasteAttachment.paths(in: message.text).isEmpty))
+            } else if !body.isEmpty {
+                officialTextKeys.insert(key)
+            }
         }
+        officialUsers.sort { $0.seq < $1.seq }
+        var claimed: Set<Int> = []
+
         return messages.filter { message in
             guard message.seq < 0 else { return true }
-            let text = normalizedText(message.text)
-            guard !text.isEmpty else { return true }
-            return !officialKeys.contains(identityKey(role: message.role, text: text))
+            let role = normalizedRole(message.role)
+            let body = displayBody(message)
+            guard !body.isEmpty || message.hasLocalImages else { return true }
+            let key = identityKey(role: role, text: body)
+            guard role == "user" else { return !officialTextKeys.contains(key) }
+            guard let match = officialUsers.first(where: { official in
+                official.seq > (message.localAfterSeq ?? 0)
+                    && official.key == key
+                    && !claimed.contains(official.seq)
+                    // An attachment-only echo needs the confirmed turn to carry
+                    // the image; an empty official turn would be a different send.
+                    && (official.hasAttachments || !message.hasLocalImages)
+            }) else { return true }
+            claimed.insert(match.seq)
+            return false
         }
+    }
+
+    /// The readable body of a message. A user turn's host-pasted attachment
+    /// paths are images, not text, so they never reach the bubble or an echo key.
+    static func displayBody(_ message: RichMessage) -> String {
+        let text = normalizedText(message.text)
+        guard normalizedRole(message.role) == "user" else { return text }
+        return HostPasteAttachment.body(text)
+    }
+
+    static func normalizedRole(_ role: String) -> String {
+        role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
     /// 正式消息按 seq 升序；本地负序号插在 `localAfterSeq` 之后（发出时的最新正式序号），
@@ -235,7 +289,18 @@ nonisolated enum ConversationMessageMerge: Sendable {
     }
 
     static func identityKey(role: String, text: String) -> String {
-        "\(role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())\n\(text)"
+        "\(normalizedRole(role))\n\(collapsedWhitespace(text))"
+    }
+
+    /// 回显配对用的空白归一：任何空白串折成一个空格。
+    ///
+    /// 开发机是经 tmux bracketed paste 把提示词送进窗格的，粘贴会把制表符展开成
+    /// 空格，所以正式记录与本机回显不可能逐字节相同（owner report 2026-11-15：
+    /// 输入里的 tab 入库后变成四个空格，Your prompts 因此多出一行）。
+    static func collapsedWhitespace(_ text: String) -> String {
+        normalizedText(text)
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
     }
 }
 

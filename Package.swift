@@ -60,6 +60,7 @@ let package = Package(
                 "ConversationPresentationTests.swift",
                 "ConversationRetentionTests.swift",
                 "ConversationSendCoordinatorTests.swift",
+                "ConversationEchoAttachmentTests.swift",
                 "ComposerDraftStoreTests.swift",
                 "ConversationTailCacheTests.swift",
                 "ConversationTimelineTests.swift",

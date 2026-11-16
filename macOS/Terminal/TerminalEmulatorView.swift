@@ -275,10 +275,6 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
     var inspectionUsesMetal: Bool { terminal.isUsingMetalRenderer }
     var inspectionUsesIdentityBackground: Bool { usesIdentityBackground }
     var inspectionBackgroundOpacity: Double { terminal.backgroundOpacity }
-    func inspectionSetIdentityBackground(_ enabled: Bool) {
-        setIdentityBackgroundEnabled(enabled)
-        terminal.backgroundOpacity = enabled ? 0 : 1
-    }
     var inspectionUsesRenderLoop: Bool { terminal.isUsingRenderLoop }
     var inspectionDiagnostics: SwiftTerm.TerminalView.Diagnostics { terminal.diagnostics }
     func inspectionResetDiagnostics() { terminal.resetDiagnostics() }
@@ -341,7 +337,7 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
         guard let cgEvent = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1,
                                     wheel1: lines, wheel2: 0, wheel3: 0),
               let event = NSEvent(cgEvent: cgEvent) else { return false }
-        terminal.scrollWheel(with: event)
+        terminal.inspectionScrollWheel(with: event)
         return true
     }
 
@@ -351,7 +347,7 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
         guard let cgEvent = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1,
                                     wheel1: pixels, wheel2: 0, wheel3: 0),
               let event = NSEvent(cgEvent: cgEvent) else { return nil }
-        terminal.scrollWheel(with: event)
+        terminal.inspectionScrollWheel(with: event)
         return (event.hasPreciseScrollingDeltas, event.scrollingDeltaY)
     }
     var inspectionScrollPosition: Double { terminal.scrollPosition }

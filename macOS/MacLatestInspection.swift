@@ -65,7 +65,7 @@ enum MacLatestInspection {
             return
         }
         for attempt in 0..<2 {
-            workspace.promptsOpen[session.key] = true
+            workspace.setPromptsCardOpen(true, for: session.key)
             // Fixture only. Native history is not SwiftTerm's local scrollback.
             terminal.stream.input.send(Array("\u{1b}[1;5H".utf8)[...])
             guard await wait({ terminal.view.inspectionContains("CODEX_PROMPT_000") }) else {
@@ -115,7 +115,7 @@ enum MacLatestInspection {
             cases.append(["nativeButtonPressed": pressed, "methodOnly": methodOnly, "latestVisible": arrived,
                           "draftPreserved": terminal.view.inspectionContains("UNSENT_DRAFT_CODEX"),
                           "modePreserved": workspace.mode(for: session.key) == .terminal,
-                          "cardOpen": workspace.promptsOpen[session.key] == true,
+                          "cardOpen": workspace.promptsCardChoice(for: session.key) == true,
                           "screenChanged": before != terminal.view.inspectionVisibleText.joined(separator: "\n"),
                           "elapsedMs": Date().timeIntervalSince(start) * 1000])
             save("after-\(attempt)")
@@ -132,7 +132,7 @@ enum MacLatestInspection {
         // accessibility instead of the workspace method.
         if ProcessInfo.processInfo.environment["CORRAL_INSPECTION_LATEST_BUTTON"] == "1" {
             for _ in 0..<400 {
-                if workspace.promptsOpen[session.key] == true { break }
+                if workspace.promptsCardChoice(for: session.key) == true { break }
                 try? await Task.sleep(for: .milliseconds(25))
             }
             terminal.stream.input.send(Array("\u{1b}[1;5H".utf8)[...])

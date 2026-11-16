@@ -188,38 +188,53 @@ struct MessageBubbleView: View, Equatable {
         .interfacePadding(.leading, Space.xxl)
     }
 
+    /// The bubble's readable body (`RichMessage.chatBodyText`: a user turn's
+    /// host-pasted attachment paths are the images, not prose).
+    private var displayText: String? { message.chatBodyText }
+
+    /// Bare path mentions keep the tile row; explicit Markdown images are inline
+    /// attachments at their own position in the text.
+    private var mentionImages: [ChatImageReference] {
+        guard message.seq > 0, let text = message.text else { return [] }
+        return ChatImageReferenceCache.references(in: text).filter { $0.kind == .mention }
+    }
+
     @ViewBuilder
     private var messageBubble: some View {
-        if let text = message.text, !text.allSatisfy(\.isWhitespace) {
+        let body = displayText ?? ""
+        let mentions = mentionImages
+        if !body.isEmpty || !mentions.isEmpty || message.hasLocalImages {
             VStack(alignment: isUser ? .trailing : .leading, spacing: Space.sm * interfaceScale) {
-                SelectableAttributedText(
-                    attributed: message.seq > 0
-                        ? (imageLoader?.rendered(text: text, dark: colorScheme == .dark, seq: message.seq) ?? ChatMarkdown.attributed(text))
-                        : ChatMarkdown.attributed(text),
-                    foreground: isUser ? userForeground : Color.primary,
-                    // Match links and selection handles to the bubble's contrast pair.
-                    tint: isUser ? userForeground : Palette.accent,
-                    fontStyle: .bubbleBody,
-                    maxHeight: bubbleTextCap,
-                    onMoreBelowChange: { hasMoreBelow = $0 },
-                    sourceMarkdown: text
-                )
-                #if os(macOS)
-                .environment(\.macMessageSelectionID, message.seq)
-                #endif
-                .overlay(alignment: .bottom) {
-                    if hasMoreBelow { scrollMoreHint }
-                }
-                // Bare path mentions keep the tile row; explicit Markdown images
-                // are inline attachments at their own position in the text.
-                if message.seq > 0 {
-                    let images = ChatImageReferenceCache.references(in: text).filter { $0.kind == .mention }
-                    if !images.isEmpty {
-                        MessageImagesView(
-                            seq: message.seq, references: images, isUser: isUser,
-                            userForeground: userForeground
-                        )
+                if !body.isEmpty {
+                    SelectableAttributedText(
+                        attributed: message.seq > 0
+                            ? (imageLoader?.rendered(text: body, dark: colorScheme == .dark, seq: message.seq) ?? ChatMarkdown.attributed(body))
+                            : ChatMarkdown.attributed(body),
+                        foreground: isUser ? userForeground : Color.primary,
+                        // Match links and selection handles to the bubble's contrast pair.
+                        tint: isUser ? userForeground : Palette.accent,
+                        fontStyle: .bubbleBody,
+                        maxHeight: bubbleTextCap,
+                        onMoreBelowChange: { hasMoreBelow = $0 },
+                        sourceMarkdown: body
+                    )
+                    #if os(macOS)
+                    .environment(\.macMessageSelectionID, message.seq)
+                    #endif
+                    .overlay(alignment: .bottom) {
+                        if hasMoreBelow { scrollMoreHint }
                     }
+                }
+                if message.hasLocalImages {
+                    // The host has not confirmed this send yet: show the staged
+                    // payloads so the bubble already looks like what was sent.
+                    LocalEchoImagesView(payloads: message.localImageData, isUser: isUser)
+                }
+                if !mentions.isEmpty {
+                    MessageImagesView(
+                        seq: message.seq, references: mentions, isUser: isUser,
+                        userForeground: userForeground
+                    )
                 }
             }
             .interfacePadding(.horizontal, hasBubble ? Space.base : 0)
@@ -230,9 +245,9 @@ struct MessageBubbleView: View, Equatable {
                 alignment: isUser ? .trailing : .leading
             )
             .background(hasBubble ? bubbleFill : Color.clear, in: bubbleShape)
-            .task(id: "\(imageLoader.map(ObjectIdentifier.init).map(String.init(describing:)) ?? "")|\(colorScheme)|\(text)") {
-                await imageLoader?.diagrams.prepare(text: text, dark: colorScheme == .dark)
-                if message.seq > 0 {
+            .task(id: "\(imageLoader.map(ObjectIdentifier.init).map(String.init(describing:)) ?? "")|\(colorScheme)|\(body)") {
+                await imageLoader?.diagrams.prepare(text: body, dark: colorScheme == .dark)
+                if message.seq > 0, let text = message.text {
                     await imageLoader?.prepareImages(in: text, seq: message.seq)
                 }
             }
@@ -258,7 +273,7 @@ struct MessageBubbleView: View, Equatable {
     /// where reading ends; it never covers text.
     @ViewBuilder
     private var copySlot: some View {
-        if let source = message.text, !source.allSatisfy(\.isWhitespace) {
+        if let source = displayText, !source.allSatisfy(\.isWhitespace) {
             Button {
                 PlatformPasteboard.copy(source)
                 copied = true

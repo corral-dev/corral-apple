@@ -2,47 +2,32 @@
 
 ## Symptom
 
-The native Mac client shows a running OpenCode session as one collapsed
-`Agent activity N tools` row plus `Working…`, with no visible prompt or reply.
-The owner read it as "the conversation content does not render" and suspected a
-client regression from the same day's memory work.
+The native Mac client showed a running OpenCode session as one collapsed `Agent activity N tools` row plus `Working…`, with no prompt or reply. The owner read it as "conversation content does not render" and suspected a client regression from the same day's memory work.
 
-## What was measured
+## Measured
 
-Two OpenCode sessions were checked on the installed host and client:
+Two OpenCode sessions on the installed host and client:
 
-- `SessionHub.conversation_page(key, limit=200)` returned 120 messages whose
-  roles were all `assistant` and **none of which carried `text`**.
-- `session_message` for one of them held 277 `assistant` rows; the first content
-  item was `reasoning` in 224 rows, `tool` in 52 and `text` in 1. The remaining
-  text lives in a few older turns.
-- `sesskit.parsers.opencode.load_conversation` returns only the text-bearing
-  turns (2 messages for that session), so SessKit has not lost text.
+- `SessionHub.conversation_page(key, limit=200)` returned 120 messages, all `assistant`, **none carrying `text`**.
+- `session_message` for one held 277 `assistant` rows; first content item was `reasoning` in 224, `tool` in 52, `text` in 1. The remaining text sits in a few older turns.
+- `sesskit.parsers.opencode.load_conversation` returns only text-bearing turns (2 messages for that session), so SessKit lost nothing.
 
-The decisive comparison: the **same** projection counts (120 messages, 0 with
-text) were produced by the commit before the memory-retention changes and by the
-current tree. This is not a renderer regression.
+Decisive comparison: the **same** projection (120 messages, 0 with text) is produced by the commit before the memory-retention changes and by the current tree. Not a renderer regression.
 
 ## Cause
 
-For a long tool-running turn the loaded tail is entirely `reasoning`/`tool`
-rows. The wire payload only carries `text` when a row has user-facing text
-(`richmsg.RichMessage.to_wire_dict`), so the chat correctly renders the activity
-grouping with nothing else to show. The user's own prompt is older than the
-loaded page and appears only after paging back.
+A long tool-running turn leaves the loaded tail entirely `reasoning`/`tool` rows. The wire payload carries `text` only when a row has user-facing text (`richmsg.RichMessage.to_wire_dict`), so the chat correctly renders the activity grouping with nothing else to show; the user's own prompt is older than the loaded page and appears only after paging back.
 
-## How to check before touching rendering
+## Check before touching rendering
 
-1. Ask the host for the page: `SessionHub.conversation_page(key, limit=200)` and
-   count messages that have a non-empty `text`.
-2. If `text` is present there but the client shows none, investigate the client.
-3. If `text` is absent, inspect the native rows
-   (`select type, json_extract(data,'$.content[0].type'), count(*) ...`) and
-   confirm the session simply has not produced a text turn in the loaded window.
+1. Ask the host for the page: `SessionHub.conversation_page(key, limit=200)`; count messages with non-empty `text`.
+2. Text present but nothing shown → investigate the client.
+3. Text absent → inspect native rows (`select type, json_extract(data,'$.content[0].type'), count(*) ...`) and confirm the session has no text turn in the loaded window.
 
 Do not add renderer fallbacks or stop collapsing tool activity to "fix" this.
 
 ## Limits
 
-Measured on two sessions on this machine, 2026-10-25. A session whose loaded
-page does contain text is not covered by this explanation.
+Two sessions on this machine, 2026-10-25. A session whose loaded page does contain text is not covered by this explanation.
+
+<!-- 该文档整理/压缩于 2026-11-15 -->

@@ -199,8 +199,26 @@ nonisolated struct RichMessage: Codable, Sendable, Identifiable, Equatable {
     var failureDetail: String?
     /// Local-only: display after this official seq (0 = before any official). Nil on wire.
     var localAfterSeq: Int?
+    /// Local-only optimistic attachments: the image payloads staged with this
+    /// pending send, in send order (already JPEG-encoded by the composer).
+    /// The bubble previews them until the host's confirmed turn replaces it.
+    /// Never encoded: a reopened cache has no previews, and nothing here is wire data.
+    var localImageData: [Data] = []
 
     var id: Int { seq }
+
+    /// One send is one bubble: the attachments this bubble already shows itself.
+    var hasLocalImages: Bool { !localImageData.isEmpty }
+
+    /// What the conversation shows for this message. A user turn's host-pasted
+    /// attachment paths (`input.image` pastes a saved path into the agent
+    /// composer) are the images, never prose: the bubble renders them as tiles
+    /// and keeps the temp path out of the text (owner report 2026-11-15).
+    var chatBodyText: String? {
+        guard let text else { return nil }
+        guard role.lowercased() == "user" else { return text }
+        return HostPasteAttachment.body(text)
+    }
 
     /// 本地回显用唯一负序号，避免与远端 seq=0 / seq>0 撞车。
     nonisolated var isLocal: Bool { seq < 0 }
@@ -214,7 +232,8 @@ nonisolated struct RichMessage: Codable, Sendable, Identifiable, Equatable {
         tools: [ToolCall]? = nil,
         commandID: String? = nil,
         failureDetail: String? = nil,
-        localAfterSeq: Int? = nil
+        localAfterSeq: Int? = nil,
+        localImageData: [Data] = []
     ) {
         self.seq = seq
         self.role = role
@@ -225,6 +244,7 @@ nonisolated struct RichMessage: Codable, Sendable, Identifiable, Equatable {
         self.commandID = commandID
         self.failureDetail = failureDetail
         self.localAfterSeq = localAfterSeq
+        self.localImageData = localImageData
     }
 
     enum CodingKeys: String, CodingKey {
