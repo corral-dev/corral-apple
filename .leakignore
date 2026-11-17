@@ -18,3 +18,10 @@ fp:d625d91d5d074946
 fp:ae5c3de6523acb34
 fp:df3ea1821ac8a122
 fp:ec28952a6b370703
+# Reviewed 2026-11-17: three public-by-design values flagged by the updated
+# generic-api-key rule — the Developer Team ID inside the Keychain access group
+# (also public in project.yml), a SHA-256 asset hash in the ChatDiagrams manifest,
+# and the Sparkle SUPublicEDKey. None is a credential.
+fp:4f55d959fbb1884f
+fp:c172865822ef02d2
+fp:e42e1346aa8676c2

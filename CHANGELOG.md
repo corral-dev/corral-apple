@@ -8,6 +8,10 @@ the named acceptance is done.
 
 ## Mac 0.3.176 (189)
 
+Not published. Its changes ship in Mac 0.3.177.
+
+## Mac 0.3.177 (190)
+
 ### English
 
 - Dragging a window edge or a pane divider no longer stalls the Mac chat: only the visible rows rewrap immediately (136 ms → 3.8 ms median per 4 pt width step at 120 messages, 479 ms → 4.0 ms at 300), the rest settle 140 ms after the drag stops, and opening a conversation still measures every row exactly.
