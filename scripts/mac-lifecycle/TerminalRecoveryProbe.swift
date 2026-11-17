@@ -110,14 +110,13 @@ extension LifecycleProbe {
         await terminalSnapshot(silent, missingKey, seq: 1)
         await terminalOutput(silent, missingKey, seq: 3)
         await waitForTerminal {
-            if case .failed = missing.phase { return true }
-            return false
+            silent.calls.filter { $0.0 == WireProtocol.mTerminalResync }.count >= 2
         }
+        check(missing.phase == .connecting, "self-healing stream left .connecting into a Retry screen")
         check(silent.calls.filter { $0.0 == WireProtocol.mTerminalResync }.count == 2,
-              "successful resync replies without frames were not bounded")
-        missing.retry(); await settle()
+              "resync recovery was not rate-limited by backoff")
         await terminalSnapshot(silent, missingKey, seq: 5)
-        check(missing.phase == .live, "Retry did not repair the genuinely missing screen")
+        check(missing.phase == .live, "self-healing stream did not recover on late snapshot")
         missing.stop(); await settle()
     }
 

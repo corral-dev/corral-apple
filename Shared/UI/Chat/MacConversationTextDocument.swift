@@ -9,6 +9,46 @@ import AppKit
 }
 
 #if DEBUG
+/// Phase-2 first-scroll attribution: where does a newly realized row's
+/// layout-phase time go? Main-thread only (AppKit representable path).
+/// DEBUG-only accumulators; no behavior change, never read in release.
+@MainActor
+enum MacFirstScrollAttribution {
+    static var makeCalls = 0
+    static var makeMs = 0.0
+    /// NSTextView acquisition inside makeNSView (document reuse or fresh init).
+    static var textViewMs = 0.0
+    /// Mount/scroll-wrapper creation + apply inside makeNSView.
+    static var mountApplyMs = 0.0
+    /// attach (addSubview) alone, split out of mountApplyMs.
+    static var attachMs = 0.0
+    /// apply alone, split out of mountApplyMs.
+    static var applyMs = 0.0
+    static var updateCalls = 0
+    static var updateMs = 0.0
+    static var convertedCalls = 0
+    static var convertedMs = 0.0
+    static var measureCalls = 0
+    static var measureMs = 0.0
+    static func reset() {
+        makeCalls = 0; makeMs = 0
+        textViewMs = 0; mountApplyMs = 0; attachMs = 0; applyMs = 0
+        updateCalls = 0; updateMs = 0
+        convertedCalls = 0; convertedMs = 0
+        measureCalls = 0; measureMs = 0
+    }
+}
+
+@MainActor
+func macAttr<T>(_ accum: inout Double, _ body: () -> T) -> T {
+    let start = DispatchTime.now().uptimeNanoseconds
+    let result = body()
+    accum += Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+    return result
+}
+#endif
+
+#if DEBUG
 /// Warm-switch diagnostics: do lazy text rows actually re-realize their native
 /// views when returning to a retained pane, or only re-measure? Reset before
 /// each inspected switch; the probe records the totals with its timing.
@@ -226,6 +266,9 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
     private var byID: [Int: Block] = [:]
     private var breaks: Set<Int> = []
     private var measurements: [Int: MacTextMeasurement] = [:]
+    /// The exact separator strings inserted around each block's container.
+    private var paragraphBreak = NSAttributedString(string: "\n", attributes: [.font: paragraphStartFont])
+    private var containerBreak = NSAttributedString(string: "\n")
     private var measurementOrder: [Int] = []
 
     override init() {
@@ -277,18 +320,25 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
 
         // A message-separator newline starts the next container. It remains an
         // ordinary newline on the pasteboard, with no private marker to strip.
+        // The document owns these two separators so row measurement reuses the
+        // exact strings the drawing storage gets instead of rebuilding the
+        // boundary context (a rebuilt context produced the 2026-11-01 8 pt clip).
+        let paragraphBreak = NSAttributedString(string: "\n", attributes: [.font: Self.paragraphStartFont])
+        let containerBreak = NSAttributedString(string: "\n", attributes: [.font: style.font])
+        self.paragraphBreak = paragraphBreak
+        self.containerBreak = containerBreak
         let combined = NSMutableAttributedString(string: "")
         breaks.removeAll(keepingCapacity: true)
         var startsParagraph = false
         for (index, block) in next.enumerated() {
             if startsParagraph {
-                combined.append(NSAttributedString(string: "\n", attributes: [.font: Self.paragraphStartFont]))
+                combined.append(paragraphBreak)
             }
             block.range = NSRange(location: combined.length, length: block.text.length)
             combined.append(block.text)
             if index < next.count - 1 {
                 breaks.insert(combined.length)
-                combined.append(NSAttributedString(string: "\n", attributes: [.font: style.font]))
+                combined.append(containerBreak)
                 startsParagraph = true
             }
         }
@@ -527,6 +577,15 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
 
     func text(for id: Int) -> NSAttributedString? { byID[id]?.text }
 
+    /// Boundary context a block's row measurement must reproduce. Returning the
+    /// document's own separator objects keeps drawing and measurement on one
+    /// definition of the context instead of two hand-maintained copies.
+    func boundaryContext(for id: Int) -> (before: NSAttributedString?, after: NSAttributedString?) {
+        guard let block = byID[id] else { return (nil, nil) }
+        return (blocks.first === block ? nil : paragraphBreak,
+                blocks.last === block ? nil : containerBreak)
+    }
+
     func hasPrecedingBlock(_ id: Int) -> Bool {
         guard let block = byID[id] else { return false }
         return blocks.first !== block
@@ -621,7 +680,8 @@ final class MacTextMeasurement: NSObject, NSLayoutManagerDelegate {
     private let layout = NSLayoutManager()
     private let container = NSTextContainer(size: NSSize(width: 0, height: MacConversationTextDocument.initialCanvasHeight))
     private var source: NSAttributedString?
-    private var startsWithParagraphBreak = false
+    private var contextBefore: NSAttributedString?
+    private var contextAfter: NSAttributedString?
     private var endsWithContainerBreak = false
     private var sizes: [CGFloat: CGSize] = [:]
     private var widths: [CGFloat] = []
@@ -635,21 +695,17 @@ final class MacTextMeasurement: NSObject, NSLayoutManagerDelegate {
     }
 
     func size(for text: NSAttributedString, font: NSFont, width: CGFloat,
-              hasPrecedingBlock: Bool = false, hasFollowingBlock: Bool = false) -> CGSize {
-        if source !== text || startsWithParagraphBreak != hasPrecedingBlock
-            || endsWithContainerBreak != hasFollowingBlock {
-            startsWithParagraphBreak = hasPrecedingBlock
-            endsWithContainerBreak = hasFollowingBlock
+              before: NSAttributedString? = nil, after: NSAttributedString? = nil) -> CGSize {
+        if source !== text || !sameContext(before, after) {
+            contextBefore = before
+            contextAfter = after
+            endsWithContainerBreak = after != nil
             // Match the live container's paragraph start. TextKit omits a
             // first paragraph's spacing-before at storage start, but honors
             // it after this break (bold leads/headings otherwise clip the tail).
-            storage.setAttributedString(hasPrecedingBlock
-                ? NSAttributedString(string: "\n", attributes: [.font: MacConversationTextDocument.paragraphStartFont])
-                : NSAttributedString(string: ""))
+            storage.setAttributedString(before ?? NSAttributedString(string: ""))
             storage.append(text)
-            if hasFollowingBlock {
-                storage.append(NSAttributedString(string: "\n", attributes: [.font: font]))
-            }
+            if let after { storage.append(after) }
             source = text
             sizes.removeAll()
             widths.removeAll()
@@ -660,17 +716,24 @@ final class MacTextMeasurement: NSObject, NSLayoutManagerDelegate {
         if container.size.width != width { container.size.width = width }
         ensureCompleteLayout()
         let used = layout.usedRect(for: container)
+        // Every laid-out line already fits in ceil(used.maxX): re-laying out at
+        // that fitted width cannot split or join any line, so a second layout
+        // pass can never change the height (stream probe fittedLayoutCheck:
+        // 0 differs in 1608 text/width cases, 2026-11-16). Skip it; the width
+        // is still reported fitted for the row's own sizing.
         let fittedWidth = min(ceil(max(used.maxX, 1)), width)
-        if container.size.width != fittedWidth {
-            container.size.width = fittedWidth
-            ensureCompleteLayout()
-        }
         let result = CGSize(width: fittedWidth,
                             height: ceil(max(layout.usedRect(for: container).maxY,
                                              layout.defaultLineHeight(for: font))))
         sizes[width] = result
         if widths.count > 64 { sizes.removeValue(forKey: widths.removeFirst()) }
         return result
+    }
+
+    /// The document hands out the same separator instances on every call, so
+    /// identity is both exact and cheap enough for the measurement hot path.
+    private func sameContext(_ before: NSAttributedString?, _ after: NSAttributedString?) -> Bool {
+        contextBefore === before && contextAfter === after
     }
 
     private func ensureCompleteLayout() {

@@ -23,6 +23,7 @@ SOURCES = [
     'scripts/mac-lifecycle/SessionBatchProbe.swift',
     'scripts/mac-lifecycle/TerminalRecoveryProbe.swift',
     'macOS/Design/MacMotion.swift',
+    'Shared/Core/Network/RemoteRecoveryPolicy.swift',
     'Shared/Core/Terminal/RemoteTerminalStream.swift',
     'Shared/Core/Terminal/ProjectShellStore.swift',
     'scripts/mac-lifecycle/Probe.swift',

@@ -75,8 +75,8 @@ struct MacChatListsProbe {
                 for: document.text(for: source.id) ?? NSAttributedString(string: ""),
                 font: NSFont.systemFont(ofSize: bodyPointSize),
                 width: rowWidth,
-                hasPrecedingBlock: document.hasPrecedingBlock(source.id),
-                hasFollowingBlock: source.id < sources.count
+                before: document.boundaryContext(for: source.id).before,
+                after: document.boundaryContext(for: source.id).after
             ).height ?? -1
             check(source: source, lines: lines, drawnHeight: height, measuredHeight: measured)
         }
@@ -159,8 +159,8 @@ struct MacChatListsProbe {
                             continue
                         }
                         let measured = measurement.size(for: text, font: font, width: width,
-                                                        hasPrecedingBlock: document.hasPrecedingBlock(2),
-                                                        hasFollowingBlock: document.hasFollowingBlock(2))
+                                                        before: document.boundaryContext(for: 2).before,
+                                                        after: document.boundaryContext(for: 2).after)
                         view.textContainerInset = .zero
                         view.isVerticallyResizable = false
                         view.isHorizontallyResizable = false

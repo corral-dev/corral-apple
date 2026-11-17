@@ -110,21 +110,11 @@ struct ProjectTerminalScreen: View {
                 }
             }
         } else if let stream {
-            if case .failed(let error) = stream.phase {
-                ContentUnavailableView {
-                    Label("terminal.load_failed.title", systemImage: "exclamationmark.triangle")
-                } description: {
-                    Text(verbatim: error)
-                } actions: {
-                    Button("action.retry") { stream.retry() }
+            ShellTerminalView(stream: stream)
+                .id(stream.sessionKey)
+                .overlay {
+                    if stream.phase == .connecting { waitingIndicator }
                 }
-            } else {
-                ShellTerminalView(stream: stream)
-                    .id(stream.sessionKey)
-                    .overlay {
-                        if stream.phase == .connecting { waitingIndicator }
-                    }
-            }
         } else if store.shells.isEmpty && loaded && !store.isWorking && isReady {
             ContentUnavailableView {
                 Label("terminal.panel.empty", systemImage: "terminal")

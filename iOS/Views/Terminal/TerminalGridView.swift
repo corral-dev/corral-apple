@@ -13,17 +13,7 @@ struct TerminalGridView: View {
 
     var body: some View {
         Group {
-            if let loadError = store.loadError, !store.hasFrame {
-                ContentUnavailableView {
-                    Label("terminal.load_failed.title", systemImage: "exclamationmark.triangle")
-                } description: {
-                    Text(loadError)
-                } actions: {
-                    Button("action.retry") {
-                        Task { await store.retry() }
-                    }
-                }
-            } else if store.isLoading, !store.hasFrame {
+            if store.isLoading, !store.hasFrame {
                 ProgressView()
             } else {
                 terminalCanvas

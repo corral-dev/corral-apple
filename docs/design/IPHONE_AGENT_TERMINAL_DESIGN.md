@@ -102,4 +102,8 @@ project shells; the contract, incident attribution limits and validation are rec
 Physical iPhone acceptance remains unavailable while the paired iPhone is unreachable; delivery
 still includes the signed phone build and install-shelf publication.
 
+## Self-healing terminal panes without failure/Retry UI (2026-11-16)
+
+Supersedes the failure/Retry UI in the 2026-10-17 and 2026-10-24 sections above per the owner ruling recorded in [Self-healing terminal panes without failure/Retry UI](MACOS_CLIENT_DESIGN.md#self-healing-terminal-panes-without-failureretry-ui-owner-ruling-2026-11-16): delete `terminal.load_failed.title`, `terminal.start_failed.title`, and their `Retry` buttons from `AgentTerminalPane`, `ProjectTerminalScreen`, `TerminalGridView`, `MacTerminalPane`, and `MacShellPane`. Both `RemoteTerminalStream` and `AgentTerminalPane.resume()` self-heal recoverable errors (such as `host_starting`, `unavailable`, `timeout`, and missing snapshots) with capped backoff while presented, active, and connected instead of showing a Retry screen.
+
 <!-- 该文档整理/压缩于 2026-10-20 -->

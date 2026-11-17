@@ -69,7 +69,6 @@ final class RemoteTerminalStream {
         case connecting
         case live
         case ended
-        case failed(String)
     }
 
     private(set) var phase: Phase = .connecting
@@ -101,6 +100,7 @@ final class RemoteTerminalStream {
     static let backlogByteLimit = 4 * 1024 * 1024
     @ObservationIgnored private var attached = false
     @ObservationIgnored private var attachGeneration: UUID?
+    @ObservationIgnored private var attachTask: Task<Void, Never>?
     @ObservationIgnored private var generation = UUID()
     @ObservationIgnored private var promptNavigation = UUID()
     @ObservationIgnored private var readyHandlerID: UUID?
@@ -159,6 +159,8 @@ final class RemoteTerminalStream {
         let wasRunning = events != nil
         generation = UUID()
         cancelSnapshotRecovery()
+        attachTask?.cancel()
+        attachTask = nil
         events?.cancel()
         events = nil
         resizeTask?.cancel()
@@ -318,8 +320,6 @@ final class RemoteTerminalStream {
         return response.generation
     }
 
-    func retry() { recover() }
-
     /// The user came back to this view (its window became key): the host pane
     /// takes this view's grid again. Typing claims it on the host by itself.
     func claimSize() {
@@ -380,6 +380,8 @@ final class RemoteTerminalStream {
         guard events != nil else { return }
         generation = UUID()
         cancelSnapshotRecovery()
+        attachTask?.cancel()
+        attachTask = nil
         resizeTask?.cancel()
         resizeTask = nil
         attachGeneration = nil
@@ -404,7 +406,7 @@ final class RemoteTerminalStream {
               let grid = wanted, let client else { return }
         let mine = generation
         attachGeneration = mine
-        TerminalLifecycleQueue.enqueue(client: client, key: sessionKey) { [weak self] in
+        attachTask = TerminalLifecycleQueue.enqueue(client: client, key: sessionKey) { [weak self] in
             await self?.attach(grid, generation: mine)
         }
     }
@@ -415,29 +417,40 @@ final class RemoteTerminalStream {
     #endif
 
     private func attach(_ grid: TerminalGrid, generation mine: UUID) async {
-        defer { if attachGeneration == mine { attachGeneration = nil } }
+        defer {
+            if attachGeneration == mine {
+                attachGeneration = nil
+                attachTask = nil
+            }
+        }
         #if DEBUG
         Self.inspectionAttachCalls += 1
         #endif
-        for attempt in 0..<4 {
-            guard client != nil, isCurrent(mine), phase != .ended else { return }
+        var attempt = 0
+        while client != nil, isCurrent(mine), phase != .ended, !Task.isCancelled {
             let attachTheme = theme
             do {
                 try await terminalCall(.attach, params: params(grid).merging(themeParams) { $1 }, attempt: attempt + 1)
             } catch {
-                guard isCurrent(mine), phase != .ended else { return }
+                guard isCurrent(mine), phase != .ended, !Task.isCancelled else { return }
                 // A complete screen proves this attachment works even if its
                 // acknowledgement was lost. Never let that older failure win.
                 if !receivedSnapshot {
-                    if attempt == 3 {
-                        phase = .failed(error.localizedDescription)
+                    switch RemoteRecoveryPolicy.classify(error) {
+                    case .notFound:
+                        phase = .ended
                         return
+                    case .permanent:
+                        return
+                    case .retryable:
+                        let delay = RemoteRecoveryPolicy.backoffDuration(attempt: attempt)
+                        attempt += 1
+                        try? await Task.sleep(for: delay)
+                        continue
                     }
-                    try? await Task.sleep(for: .milliseconds(400 * (attempt + 1)))
-                    continue
                 }
             }
-            guard isCurrent(mine), phase != .ended else { return }
+            guard isCurrent(mine), phase != .ended, !Task.isCancelled else { return }
             attached = true
             sentGrid = grid
             recoverSnapshot()
@@ -476,29 +489,37 @@ final class RemoteTerminalStream {
         phase = .connecting
         let mine = generation
         snapshotRecovery = Task { [weak self] in
-            var failure = String(localized: String.LocalizationValue("error.host_timeout"))
-            for attempt in 0...2 {
+            var attempt = 0
+            while true {
                 if attempt > 0 || !immediately {
-                    do { try await Task.sleep(for: .seconds(3)) }
+                    let delay: Duration = attempt <= 1 ? .seconds(3) : .seconds(5)
+                    do { try await Task.sleep(for: delay) }
                     catch { return }
                 }
                 guard let self, !Task.isCancelled, self.isCurrent(mine),
                       !self.synced, self.phase == .connecting else { return }
-                if attempt == 2 {
-                    self.snapshotRecovery = nil
-                    self.traceTerminal(.exhausted, operation: .resync, attempt: attempt)
-                    self.phase = .failed(failure)
-                    return
-                }
                 do {
                     try await self.terminalCall(.resync, params: ["key": self.sessionKey], attempt: attempt + 1)
                 } catch {
-                    failure = error.localizedDescription
+                    guard !Task.isCancelled, self.isCurrent(mine),
+                          !self.synced, self.phase == .connecting else { return }
+                    switch RemoteRecoveryPolicy.classify(error) {
+                    case .notFound:
+                        self.snapshotRecovery = nil
+                        self.phase = .ended
+                        return
+                    case .permanent:
+                        self.snapshotRecovery = nil
+                        return
+                    case .retryable:
+                        break
+                    }
                 }
                 // Cancellation is cooperative: a snapshot may have cancelled
                 // this task and started another gap while the RPC was pending.
                 guard !Task.isCancelled, self.isCurrent(mine),
                       !self.synced, self.phase == .connecting else { return }
+                attempt += 1
             }
         }
     }

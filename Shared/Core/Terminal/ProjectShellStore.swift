@@ -104,24 +104,34 @@ final class ProjectShellStore {
         guard !isWorking else { return nil }
         isWorking = true
         defer { isWorking = false }
-        do {
-            var params: [String: Any] = ["cwd": project]
-            if let grid {
-                // Start at the size the view will vote, so the first screen needs no resize.
-                params["cols"] = grid.cols
-                params["rows"] = grid.rows
-            }
-            let payload = try await client.call(WireProtocol.mShellOpen, params: params, as: ShellOpenPayload.self)
-            failure = nil
-            if !shells.contains(where: { $0.key == payload.shell.key }) {
-                shells.append(payload.shell)
-            }
-            selectedKey = payload.shell.key
-            return payload.shell
-        } catch {
-            failure = Self.message(for: error)
-            return nil
+        var params: [String: Any] = ["cwd": project]
+        if let grid {
+            // Start at the size the view will vote, so the first screen needs no resize.
+            params["cols"] = grid.cols
+            params["rows"] = grid.rows
         }
+        for attempt in 0..<5 {
+            do {
+                let payload = try await client.call(WireProtocol.mShellOpen, params: params, as: ShellOpenPayload.self)
+                failure = nil
+                if !shells.contains(where: { $0.key == payload.shell.key }) {
+                    shells.append(payload.shell)
+                }
+                selectedKey = payload.shell.key
+                return payload.shell
+            } catch is CancellationError {
+                return nil
+            } catch {
+                if RemoteRecoveryPolicy.classify(error) == .retryable, attempt < 4 {
+                    try? await Task.sleep(for: RemoteRecoveryPolicy.backoffDuration(attempt: attempt))
+                    if Task.isCancelled { return nil }
+                    continue
+                }
+                failure = Self.message(for: error)
+                return nil
+            }
+        }
+        return nil
     }
 
     func shell(for key: String) -> ProjectShell? { shells.first { $0.key == key } }

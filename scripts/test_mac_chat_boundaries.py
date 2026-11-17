@@ -17,7 +17,7 @@ SOURCES = [
     "Shared/Core/Conversation/ChatDiagramBlock.swift",
     "Shared/UI/Chat/ChatScrollView.swift", "Shared/UI/Chat/ChatMarkdown.swift",
     "Shared/UI/Chat/MacMarkdownTable.swift", "Shared/UI/Chat/MacConversationTable.swift",
-    "Shared/UI/Chat/MacConversationTextDocument.swift", "Shared/UI/Chat/SelectableAttributedText.swift",
+    "Shared/UI/Chat/MacPathLinks.swift", "Shared/UI/Chat/MacConversationTextDocument.swift", "Shared/UI/Chat/SelectableAttributedText.swift",
     "scripts/mac-chat-reflow/Support.swift", "scripts/mac-chat-boundaries/Probe.swift",
 ]
 

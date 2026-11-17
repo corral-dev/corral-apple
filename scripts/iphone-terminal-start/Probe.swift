@@ -3,7 +3,12 @@ import SwiftUI
 
 // Only the transport and surrounding app environment are fixtures. The view,
 // SwiftUI State/task lifecycle and automatic-start decision are production code.
+struct RemoteCallError: Error { let message: String; var code = "" }
+
 @Observable final class RemoteClient {
+    enum ConnectionError: Error {
+        case notConnected, handshakeFailed(String), sendFailed(String), timeout, invalidResponse, pairingRequired
+    }
     var calls = 0
     var completed = 0
     var fails = false
@@ -12,7 +17,9 @@ import SwiftUI
     func call(_ method: String, params: [String: String]) async throws -> Bool {
         calls += 1
         try await Task.sleep(for: .milliseconds(50))
-        if fails { throw NSError(domain: "fixture", code: 1) }
+        if fails {
+            throw RemoteCallError(message: "The development machine is still starting up.", code: "unavailable")
+        }
         running = true
         completed += 1
         return true
@@ -25,7 +32,12 @@ import SwiftUI
     var connectionState = ConnectionState.connected
     var connectedAccess = "full"
 }
-struct SessionSummary { var key = "fixture"; var hosted = false; var live = false }
+struct SessionSummary { var key = "fixture"; var title = "Fixture"; var hosted = false; var live = false }
+enum SessionPresentation { static func titleIcon(in title: String) -> String? { nil } }
+struct SessionIdentityBackground: View {
+    let title: String
+    var body: some View { EmptyView() }
+}
 struct TerminalPromptTaskKey: Hashable { let request: UUID?; let stream: ObjectIdentifier?; let presented: Bool; let ready: Bool }
 struct TerminalPromptRequest { var id = UUID(); var seq = 0; var generation = 0; var text: String? = nil }
 enum TerminalPromptOutcome { case landed, superseded, absent, failed }
@@ -43,7 +55,7 @@ struct TerminalColorScheme {
     static let light = TerminalColorScheme()
 }
 @Observable final class RemoteTerminalStream {
-    enum Phase: Equatable { case connecting, live, ended, failed(String) }
+    enum Phase: Equatable { case connecting, live, ended }
     static var instances: [RemoteTerminalStream] = []
     var phase = Phase.connecting
     var reveals: [(Int, Int)] = []
@@ -56,7 +68,6 @@ struct TerminalColorScheme {
     }
     func start() { phase = client.awaitingSnapshot ? .connecting : client.running ? .live : .ended }
     func stop() {}
-    func retry() { start() }
     func navigatePrompt(seq: Int, historyGeneration: Int, text: String?) async -> TerminalPromptOutcome {
         reveals.append((seq, historyGeneration))
         return .landed
@@ -67,6 +78,7 @@ struct ShellTerminalView: View {
     let isPresented: Bool
     let allowsInput: Bool
     let isAgent: Bool
+    var usesIdentityBackground = false
     var body: some View { Text("Fixture terminal") }
 }
 @Observable final class Presentation {
@@ -151,8 +163,12 @@ struct Fixture: View {
             model.connectionState = .connected; settle()
             check(model.client?.completed == 1, "connection readiness resumes")
         }
-        scenario("start failure", configure: { model, _ in model.client?.fails = true }) { model, _ in
-            check(model.client?.calls == 1 && model.client?.completed == 0, "failure does not retry in a loop")
+        scenario("start failure self-heals with backoff", configure: { model, _ in model.client?.fails = true }) { model, _ in
+            check(model.client?.calls == 1 && model.client?.completed == 0, "failure does not retry in a hot loop")
+            model.client?.fails = false
+            settle(0.6)
+            check(model.client?.completed == 1 && RemoteTerminalStream.instances.last?.phase == .live,
+                  "recoverable start failure self-heals automatically without user Retry")
         }
         scenario("prompt before stream creation", session: SessionSummary(hosted: true), configure: { model, p in
             model.client?.running = true

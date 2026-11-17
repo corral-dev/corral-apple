@@ -18,6 +18,7 @@ SOURCES = [
     "Shared/UI/Platform/MacSessionContextMenu.swift",
     "Shared/Core/Conversation/ChatDiagramBlock.swift",
     "Shared/UI/Chat/ChatMarkdown.swift",
+    "Shared/UI/Chat/MacPathLinks.swift",
     "Shared/UI/Chat/MacConversationTextDocument.swift",
     "scripts/mac-chat-lists/Probe.swift",
 ]

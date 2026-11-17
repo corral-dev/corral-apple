@@ -18,7 +18,7 @@ struct AgentTerminalPane: View {
     @State private var isResuming = false
     @State private var startAttempted = false
     @State private var resumed = false
-    @State private var resumeError: String?
+    @State private var resumeTask: Task<Void, Never>?
     @State private var sawScreen = false
     @State private var handledPromptRequest: UUID?
     @State private var visibility = TerminalVisibility()
@@ -57,11 +57,20 @@ struct AgentTerminalPane: View {
         }
         .onChange(of: isPresented) { _, presented in
             visibility.active = presented && scenePhase == .active
-            if !presented { stream?.stop() }
+            if !presented {
+                cancelResume()
+                stream?.stop()
+            }
         }
         .onChange(of: scenePhase) { _, phase in
             visibility.active = isPresented && phase == .active
-            if phase != .active { stream?.stop() }
+            if phase != .active {
+                cancelResume()
+                stream?.stop()
+            }
+        }
+        .onChange(of: isReady) { _, ready in
+            if !ready { cancelResume() }
         }
         .task(id: TerminalPromptTaskKey(request: promptRequest?.id, stream: stream.map(ObjectIdentifier.init),
                                          presented: isPresented, ready: stream?.phase == .live)) {
@@ -77,6 +86,7 @@ struct AgentTerminalPane: View {
         }
         .onDisappear {
             visibility.active = false
+            cancelResume()
             stream?.stop()
         }
     }
@@ -88,7 +98,7 @@ struct AgentTerminalPane: View {
     /// Match Mac: a stopped session on entry, including a stale first attach,
     /// starts once. Never undo the user's exit after showing a live terminal.
     private var needsStart: Bool {
-        guard !startAttempted, !isResuming, resumeError == nil else { return false }
+        guard !startAttempted, !isResuming else { return false }
         if let stream { return stream.phase == .ended && !sawScreen }
         return !session.hosted && !session.live && !resumed
     }
@@ -112,16 +122,8 @@ struct AgentTerminalPane: View {
 
     @ViewBuilder
     private var status: some View {
-        if let resumeError {
-            ContentUnavailableView {
-                Label("terminal.start_failed.title", systemImage: "exclamationmark.triangle")
-            } description: {
-                Text(verbatim: resumeError)
-            } actions: {
-                Button("action.retry", action: resume).disabled(!isReady || isResuming || isReadonly)
-            }
-        } else if isResuming {
-            ProgressView()
+        if isResuming {
+            waitingIndicator
         } else if session.live && !session.hosted && !resumed {
             ContentUnavailableView {
                 Label("terminal.running_elsewhere.title", systemImage: "macwindow.on.rectangle")
@@ -132,58 +134,80 @@ struct AgentTerminalPane: View {
             ContentUnavailableView {
                 Label("terminal.not_running.title", systemImage: "terminal")
             } description: {
-                Text("terminal.not_running.description")
+                if !isReadonly {
+                    Text("terminal.not_running.description")
+                }
             } actions: {
                 if !isReadonly {
-                    Button("session.actions.resume", action: resume)
+                    Button("session.actions.resume") { resume(force: true) }
                         .buttonStyle(.borderedProminent)
                         .disabled(!isReady || isResuming)
                 }
             }
-        } else if let stream, case .failed(let error) = stream.phase {
-            ContentUnavailableView {
-                Label("terminal.load_failed.title", systemImage: "exclamationmark.triangle")
-            } description: {
-                Text(verbatim: error)
-            } actions: {
-                Button("action.retry") { stream.retry() }.disabled(!isReady)
-            }
         } else if !isReady || !sawScreen {
-            ProgressView {
-                Text(appModel.connectionState == .reconnecting ? "connection.reconnecting" : "connection.connecting")
-            }
-            .padding(Space.md)
-            .background(.regularMaterial, in: .rect(cornerRadius: Radius.lg))
+            waitingIndicator
         }
     }
 
-    private func resume() {
+    private var waitingIndicator: some View {
+        ProgressView {
+            Text(appModel.connectionState == .reconnecting ? "connection.reconnecting" : "connection.connecting")
+        }
+        .padding(Space.md)
+        .background(.regularMaterial, in: .rect(cornerRadius: Radius.lg))
+    }
+
+    private func cancelResume() {
+        resumeTask?.cancel()
+        resumeTask = nil
+    }
+
+    private func resume(force: Bool = false) {
         guard isActive, isReady, !isReadonly, !isResuming, let client = appModel.client else { return }
+        if force { startAttempted = false }
         startAttempted = true
         isResuming = true
-        resumeError = nil
-        Task {
+        resumeTask?.cancel()
+        resumeTask = Task {
             defer {
                 isResuming = false
+                resumeTask = nil
                 updateStream()
             }
-            do {
-                _ = try await client.call(WireProtocol.mSessionResume, params: ["key": session.key])
-                guard appModel.client === client else {
-                    startAttempted = false
+            var attempt = 0
+            while !Task.isCancelled, isActive, isReady, !isReadonly, appModel.client === client {
+                if !force && ((session.hosted && stream?.phase != .ended) || resumed) {
                     return
                 }
-                resumed = true
-                stream?.stop()
-                stream = nil
-                sawScreen = false
-            } catch {
-                guard appModel.client === client else {
-                    startAttempted = false
+                do {
+                    _ = try await client.call(WireProtocol.mSessionResume, params: ["key": session.key])
+                    guard !Task.isCancelled, isActive, isReady, appModel.client === client else {
+                        startAttempted = false
+                        return
+                    }
+                    resumed = true
+                    stream?.stop()
+                    stream = nil
+                    sawScreen = false
                     return
+                } catch {
+                    guard !Task.isCancelled, isActive, isReady, !isReadonly, appModel.client === client else {
+                        startAttempted = false
+                        return
+                    }
+                    switch RemoteRecoveryPolicy.classify(error) {
+                    case .retryable:
+                        let delay = RemoteRecoveryPolicy.backoffDuration(attempt: attempt)
+                        attempt += 1
+                        try? await Task.sleep(for: delay)
+                        continue
+                    case .notFound, .permanent:
+                        startAttempted = false
+                        return
+                    }
                 }
-                resumeError = SessionActionsMenu.failureMessage(for: error)
             }
+            startAttempted = false
         }
     }
 

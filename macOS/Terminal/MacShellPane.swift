@@ -123,23 +123,13 @@ struct MacShellPane: View {
 
     @ViewBuilder
     private var content: some View {
-        if let terminal, let stream {
-            if case .failed(let error) = stream.phase {
-                ContentUnavailableView {
-                    Label("terminal.load_failed.title", systemImage: "exclamationmark.triangle")
-                } description: {
-                    Text(verbatim: error)
-                } actions: {
-                    Button("action.retry") { stream.retry() }
+        if let terminal {
+            // Clicks focus the pane through the window's click monitor (MacRootView).
+            TerminalEmulator(host: terminal.view, isFocusedPane: isFocused, isPresented: true)
+                .overlay {
+                    if showsWaiting { waitingIndicator.transition(.opacity) }
                 }
-            } else {
-                // Clicks focus the pane through the window's click monitor (MacRootView).
-                TerminalEmulator(host: terminal.view, isFocusedPane: isFocused, isPresented: true)
-                    .overlay {
-                        if showsWaiting { waitingIndicator.transition(.opacity) }
-                    }
-                    .animation(MacMotion.state, value: showsWaiting)
-            }
+                .animation(MacMotion.state, value: showsWaiting)
         } else if showsWaiting {
             waitingIndicator
         }

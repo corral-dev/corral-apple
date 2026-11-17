@@ -18,7 +18,7 @@ struct MacTerminalPane: View {
 
     @State private var isStarting = false
     @State private var startAttempted = false
-    @State private var startError: String?
+    @State private var startTask: Task<Void, Never>?
     @State private var handledPromptRequest: UUID?
 
     /// The window's long-lived terminal for this session, if one is open
@@ -54,17 +54,19 @@ struct MacTerminalPane: View {
         }
         .task(id: isPresented && isReady && needsStart) {
             guard isPresented, isReady, needsStart else { return }
-            // Detached so that flipping needsStart (startAttempted = true)
-            // does not cancel the in-flight resume: the guards inside re-check
-            // presentation, client and session before touching the host.
-            let key = session.key
-            let clientID = appModel.clientIdentity
-            Task { @MainActor in
-                guard isPresented, isReady, session.key == key,
-                      appModel.clientIdentity == clientID, needsStart else { return }
-                await start()
-            }
+            triggerStart()
         }
+        .onChange(of: isPresented) { _, presented in
+            if !presented { cancelStart() }
+        }
+        .onChange(of: isReady) { _, ready in
+            if !ready { cancelStart() }
+        }
+        .onChange(of: session.key) { _, _ in
+            cancelStart()
+            startAttempted = false
+        }
+        .onDisappear { cancelStart() }
         .task(id: PaneConnectionKey(sessionKey: session.key, client: appModel.clientIdentity, ready: isPresented && isReady && session.hosted)) {
             guard isPresented, isReady, session.hosted else { return }
             openTerminal()
@@ -104,10 +106,12 @@ struct MacTerminalPane: View {
         }
     }
 
+    private var isReadonly: Bool { SessionActionsMenu.isReadonly(access: appModel.connectedAccess) }
+
     /// Opening the view starts a session that is not running, once. A stream
     /// that ends before it ever went live is the same opening (stale summary).
     private var needsStart: Bool {
-        guard !startAttempted, !isStarting, startError == nil else { return false }
+        guard !startAttempted, !isStarting, !isReadonly else { return false }
         if let stream { return stream.phase == .ended && !sawLive }
         return !session.hosted && !session.live
     }
@@ -127,32 +131,22 @@ struct MacTerminalPane: View {
         return sawLive || startAttempted
     }
 
-    /// Everything but a failed stream draws into the emulator, including a
-    /// stream still attaching (it reports its grid while attaching).
+    /// Everything but a stopped/external pane draws into the emulator, including
+    /// a stream still attaching (it reports its grid while attaching).
     private func showsEmulator(_ stream: RemoteTerminalStream) -> Bool {
-        guard startError == nil, !runsElsewhere, !showsRestartPrompt, !isStarting else { return false }
-        if case .failed = stream.phase { return false }
-        return true
+        !runsElsewhere && !showsRestartPrompt && !isStarting
     }
 
     @ViewBuilder
     private var status: some View {
-        if let startError {
-            startFailure(startError)
-        } else if runsElsewhere {
+        if runsElsewhere {
             runningElsewhereNote
+        } else if isReadonly && !session.hosted && !session.live && stream == nil {
+            notRunningReadonlyNote
         } else if showsRestartPrompt {
             restartPrompt
         } else if let stream, !isStarting {
-            if case .failed(let error) = stream.phase {
-                ContentUnavailableView {
-                    Label("terminal.load_failed.title", systemImage: "exclamationmark.triangle")
-                } description: {
-                    Text(verbatim: error)
-                } actions: {
-                    Button("action.retry") { stream.retry() }
-                }
-            } else if (stream.phase == .connecting && (!hasScreen || !isReady)) || Self.inspectWaiting {
+            if (stream.phase == .connecting && (!hasScreen || !isReady)) || Self.inspectWaiting {
                 waitingIndicator
             }
         } else {
@@ -179,16 +173,9 @@ struct MacTerminalPane: View {
         .background(.regularMaterial, in: .rect(cornerRadius: Radius.lg * interfaceScale))
     }
 
-    private func startFailure(_ error: String) -> some View {
+    private var notRunningReadonlyNote: some View {
         ContentUnavailableView {
-            Label("terminal.start_failed.title", systemImage: "exclamationmark.triangle")
-        } description: {
-            Text(verbatim: error)
-        } actions: {
-            Button("action.retry") {
-                self.startError = nil
-                Task { await start() }
-            }
+            Label("terminal.not_running.title", systemImage: "terminal")
         }
     }
 
@@ -210,39 +197,82 @@ struct MacTerminalPane: View {
             Text("terminal.not_running.description")
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-            Button("terminal.restart") { Task { await start() } }
+            Button("terminal.restart") { triggerStart(force: true) }
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
-                .disabled(isStarting)
+                .disabled(isStarting || isReadonly)
         }
         .interfacePadding(Space.xxl)
     }
 
-    private func start() async {
-        guard !isStarting else { return }
-        // The pane may have closed or switched hosts while the detached task
-        // was in flight: never resume a session nobody is watching.
-        guard isPresented, isReady else { return }
+    private func triggerStart(force: Bool = false) {
+        guard !isStarting, !isReadonly, isPresented, isReady else { return }
+        if force { startAttempted = false }
+        guard force || needsStart else { return }
+        startTask?.cancel()
+        let key = session.key
+        let clientID = appModel.clientIdentity
+        // Detached from the SwiftUI `.task` identity because flipping
+        // `startAttempted = true` flips `needsStart` to false.
+        startTask = Task { @MainActor in
+            defer { startTask = nil }
+            await start(key: key, clientID: clientID, force: force)
+        }
+    }
+
+    private func cancelStart() {
+        startTask?.cancel()
+        startTask = nil
+    }
+
+    private func start(key: String, clientID: ObjectIdentifier?, force: Bool) async {
+        guard !isStarting, !isReadonly, isPresented, isReady,
+              session.key == key, appModel.clientIdentity == clientID else { return }
         startAttempted = true
         isStarting = true
         defer { isStarting = false }
-        if let error = await workspace.resumeInPane(session.key) {
+        var attempt = 0
+        while !Task.isCancelled, isPresented, isReady, !isReadonly,
+              session.key == key, appModel.clientIdentity == clientID {
+            if !force && ((session.hosted && stream?.phase != .ended) || session.live) {
+                if session.hosted, let client = appModel.client {
+                    workspace.terminals.open(session.key, client: client)
+                }
+                return
+            }
+            if let error = await workspace.resumeInPane(session.key) {
+                #if DEBUG
+                debugTrace("terminal start attempt \(attempt + 1) failed: \(error)")
+                #endif
+                guard !Task.isCancelled, isPresented, isReady, !isReadonly,
+                      session.key == key, appModel.clientIdentity == clientID else {
+                    startAttempted = false
+                    return
+                }
+                switch RemoteRecoveryPolicy.classify(error) {
+                case .retryable:
+                    let delay = RemoteRecoveryPolicy.backoffDuration(attempt: attempt)
+                    attempt += 1
+                    try? await Task.sleep(for: delay)
+                    continue
+                case .notFound, .permanent:
+                    startAttempted = false
+                    return
+                }
+            }
+            // Closed mid-resume: allow a later reopen to start cleanly instead
+            // of sticking in attempted-but-never-started.
+            guard isPresented, isReady, session.key == key, appModel.clientIdentity == clientID else {
+                startAttempted = false
+                return
+            }
+            if let client = appModel.client { workspace.terminals.restart(session.key, client: client) }
             #if DEBUG
-            debugTrace("terminal start failed: \(error)")
+            debugTrace("terminal started session; phase=\(String(describing: stream?.phase))")
             #endif
-            startError = error
             return
         }
-        // Closed mid-resume: allow a later reopen to retry instead of sticking
-        // in attempted-but-never-started.
-        guard isPresented else {
-            startAttempted = false
-            return
-        }
-        if let client = appModel.client { workspace.terminals.restart(session.key, client: client) }
-        #if DEBUG
-        debugTrace("terminal started session; phase=\(String(describing: stream?.phase))")
-        #endif
+        startAttempted = false
     }
 
     private var isReady: Bool { appModel.connectionState == .connected && appModel.client != nil }

@@ -6,6 +6,22 @@ next version's section. A `Release: minor` or `Release: major` line requests a
 larger version step; `Release: hold <reason>` keeps the changes unreleased until
 the named acceptance is done.
 
+## Mac 0.3.176 (189)
+
+### English
+
+- Dragging a window edge or a pane divider no longer stalls the Mac chat: only the visible rows rewrap immediately (136 ms → 3.8 ms median per 4 pt width step at 120 messages, 479 ms → 4.0 ms at 300), the rest settle 140 ms after the drag stops, and opening a conversation still measures every row exactly.
+- A chat text-size step settles the visible transcript first: 372.9 ms → 221.4 ms median at 120 messages, with the remaining rows filled in batches afterwards, and a 120-message draw pass now takes 27 ms instead of 33 ms.
+- Agent and project terminals no longer show a failure page with a Retry button: recoverable states — a development machine still starting up, a timeout, a missing snapshot — keep the waiting indicator and retry on a capped backoff while the pane is visible and connected; an ended session or an authorization/pairing denial still stops.
+- The emoji watermark behind each session pane is easier to recognize: 0.30 alpha on a light pane and 0.22 on a dark one. Size, inset, anchoring, clipping, hit testing and accessibility hiding are unchanged.
+
+### 简体中文
+
+- 拖动窗口边缘或分屏分隔条不再让 Mac 聊天卡住：只有可见的行立即重排（120 条消息时每个 4 pt 宽度步进从 136 ms 降到 3.8 ms 中位数，300 条从 479 ms 降到 4.0 ms），其余行在停止拖动 140 ms 后补齐，打开会话仍然逐行精确测量。
+- 聊天字号变化先结算可见区域：120 条消息时从 372.9 ms 降到 221.4 ms 中位数，剩余行随后分批补齐；120 条消息的绘制一遍现在只要 27 ms，不再是 33 ms。
+- 助手终端与项目终端不再显示带「重试」按钮的失败页：开发机仍在启动、超时、快照缺失这类可自愈状态会保留等待指示，并在面板可见且连接正常时按封顶退避重试；会话结束或授权、配对被拒仍然停止。
+- 每个会话面板背后的 emoji 水印更容易辨认：浅色面板 0.30、深色面板 0.22 不透明度。尺寸、内缩、锚定、裁剪、点击区域与无障碍隐藏都不变。
+
 ## Mac 0.3.175 (182) / iPhone 1.0.219 (232)
 
 ### English

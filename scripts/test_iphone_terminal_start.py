@@ -14,6 +14,7 @@ with tempfile.TemporaryDirectory(prefix="corral-phone-terminal-") as directory:
     subprocess.run([
         "swiftc", "-swift-version", "6", "-default-isolation", "MainActor",
         "-parse-as-library",
+        str(root / "Shared/Core/Network/RemoteRecoveryPolicy.swift"),
         str(root / "iOS/Views/Terminal/AgentTerminalPane.swift"),
         str(root / "scripts/iphone-terminal-start/Probe.swift"),
         "-o", executable,

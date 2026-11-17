@@ -33,18 +33,65 @@ final class TerminalInputPassiveTests: XCTestCase {
                        "A truncated stream must not be replayed as if it were complete")
         XCTAssertEqual(stream.phase, .connecting, "Missing bytes require a complete screen before returning live")
         XCTAssertTrue(stream.hasBeenLive, "Recovery retains the cached-screen presentation contract")
-        let deadline = ContinuousClock.now + .seconds(8)
-        while stream.phase == .connecting, ContinuousClock.now < deadline {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while client.diagnostics.events.compactMap(\.terminal)
+            .filter({ $0.operation == .resync && $0.result == .started }).count < 2,
+              ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(10))
         }
-        if case .failed = stream.phase {} else {
-            XCTFail("An unavailable transport must reach the bounded Retry state, not spin forever")
-        }
+        XCTAssertEqual(stream.phase, .connecting,
+                       "An unavailable transport must stay connecting and self-heal, never fall into a Retry screen")
         let requests = client.diagnostics.events.compactMap(\.terminal)
             .filter { $0.operation == .resync && $0.result == .started }
-        XCTAssertEqual(requests.count, 2, "A transient failure retries, but never starts an unbounded RPC loop")
+        XCTAssertEqual(requests.count, 2, "A transient failure retries with bounded backoff, never an unbounded RPC loop")
         stream.inspectionHandle(snapshot(seq: 4, bytes: 32))
-        XCTAssertEqual(stream.phase, .live, "A late complete screen also repairs the exhausted recovery")
+        XCTAssertEqual(stream.phase, .live, "A late complete screen repairs the self-healing recovery")
+    }
+
+    @MainActor
+    func testAttachSelfHealsAfterHostStartingError() async throws {
+        let client = RemoteClient(devicePrivateKey: Data(repeating: 0, count: 32))
+        defer { client.disconnect() }
+        let stream = RemoteTerminalStream(sessionKey: "codex:starting", client: client)
+        let sink = RecordingTerminalSink()
+        stream.sink = sink
+        stream.start()
+        defer { stream.stop() }
+        stream.updateFit(TerminalGrid(cols: 80, rows: 24))
+
+        // Wait for the first attach attempt to fail while client has no plane (.notConnected).
+        let firstDeadline = ContinuousClock.now + .seconds(2)
+        while client.diagnostics.events.compactMap(\.terminal)
+            .filter({ $0.operation == .attach && $0.result == .failed }).count < 1,
+              ContinuousClock.now < firstDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(stream.phase, .connecting)
+
+        // Deliver a snapshot once the host becomes ready (simulating self-heal recovery).
+        stream.inspectionHandle(snapshot(seq: 1, text: "READY"))
+        XCTAssertEqual(stream.phase, .live)
+        XCTAssertEqual(sink.resets.last?.data, Data("READY".utf8))
+    }
+
+    @MainActor
+    func testNotFoundRecoveryClassifyStopsRetrying() {
+        XCTAssertEqual(
+            RemoteRecoveryPolicy.classify(RemoteCallError(code: "not_found", message: "Gone", hint: "")),
+            .notFound
+        )
+        XCTAssertEqual(
+            RemoteRecoveryPolicy.classify(RemoteCallError(code: "unauthorized", message: "Denied", hint: "")),
+            .permanent
+        )
+        XCTAssertEqual(
+            RemoteRecoveryPolicy.classify(RemoteCallError(code: "unavailable", message: "The development machine is still starting up.", hint: "")),
+            .retryable
+        )
+        XCTAssertEqual(
+            RemoteRecoveryPolicy.classify(RemoteClient.ConnectionError.timeout),
+            .retryable
+        )
     }
 
     @MainActor

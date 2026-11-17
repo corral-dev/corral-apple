@@ -143,7 +143,13 @@ struct MacConversationTable: NSViewRepresentable {
         /// row is never drawn at a height measured for another geometry.
         override func layout() {
             coordinator?.tableWillLayout()
+            #if DEBUG
+            let w1Start = DispatchTime.now().uptimeNanoseconds
+            #endif
             super.layout()
+            #if DEBUG
+            Coordinator.w1NoteLayoutPass((Double(DispatchTime.now().uptimeNanoseconds - w1Start) / 1_000_000))
+            #endif
         }
 
         override func viewDidMoveToWindow() {
@@ -173,6 +179,14 @@ struct MacConversationTable: NSViewRepresentable {
 
         override var isFlipped: Bool { true }
 
+        #if DEBUG
+        override func layout() {
+            let start = DispatchTime.now().uptimeNanoseconds
+            super.layout()
+            Coordinator.w1NoteCellLayout((Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000))
+        }
+        #endif
+
         func show(_ root: AnyView, id: String) {
             rowID = id
             hosting.rootView = root
@@ -183,6 +197,14 @@ struct MacConversationTable: NSViewRepresentable {
     /// scrolling over a row always belongs to the conversation.
     final class RowHostingView: NSHostingView<AnyView> {
         override func menu(for event: NSEvent) -> NSMenu? { paneSessionContextMenu() }
+
+        #if DEBUG
+        override func layout() {
+            let start = DispatchTime.now().uptimeNanoseconds
+            super.layout()
+            Coordinator.w1NoteRowLayout((Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000))
+        }
+        #endif
 
         override func scrollWheel(with event: NSEvent) {
             if let scroll = enclosingScrollView {
@@ -242,6 +264,46 @@ struct MacConversationTable: NSViewRepresentable {
         /// Width the current row heights were measured for.
         private var measuredWidth: CGFloat = 0
         private var needsRemeasure = false
+        /// Offscreen rows still measured at an older width, drained in bounded
+        /// batches once a resize stops. Measuring every row on every width step
+        /// blocked the main thread for 136 ms per 4 pt at 120 messages and 479 ms
+        /// at 300 (2026-11-16 probe), so a live drag remeasures only what the
+        /// reader can see and the rest follows after the drag settles.
+        private var reflowBacklog: [String] = []
+        private var reflowTask: Task<Void, Never>?
+        /// Bumped on every width change so a running sweep abandons its work.
+        private var reflowGeneration = 0
+        /// Rows re-measured before, beside and after the viewport on one width change.
+        private static let reflowMarginRows = 6
+        /// Rows per deferred batch; each costs one hosting measurement (~1.2 ms).
+        private static let reflowBatchRows = 6
+
+        #if DEBUG
+        /// W1 first-scroll attribution: row realizations are grouped by the
+        /// bounds change that revealed them. A batch closes on the next
+        /// bounds change, so batch #0 is the open and batch #1 the first
+        /// scroll. Prints only when CORRAL_W1_BATCH_LOG is set.
+        private static let w1LogEnabled = ProcessInfo.processInfo.environment["CORRAL_W1_BATCH_LOG"] != nil
+        private static var w1BatchIndex = 0
+        private static var w1BatchViews = 0
+        private static var w1BatchNewCells = 0
+        private static var w1BatchViewMs: Double = 0
+        private static var w1BatchViewMaxMs: Double = 0
+        private static var w1BatchLayouts = 0
+        private static var w1BatchLayoutMs: Double = 0
+        private static var w1BatchMeasures = 0
+        private static var w1BatchMeasureMs: Double = 0
+        private static var w1BatchMakes = 0
+        private static var w1BatchRowLayouts = 0
+        private static var w1BatchRowLayoutMs: Double = 0
+        private static var w1BatchCellLayouts = 0
+        private static var w1BatchCellLayoutMs: Double = 0
+        private static var w1BatchDismantles = 0
+        private static var w1BatchCorrections = 0
+        private static var w1PrevMakes = 0
+        private static var w1PrevDismantles = 0
+        private static var w1PrevCorrections = 0
+        #endif
 
         private(set) var followsLatest = true
         private var userHasScrolled = false
@@ -296,6 +358,10 @@ struct MacConversationTable: NSViewRepresentable {
         }
 
         func detach() {
+            reflowTask?.cancel()
+            reflowTask = nil
+            reflowBacklog.removeAll()
+            reflowGeneration &+= 1
             observers.forEach(NotificationCenter.default.removeObserver)
             observers = []
             NotificationCenter.default.removeObserver(self, name: NSTextView.didChangeSelectionNotification,
@@ -351,24 +417,41 @@ struct MacConversationTable: NSViewRepresentable {
             rows = newRows
             indexByID = Dictionary(newRows.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
             heights.prune(keeping: indexByID)
+            if old.map(\.id) != newRows.map(\.id) {
+                // A structural change reloads the whole table; the width sweep's
+                // remaining ids are no longer a valid work list.
+                reflowBacklog.removeAll()
+                reflowTask?.cancel()
+                reflowTask = nil
+                reflowGeneration &+= 1
+            }
             if old.map(\.id) == newRows.map(\.id) {
-                var changed = IndexSet()
-                for index in newRows.indices {
-                    let row = newRows[index]
-                    if renderChanged || row != old[index]
-                        || heights.measured[row.id]?.key.content != contentKey(for: row, isFirst: index == 0) {
-                        changed.insert(index)
+                if renderChanged {
+                    // Pure style/text-scale change, no structural edit:
+                    // measuring every row synchronously costs ~270 ms at 120
+                    // rows (W2 2026-11-16), so rewrap the viewport now and
+                    // settle the rest in post-interaction batches. Offscreen
+                    // rows are briefly stale by owner decision, then exact.
+                    reflowRenderChange()
+                } else {
+                    var changed = IndexSet()
+                    for index in newRows.indices {
+                        let row = newRows[index]
+                        if row != old[index]
+                            || heights.measured[row.id]?.key.content != contentKey(for: row, isFirst: index == 0) {
+                            changed.insert(index)
+                        }
                     }
-                }
-                // The table also keeps prepared rows outside the viewport;
-                // every realized row must show its current content.
-                var realized = IndexSet()
-                table.enumerateAvailableRowViews { _, row in realized.insert(row) }
-                withoutAnimation {
-                    table.noteHeightOfRows(withIndexesChanged: changed)
-                    let stale = realized.intersection(changed)
-                    if !stale.isEmpty {
-                        table.reloadData(forRowIndexes: stale, columnIndexes: IndexSet(integer: 0))
+                    // The table also keeps prepared rows outside the viewport;
+                    // every realized row must show its current content.
+                    var realized = IndexSet()
+                    table.enumerateAvailableRowViews { _, row in realized.insert(row) }
+                    withoutAnimation {
+                        table.noteHeightOfRows(withIndexesChanged: changed)
+                        let stale = realized.intersection(changed)
+                        if !stale.isEmpty {
+                            table.reloadData(forRowIndexes: stale, columnIndexes: IndexSet(integer: 0))
+                        }
                     }
                 }
             } else {
@@ -398,6 +481,9 @@ struct MacConversationTable: NSViewRepresentable {
             guard rows.indices.contains(row) else { return 1 }
             let item = rows[row]
             let width = rowWidth
+            #if DEBUG
+            MacConversationTableCounters.heightQueries &+= 1
+            #endif
             guard canMeasure, let contentKey = contentKey(for: item, isFirst: row == 0) else {
                 // Hidden or not yet sized: keep the last known height and
                 // measure every row before this table is next laid out.
@@ -406,6 +492,9 @@ struct MacConversationTable: NSViewRepresentable {
             }
             let key = HeightKey(content: contentKey, width: width)
             if let cached = heights.measured[item.id], cached.key == key { return cached.height }
+            #if DEBUG
+            MacConversationTableCounters.heightMisses &+= 1
+            #endif
             let height = measure(item, isFirst: row == 0, width: width)
             heights.measured[item.id] = Measured(key: key, height: height)
             // One delegate query must not acknowledge a width change for all
@@ -415,9 +504,16 @@ struct MacConversationTable: NSViewRepresentable {
 
         private func measure(_ row: MacConversationRow, isFirst: Bool, width: CGFloat) -> CGFloat {
             measurer.rootView = content(for: row, isFirst: isFirst, measuring: true)
+            #if DEBUG
+            let w1Start = DispatchTime.now().uptimeNanoseconds
+            #endif
             let size = measurer.sizeThatFits(in: NSSize(width: width, height: CGFloat.greatestFiniteMagnitude))
             #if DEBUG
+            let w1Ms = Double(DispatchTime.now().uptimeNanoseconds - w1Start) / 1_000_000
             MacConversationTableCounters.measurements &+= 1
+            MacConversationTableCounters.measureMs += w1Ms
+            Self.w1BatchMeasures += 1
+            Self.w1BatchMeasureMs += w1Ms
             #endif
             guard size.height.isFinite, size.height > 0 else { return 1 }
             return ceil(size.height)
@@ -431,9 +527,21 @@ struct MacConversationTable: NSViewRepresentable {
             }
             let width = rowWidth
             guard needsRemeasure || abs(width - measuredWidth) > 0.25 else { return }
+            // The first pass and short conversations keep the exact, fully
+            // measured table: opening a conversation must never show rows at
+            // estimated heights (mac-chat-blank-until-scroll).
+            let firstPass = measuredWidth <= 1
             needsRemeasure = false
             measuredWidth = width
-            remeasureAll()
+            guard !firstPass, rows.count > 24 else {
+                reflowBacklog.removeAll()
+                reflowGeneration &+= 1
+                reflowTask?.cancel()
+                reflowTask = nil
+                measureAllRows()
+                return
+            }
+            reflowViewportFirst()
         }
 
         func tableDidMoveToWindow() {
@@ -441,13 +549,127 @@ struct MacConversationTable: NSViewRepresentable {
             table?.needsLayout = true
         }
 
-        private func remeasureAll() {
+        private func measureAllRows() {
             guard let table, !rows.isEmpty else { return }
             let anchor = followsLatest ? nil : currentAnchor()
             withoutAnimation {
                 table.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: 0..<rows.count))
             }
             restore(anchor)
+        }
+
+        /// Width changed while the reader is dragging: rewrap what is visible now
+        /// and leave the rest of the conversation for after the drag settles.
+        /// A text-scale change reuses this path: widths are unchanged but the
+        /// full height keys are stale, so the same viewport-then-sweep
+        /// scheduling applies.
+        /// - Returns: the synchronously re-measured row range, or nil when
+        ///   there was no realized viewport and the exact full pass ran instead.
+        @discardableResult
+        private func reflowViewportFirst() -> Range<Int>? {
+            guard let table, !rows.isEmpty else { return nil }
+            reflowGeneration &+= 1
+            reflowTask?.cancel()
+            reflowTask = nil
+            let anchor = followsLatest ? nil : currentAnchor()
+            let range = table.rows(in: table.visibleRect)
+            guard range.location != NSNotFound, range.length > 0 else {
+                // No realized viewport (hidden or mid-rebuild pane): fall back to
+                // the exact pass rather than leaving rows at a stale width.
+                reflowBacklog.removeAll()
+                measureAllRows()
+                return nil
+            }
+            let low = max(0, range.location - Self.reflowMarginRows)
+            let high = min(rows.count, max(low + range.length, NSMaxRange(range) + Self.reflowMarginRows))
+            withoutAnimation {
+                table.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: low..<high))
+            }
+            restore(anchor)
+            reflowBacklog = (0..<rows.count).reversed().compactMap { index -> String? in
+                guard index >= high || index < low else { return nil }
+                let row = rows[index]
+                // Staleness is the whole height key, not just the width: a
+                // text-scale change keeps every width but invalidates every
+                // height, and a row left out of the backlog would keep the old
+                // scale forever. Only real layout is correct (wrapping is
+                // nonlinear in scale), so stale rows re-measure in the sweep.
+                guard let content = contentKey(for: row, isFirst: index == 0) else { return row.id }
+                let expected = HeightKey(content: content, width: measuredWidth)
+                return heights.measured[row.id]?.key == expected ? nil : row.id
+            }
+            #if DEBUG
+            MacConversationTableCounters.reflows &+= 1
+            MacConversationTableCounters.reflowLow = low
+            MacConversationTableCounters.reflowHigh = high
+            MacConversationTableCounters.deferredRemeasures &+= reflowBacklog.count
+            #endif
+            scheduleReflowSweep()
+            return low..<high
+        }
+
+        /// Pure style/text-scale change over unchanged row ids: rewrap the
+        /// viewport now, settle the rest in the sweep. noteHeightOfRows
+        /// re-measures heights but does not rebuild row content, so every
+        /// realized row is also reloaded to show the new style; heights inside
+        /// the viewport range are already exact, which leaves only the few
+        /// realized rows outside it to be measured here.
+        private func reflowRenderChange() {
+            guard let table, reflowViewportFirst() != nil else { return }
+            var realized = IndexSet()
+            table.enumerateAvailableRowViews { _, row in realized.insert(row) }
+            guard !realized.isEmpty else { return }
+            withoutAnimation {
+                table.reloadData(forRowIndexes: realized, columnIndexes: IndexSet(integer: 0))
+            }
+        }
+
+        /// Drained after the drag stops, bottom-first so heights that only change
+        /// the content length cannot shift the reading position.
+        private func scheduleReflowSweep() {
+            guard !reflowBacklog.isEmpty else { return }
+            let generation = reflowGeneration
+            reflowTask = Task { @MainActor [weak self] in
+                // Every new width step cancels this task, so a drag costs one
+                // sweep instead of one sweep per step.
+                try? await Task.sleep(for: .milliseconds(140))
+                guard !Task.isCancelled, let self, generation == self.reflowGeneration else { return }
+                await self.drainReflow(generation: generation)
+            }
+        }
+
+        private func drainReflow(generation: Int) async {
+            guard let table else {
+                reflowBacklog.removeAll()
+                return
+            }
+            while !reflowBacklog.isEmpty, generation == reflowGeneration {
+                guard abs(rowWidth - measuredWidth) <= 0.25 else {
+                    // The reader changed the width again; that pass owns the rewrite.
+                    reflowBacklog.removeAll()
+                    return
+                }
+                // A hidden or rebuilt table cannot host a measurement; the rows
+                // keep their last height until the table is measurable again.
+                guard canMeasure else { return }
+                let count = min(Self.reflowBatchRows, reflowBacklog.count)
+                let chunk = reflowBacklog.suffix(count)
+                reflowBacklog.removeLast(count)
+                let indexes = IndexSet(chunk.compactMap { indexByID[$0] })
+                guard !indexes.isEmpty else { continue }
+                // The table owns its row-height cache, so it must be the one to
+                // invalidate: handing it these indexes makes it re-ask this
+                // batch's heights now, and only this batch's.
+                let anchor = followsLatest ? nil : currentAnchor()
+                withoutAnimation { table.noteHeightOfRows(withIndexesChanged: indexes) }
+                restore(anchor)
+                #if DEBUG
+                MacConversationTableCounters.reflowBatches &+= 1
+                #endif
+                // Let input, display and scrolling run between batches.
+                await Task.yield()
+            }
+            if generation == reflowGeneration { reflowBacklog.removeAll() }
         }
 
         /// A displayed row reports its natural height. It only differs from the
@@ -482,7 +704,25 @@ struct MacConversationTable: NSViewRepresentable {
 
         func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
             guard rows.indices.contains(row) else { return nil }
+            #if DEBUG
+            let w1Start = DispatchTime.now().uptimeNanoseconds
+            #endif
             let cell: RowCell
+            #if DEBUG
+            let w1IsNew: Bool
+            if let reused = tableView.makeView(withIdentifier: RowCell.identifier, owner: nil) as? RowCell {
+                cell = reused
+                w1IsNew = false
+            } else {
+                cell = RowCell()
+                w1IsNew = true
+                // macOS 27 SwiftUI keeps hover/tooltip hit-test references to
+                // hosting views; one freed while its window lives crashes the
+                // next mouse movement. Cells live as long as the table (the
+                // pool is bounded by the rows realized at once).
+                cells.append(cell)
+            }
+            #else
             if let reused = tableView.makeView(withIdentifier: RowCell.identifier, owner: nil) as? RowCell {
                 cell = reused
             } else {
@@ -493,8 +733,12 @@ struct MacConversationTable: NSViewRepresentable {
                 // pool is bounded by the rows realized at once).
                 cells.append(cell)
             }
+            #endif
             let item = rows[row]
             cell.show(content(for: item, isFirst: row == 0, measuring: false), id: item.id)
+            #if DEBUG
+            Self.w1NoteViewFor((Double(DispatchTime.now().uptimeNanoseconds - w1Start) / 1_000_000), isNew: w1IsNew)
+            #endif
             return cell
         }
 
@@ -706,6 +950,9 @@ struct MacConversationTable: NSViewRepresentable {
         }
 
         private func viewportDidScroll() {
+            #if DEBUG
+            Self.w1CloseBatch()
+            #endif
             publishInspection()
             guard !adjustingPosition else { return }
             if isReaderScrolling {
@@ -794,6 +1041,79 @@ struct MacConversationTable: NSViewRepresentable {
                 body()
             }
         }
+
+        #if DEBUG
+        /// W1 attribution helpers. All batch state is DEBUG-only; the print
+        /// gate keeps every other probe and test run quiet.
+        fileprivate static func w1NoteViewFor(_ ms: Double, isNew: Bool) {
+            MacConversationTableCounters.viewForCalls &+= 1
+            MacConversationTableCounters.viewForMs += ms
+            if ms > MacConversationTableCounters.viewForMaxMs { MacConversationTableCounters.viewForMaxMs = ms }
+            if isNew { MacConversationTableCounters.viewForNewCells &+= 1 }
+            w1BatchViews &+= 1
+            if isNew { w1BatchNewCells &+= 1 }
+            w1BatchViewMs += ms
+            if ms > w1BatchViewMaxMs { w1BatchViewMaxMs = ms }
+        }
+
+        fileprivate static func w1NoteLayoutPass(_ ms: Double) {
+            MacConversationTableCounters.layoutPasses &+= 1
+            MacConversationTableCounters.layoutPassMs += ms
+            if ms > MacConversationTableCounters.layoutMaxMs { MacConversationTableCounters.layoutMaxMs = ms }
+            w1BatchLayouts &+= 1
+            w1BatchLayoutMs += ms
+        }
+
+        fileprivate static func w1NoteRowLayout(_ ms: Double) {
+            MacConversationTableCounters.rowLayouts &+= 1
+            MacConversationTableCounters.rowLayoutMs += ms
+            if ms > MacConversationTableCounters.rowLayoutMaxMs { MacConversationTableCounters.rowLayoutMaxMs = ms }
+            w1BatchRowLayouts &+= 1
+            w1BatchRowLayoutMs += ms
+        }
+
+        fileprivate static func w1NoteCellLayout(_ ms: Double) {
+            w1BatchCellLayouts &+= 1
+            w1BatchCellLayoutMs += ms
+        }
+
+        private static func w1CloseBatch() {
+            w1BatchMakes = MacTextRowSwitchCounters.makes - w1PrevMakes
+            w1BatchDismantles = MacTextRowSwitchCounters.dismantles - w1PrevDismantles
+            w1BatchCorrections = MacConversationTableCounters.liveCorrections - w1PrevCorrections
+            let active = w1BatchViews > 0 || w1BatchLayouts > 0 || w1BatchMeasures > 0
+                || w1BatchRowLayouts > 0 || w1BatchCellLayouts > 0
+                || w1BatchMakes > 0 || w1BatchDismantles > 0 || w1BatchCorrections > 0
+            if Self.w1LogEnabled, active {
+                print(String(format: "w1 batch #%d: views=%d newCells=%d viewFor=%6.1fms max=%5.1f layouts=%d layoutMs=%6.1f rowLayouts=%d rowMs=%7.1f cellLayouts=%d cellMs=%6.1f measures=%d measureMs=%5.1f makes=+%d dismantles=+%d corrections=+%d",
+                             w1BatchIndex, w1BatchViews, w1BatchNewCells, w1BatchViewMs, w1BatchViewMaxMs,
+                             w1BatchLayouts, w1BatchLayoutMs, w1BatchRowLayouts, w1BatchRowLayoutMs,
+                             w1BatchCellLayouts, w1BatchCellLayoutMs,
+                             w1BatchMeasures, w1BatchMeasureMs,
+                             w1BatchMakes, w1BatchDismantles, w1BatchCorrections))
+                fflush(stdout)
+            }
+            w1BatchIndex &+= 1
+            w1BatchViews = 0
+            w1BatchNewCells = 0
+            w1BatchViewMs = 0
+            w1BatchViewMaxMs = 0
+            w1BatchLayouts = 0
+            w1BatchLayoutMs = 0
+            w1BatchRowLayouts = 0
+            w1BatchRowLayoutMs = 0
+            w1BatchCellLayouts = 0
+            w1BatchCellLayoutMs = 0
+            w1BatchMeasures = 0
+            w1BatchMeasureMs = 0
+            w1PrevMakes = MacTextRowSwitchCounters.makes
+            w1PrevDismantles = MacTextRowSwitchCounters.dismantles
+            w1PrevCorrections = MacConversationTableCounters.liveCorrections
+            w1BatchMakes = 0
+            w1BatchDismantles = 0
+            w1BatchCorrections = 0
+        }
+        #endif
 
         private func publishInspection() {
             #if DEBUG
@@ -888,6 +1208,26 @@ enum MacConversationTableCounters {
     static var measurements = 0
     static var liveCorrections = 0
     static var wheelEvents = 0
+    /// W1 first-scroll attribution: height cache behavior and realization cost.
+    static var heightQueries = 0
+    static var heightMisses = 0
+    static var measureMs: Double = 0
+    static var viewForCalls = 0
+    static var viewForNewCells = 0
+    static var viewForMs: Double = 0
+    static var viewForMaxMs: Double = 0
+    static var layoutPasses = 0
+    static var layoutPassMs: Double = 0
+    static var layoutMaxMs: Double = 0
+    static var rowLayouts = 0
+    static var rowLayoutMs: Double = 0
+    static var rowLayoutMaxMs: Double = 0
+    /// Rows postponed to a post-drag sweep on width changes.
+    static var deferredRemeasures = 0
+    static var reflows = 0
+    static var reflowLow = 0
+    static var reflowHigh = 0
+    static var reflowBatches = 0
 }
 #endif
 #endif

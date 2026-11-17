@@ -1186,10 +1186,21 @@ final class MacWorkspace {
 
     /// Terminal view starting an ended session: the failure belongs to the
     /// pane that asked, so it is returned instead of raised as a window alert.
-    func resumeInPane(_ key: String) async -> String? {
-        var failure: String?
-        let result = await call(WireProtocol.mSessionResume, ["key": key]) { failure = $0 }
-        return result == nil ? failure ?? String(localized: "error.unknown") : nil
+    func resumeInPane(_ key: String) async -> Error? {
+        guard let client = appModel?.client else { return RemoteClient.ConnectionError.notConnected }
+        let host = hostID
+        do {
+            let result = try await client.call(WireProtocol.mSessionResume, params: ["key": key])
+            guard !Task.isCancelled, appModel?.client === client, hostID == host else {
+                return CancellationError()
+            }
+            if let session = try? SessionActionsMenu.decodeNewSession(from: result) {
+                feed?.listStore.patchSession(session)
+            }
+            return nil
+        } catch {
+            return error
+        }
     }
 
     /// TUI top bar: click an assistant to add a pane with a new session in the

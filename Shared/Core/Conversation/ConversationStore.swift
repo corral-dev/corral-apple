@@ -110,6 +110,8 @@ final class ConversationStore {
     private var catchUpRequested = false
     /// The next catch-up must not trust the local resume cursor (event gap).
     private var catchUpFullSnapshot = false
+    private var snapshotRetryTask: Task<Void, Never>?
+    private var snapshotRetryAttempt = 0
     /// 将一批实时增量收敛为一次提示选项查询，避免每条消息都占用同一条远程连接。
     private var promptRefreshTask: Task<Void, Never>?
     /// 上次成功应用到的历史代次；重连时带给开发机，对不上则改取尾部。
@@ -360,6 +362,9 @@ final class ConversationStore {
         catchUpTask?.cancel()
         catchUpTask = nil
         catchUpRequested = false
+        snapshotRetryTask?.cancel()
+        snapshotRetryTask = nil
+        snapshotRetryAttempt = 0
         lifecycleRevision &+= 1
         let revision = lifecycleRevision
         hasStopped = false
@@ -396,7 +401,7 @@ final class ConversationStore {
         guard lifecycleRevision == revision, !hasStopped, !Task.isCancelled else { return }
         await reconcilePendingCommands(client)
         guard lifecycleRevision == revision, !hasStopped, !Task.isCancelled else { return }
-        if isLoading {
+        if isLoading && snapshotRetryTask == nil {
             isLoading = false
         }
         persistTail()
@@ -427,6 +432,9 @@ final class ConversationStore {
         catchUpTask?.cancel()
         catchUpTask = nil
         catchUpRequested = false
+        snapshotRetryTask?.cancel()
+        snapshotRetryTask = nil
+        snapshotRetryAttempt = 0
         eventTask?.cancel()
         eventTask = nil
         promptRefreshTask?.cancel()
@@ -830,6 +838,8 @@ final class ConversationStore {
 
     private func pullSnapshot(_ client: RemoteClient, resumeCursor: Bool = false) async {
         guard !hasStopped else { return }
+        snapshotRetryTask?.cancel()
+        snapshotRetryTask = nil
         snapshotRevision &+= 1
         let requestRevision = snapshotRevision
         let lifecycle = lifecycleRevision
@@ -853,6 +863,10 @@ final class ConversationStore {
                 if let current = watch.live, current != isLive { isLive = current }
             }
             applySnapshot(watch)
+            snapshotRetryAttempt = 0
+            if isLoading {
+                isLoading = false
+            }
             if loadError != nil {
                 loadError = nil
             }
@@ -864,11 +878,33 @@ final class ConversationStore {
         } catch {
             guard !hasStopped, lifecycle == lifecycleRevision,
                   requestRevision == snapshotRevision, !Task.isCancelled else { return }
-            // 已有缓存时保留画面，只露出错误提示。
+            // 已有缓存时保留画面；空对话遇可恢复错误时退避自愈，不阻断用户操作。
             if visibleMessages.isEmpty {
-                let message = error.localizedDescription
-                if loadError != message {
-                    loadError = message
+                if RemoteRecoveryPolicy.classify(error) == .retryable {
+                    if loadError != nil {
+                        loadError = nil
+                    }
+                    if !isLoading {
+                        isLoading = true
+                    }
+                    let delay = RemoteRecoveryPolicy.backoffDuration(attempt: snapshotRetryAttempt)
+                    snapshotRetryAttempt += 1
+                    snapshotRetryTask = Task { [weak self] in
+                        do { try await Task.sleep(for: delay) }
+                        catch { return }
+                        guard let self, !Task.isCancelled, !self.hasStopped,
+                              self.lifecycleRevision == lifecycle else { return }
+                        self.snapshotRetryTask = nil
+                        await self.pullSnapshot(client, resumeCursor: resumeCursor)
+                    }
+                } else {
+                    if isLoading {
+                        isLoading = false
+                    }
+                    let message = error.localizedDescription
+                    if loadError != message {
+                        loadError = message
+                    }
                 }
             }
         }

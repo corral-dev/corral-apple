@@ -11,6 +11,8 @@ Also covers native Mac split resizing and sidebar switching, including measured 
 - [高频事件处理](#高频事件处理)
 - [Capped message scrolling](#capped-message-scrolling-owner-report-2026-10-27)
 - [Main-thread budget](#main-thread-budget-2026-10-05)
+- [Mac conversation width reflow](#mac-conversation-width-reflow-owner-ruling-2026-11-16)
+- [Mac conversation open and text-size spikes](#mac-conversation-open-and-text-size-spikes-measured-2026-11-16)
 - [Mac agent-terminal scrolling](#mac-agent-terminal-scrolling-owner-request-2026-11-12)
 - [Mac sidebar switching investigation](#mac-sidebar-switching-requirement-2026-10-10)
 - [Identity and asynchronous result safety](#identity-and-asynchronous-result-safety)
@@ -21,6 +23,74 @@ Also covers native Mac split resizing and sidebar switching, including measured 
 - [验收](#验收)
 - [离线能力表](#离线能力表全局-offline-first--ios-基线-b9)
 - [跨规范备注](#跨规范备注展示元数据--基线豁免)
+
+## Mac conversation open and text-size spikes (measured 2026-11-16)
+
+The two remaining chat-tail numbers from the width-reflow pass (a long conversation's first open and a text-size step) are one mechanism in two shapes: the shared text document converts every message and the table measures every row on the main thread, and each row's text is laid out twice in a detached engine. Measured on this Mac with the production table, document, Markdown and native tables (`scripts/test_mac_chat_stream.py`, 120-message fixture, main-thread busy-time proxy), `open(size:)`, `textScaleBreakdown(size:)` and the sections below print the split:
+
+| Component | Cost | Where it sits |
+|---|---|---|
+| Open: first mount, all 120 rows measured | 232-243 ms | per-row `NSHostingController.sizeThatFits` in `MacConversationTable.measure` |
+| Open: shared document render (same turn, before the table) | 60-84 ms | `MacConversationTextDocument.update` → `MacMessageTextRenderer.convert` per message |
+| Open: second mount with heights and document cached | 21-31 ms | cell realization and first display only |
+| Text-size step, total | 323-338 ms | document re-render plus the row measurement burst |
+| Text-size step: document re-render for the new style | 134-160 ms | `update` re-renders all 120 blocks and re-sets the storage |
+| Text-size step: row measurement burst | 158-207 ms | every row's render key changed, so every row is measured again |
+| One row measurement | 1.76 ms | 1.4 ms detached text layout + ~0.35 ms representable and row body |
+| Detached layout, per message | 1.4 ms | 0.2 ms storage set + 0.5 ms layout at the proposed width + 0.4 ms second layout at the fitted width |
+
+What the same runs rule out: markdown parsing (`ChatMarkdown.attributed` is cached, 0.0 ms per message warm); a glyph-layout cascade from the shared `NSLayoutManager` (`allowsNonContiguousLayout = true` changes the open from 232-243 ms to 234-240 ms, i.e. nothing); SwiftUI per-root overhead (a trivial view swapped through the same `NSHostingController` costs 0.005 ms per row, so the row cost is its own body and text, and a one-pass VStack measurement would save nothing); and the first display (21-31 ms). The native Markdown table adds 0.3 ms to a table-bearing row's layout (0.8 ms vs 0.5 ms for the same text flattened), so table measurement is a secondary contributor, not the cause.
+
+Landed change: the draw-text font pass in `MacMessageTextRenderer.convert` collected one whole attribute dictionary per run with `setAttributes`; it now collects the ranges and sets only the two attributes it owns with `addAttribute` (also removing the unsupported attribute write during enumeration). `conversion 120: font pass` in the stream probe reports 33 ms → 27 ms for 120 messages and proves the two strategies leave identical attributed strings (0 of 120 differ). That is a component saving of about 2% of either spike; it does not move them perceptibly.
+
+Measured but deliberately not landed:
+
+- **Drop the second (fitted-width) layout.** `MacTextMeasurement.size` lays each row's text out at the proposed width, computes `fitted = min(ceil(used.maxX), width)`, then lays it out again at `fitted` for the height. Because every line's extent is already within `maxX`, the narrower width cannot move a break, so the second height equals the first. `fittedLayoutCheck` in the stream probe reports 1968 text × width cases (4 scales × 4 widths × the 120-message fixture plus the three boundary fixtures; 1608 ran the second pass) with 0 differing heights. Dropping it would remove 0.4 ms of every 1.76 ms row measurement (about 48 ms of an open and of a text-size step). It is not landed because the equality is only proven for greedy line breaking: attachment and text-table runs are laid out by their own block machinery, where a narrower container can re-wrap cells, and a wrong height here is the [clipped-final-line](troubleshooting/2026-11-01-mac-final-line-clipped.md) class the owner reported twice. A safe subset would skip the second pass only for blocks with no attachment runs, which needs its own prose-heavy fixture to show a number.
+- **Measure rows from the drawing containers (single authority).** The [width-reflow section](#mac-conversation-width-reflow-owner-ruling-2026-11-16) already measured 56-60 ms to lay out all 120 containers against 168 ms of detached layout here, but the row height also needs the fitted width, which is what the detached engine exists to discover, and mutating the live text system during SwiftUI's layout pass is the 2026-10-01 re-entrancy crash. Still a separate design change with its own parity risk.
+- **Skip the whole-document re-render on a text-size change.** 134-160 ms per step. The display font is an input to the drawn attributes (fonts, and table cell geometry), so the only alternatives are a visible partial font change or a font-delta re-derivation of every run that must still reproduce the table rebuild exactly.
+- **Batch offscreen rows on open or on a text-size step.** Rejected on the same grounds as the width-reflow ruling allows it: `restore`/`pinToLatest` position the first frame from the sum of every row height, so an inexact offscreen height moves the viewport rather than settling quietly.
+
+Fidelity limit: every chat probe's row is `SelectableAttributedText` plus the table's own paddings, not `MessageBubbleView`, so all per-row numbers above are a lower bound; production rows add the bubble chrome, the hover copy slot and the image services. Building a real-bubble probe would mean pointing the fixtures at the production `RichMessage` model and stubbing the image pipeline, i.e. re-doing the fixture layer that drifted and was repaired on 2026-11-16, so it was not attempted in this pass.
+
+## Mac conversation width reflow (owner ruling, 2026-11-16)
+
+The owner reports the native Mac conversation feels slow next to non-native chat clients and that rendering keeps breaking. A width change (window drag, pane-divider drag) re-measured **every** row through SwiftUI hosting, and each row's rendered geometry then had to agree with a second, detached TextKit measurement engine; the archived [last-line clip](troubleshooting/2026-11-01-mac-final-line-clipped.md), [first-line list indent](troubleshooting/2026-10-27-mac-message-first-line-list-indent.md) and [blank-until-scroll](troubleshooting/2026-10-13-mac-chat-blank-until-scroll.md) defects are all parity failures of that pair.
+
+Measured with the production table, text network, Markdown and Markdown tables (`scripts/test_mac_chat_stream.py`; 20/60/120/300-message fixtures, main-thread busy-time proxy, not frame latency):
+
+| Workload | Before | After |
+|---|---|---|
+| Width step 4 pt, 120 messages | 136 ms, 120 rows measured per step | 3.8 ms median, p95 11.5 ms, 9 rows measured per step |
+| Width step 4 pt, 300 messages | 479 ms, 300 rows per step | 4.0 ms median, p95 10.5 ms, 9 rows per step |
+| Text-size step, 120 messages | 323 ms (unchanged, out of this scope) | 323 ms |
+| Streaming token, 120 messages | 3.5 ms | 3.5 ms |
+| Scroll 60 pt/step, 120 messages | 0.5 ms median, 214 ms worst first realization (open) | unchanged |
+
+Owner ruling: during a window or divider drag, **offscreen row heights may be temporarily imprecise**; visible rows stay exact and the rest settle afterwards. `MacConversationTable` therefore rewraps the viewport plus six rows per step and drains the remaining rows six at a time once the width has been stable for 140 ms, bottom-first so heights that only change the content length cannot move the reading position. The first pass and conversations of at most 24 rows still measure everything exactly: opening a conversation must never place rows at estimated heights. `MacConversationTableCounters.deferredRemeasures/reflows/reflowLow/reflowHigh/reflowBatches` expose the work in DEBUG.
+
+Verification: post-drag realized-row parity (native text frame equals the ceiling of its used height) reports 0 clipped and 0 padded rows at both sizes, and returning to the starting width reproduces the fresh content height exactly (delta 0.0 pt at 120 and 300 messages). The probe's rows are `SelectableAttributedText` plus padding, not `MessageBubbleView`, so its per-row cost is a lower bound.
+
+Boundary context is now single-source (2026-11-16, second change): the document stores the exact separator strings it inserts around each block's container — the near-zero paragraph break before and the container-break newline after — and hands those instances to row measurement through `boundaryContext(for:)`. Measurement no longer rebuilds the context from booleans and a font, so a future separator or spacing change cannot update drawing while leaving heights behind. `scripts/test_mac_chat_stream.py` proves the context is load-bearing and the row path matches drawing: a bold-lead middle message draws 62 pt, measures 62 pt with its context and 49 pt without it, and 16 width × body-size combinations (420–826 pt, 0.8–1.5×) report 0 clipped and 0 padded rows. Measuring from the drawing containers themselves instead was rejected: the row needs a fitted (hugging) width that would make a shared container oscillate between proposal and fitted width during `sizeThatFits`, and mutating the live text system inside SwiftUI's layout pass is the re-entrancy that produced the 2026-10-01 AttributeGraph crash.
+
+### Text-size changes and first-row realization (2026-11-16, stage 2)
+
+A text-size step cost 337 ms at 120 messages while a width step cost 3.8 ms, so the size path was reworked the same way as the drag path: `MacConversationTable.reflowRenderChange()` routes a pure style/scale change with unchanged row ids through `reflowViewportFirst()`, and the backlog's staleness test compares the whole `HeightKey` instead of only the width. That second part is load-bearing: a scale change keeps every width and invalidates every height, so a width-only test would leave every offscreen row at the old scale forever. Offscreen rows are briefly imprecise and then settle in batches, the same trade the owner accepted for drags. Measured with an interleaved A/B (committed table versus working table, same load window, 3 rounds each): 372.9 ms → 221.4 ms median, −40 %.
+
+**Read performance numbers only from an interleaved A/B, never from two runs at different load.** Two workers running probe suites in parallel pushed this Mac to load average 70–110; a single headline run in that window read 297.9 ms for a change that the interleaved measurement later showed at 221.4 ms against a 372.9 ms baseline. `scripts/mac_chat_table_ab.py` (table arms) and `scripts/mac_chat_jump_ab.py` (arrival modes) automate exactly this: they build both arms from the working tree plus a `git show HEAD:` copy, then alternate runs. A run is also not a percentile — report the median of per-arm medians and the sample count.
+
+The remaining scale cost is a floor, not a missing cache: the document re-render (~89 ms), per-row TextKit first layout (~117 ms for 120 rows, genuinely new line breaks), and SwiftUI/table work (~65 ms) all have to happen somewhere. Only scheduling moves the synchronous part, which is what the viewport-first path does.
+
+The ~200 ms first scroll after opening is **not** a process-global warm-up. Prewarming the live text system (`CTLineDraw` over all strings), the detached engine at the real width, and both together each left the first scroll unchanged or worse. A second conversation in the same warm process is equally slow, while re-scrolling already-realized rows costs 0.5 ms. So the cost is per-row first realization (`attach` of a fresh `NSTextView` subtree during layout, ~110 ms for the first few rows decaying to 5–10 ms), and the only remaining lever is realizing the rows a reader is about to reach during the settle window — not warming anything, and never inside `sizeThatFits`.
+
+### Probe gates for the settle window (2026-11-16)
+
+`scripts/mac-chat-stream/Probe.swift` now renders production `MessageBubbleView` rows instead of simplified rows and carries `settleParity`: after a scale change and after a 120 pt width drag it waits for quiescence (counters and content height, bounded at 3 s), then checks total content height against a fresh full measurement (≤1 pt) **before any scrolling**, and then walks top/middle/bottom requiring 0 clipped and 0 padded realized rows. The total-height check runs first on purpose: an on-demand re-measure triggered by scrolling would otherwise heal the backlog and hide the defect.
+
+The gate was validated against a real defect rather than assumed: replacing the backlog's staleness test with a width-only one in a patched copy (the repository was not modified) makes it fail with `content 35379.0 pt vs full 42291.0 pt, delta 6912.0 pt` and a `precondition` trap. A gate that has never failed is not evidence.
+
+W3 also filed an intermittent jump defect: after a scale change settles, teleporting from bottom to top occasionally reported `@ top: checked 2, clipped 1`, with the shared layout's first container holding two blocks (`container 0 used 879 vs frame 439`, +440 pt clip) while the total height stayed correct. `scripts/mac_chat_jump_ab.py` reproduces that arrival mode against both table arms; clean runs pass 0/0 on both, and the failure was seen under heavy load, so it is load-dependent and not attributable to this round's changes yet. It remains open, and the shipped gate intentionally arrives incrementally while this harness keeps the teleport path exercised.
+
+Still open, and the reason rendering keeps regressing: text height is still produced by the detached `MacTextMeasurement` instead of the container that draws. Measuring all 120 containers of the live network directly costs 56 ms and works with no mounted text view (0 empty containers), so a single-authority pass is feasible and would retire the 8 pt/4 pt parity class — but it is a separate change from this reflow work, and it does not by itself fix drag cost. First-realization spikes while opening a scroll are a third, unrelated mechanism. The archived regressions run again (2026-11-16): `scripts/test_mac_chat_boundaries.py`, `test_mac_chat_lists.py`, `test_mac_chat_reflow.py` and `test_mac_chat_open.py` all pass. Their fixture drift was real and is repaired — the shared probe fixture lacked `RichMessage.chatBodyText`, and `MacPathLinks` lived inside the SwiftUI renderable, so a probe compiling only the text document could not link. `MacPathLinks` is now its own `Shared/UI/Chat/MacPathLinks.swift` (moved unchanged) and every chat probe lists it. Run all five with `python3 scripts/test_mac_chat_stream.py`, `..._boundaries.py`, `..._lists.py`, `..._reflow.py` and `..._open.py`; the lists probe carries the 560 paragraph-boundary/width/font transitions that gate the clip class, and the stream probe carries the width-reflow A/B plus the 16-combination boundary parity.
 
 ## Mac agent-terminal scrolling (owner request, 2026-11-12)
 

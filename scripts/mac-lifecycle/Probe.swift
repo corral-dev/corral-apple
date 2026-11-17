@@ -6,6 +6,14 @@ import os
 /// Transport double deliberately ignores cancellation, like an in-flight RPC.
 @MainActor
 final class RemoteClient {
+    enum ConnectionError: Error {
+        case notConnected
+        case handshakeFailed(String)
+        case sendFailed(String)
+        case timeout
+        case invalidResponse
+        case pairingRequired
+    }
     var calls: [(String, [String: Any])] = []
     var terminalTraces: [TerminalDiagnosticContext] = []
     func traceTerminal(_ context: TerminalDiagnosticContext, durationMs: Double?, error: (any Error)?) {
@@ -468,25 +476,42 @@ struct LifecycleProbe {
 
         let silent = RemoteClient(), missing = RemoteTerminalStream(sessionKey: "silent", client: silent)
         missing.start(); missing.updateFit(TerminalGrid(cols: 80, rows: 24))
-        let failureDeadline = ContinuousClock.now + .seconds(12)
-        while missing.phase == .connecting, ContinuousClock.now < failureDeadline {
+        let failureDeadline = ContinuousClock.now + .seconds(8)
+        while silent.calls.filter({ $0.0 == WireProtocol.mTerminalResync }).count < 2,
+              ContinuousClock.now < failureDeadline {
             try? await Task.sleep(for: .milliseconds(20))
         }
-        if case .failed = missing.phase {} else {
-            check(false, "terminal with no snapshots never reached its bounded failure state")
-        }
+        check(missing.phase == .connecting, "terminal without snapshots stayed self-healing instead of entering a failure/Retry screen")
         check(silent.calls.filter { $0.0 == WireProtocol.mTerminalResync }.count == 2,
-              "missing-frame recovery was not bounded to two resyncs")
-        silent.handler = { method, _ in
+              "missing-frame recovery was not rate-limited by backoff")
+        silent.emit(["kind": "snapshot", "seq": 3, "cols": 80, "rows": 24,
+                     "data": Data("self-healed frame".utf8).base64EncodedString()], channel: "term:silent")
+        await settle()
+        check(missing.phase == .live, "missing-frame stream did not self-heal when a snapshot arrived")
+        missing.stop(); await settle()
+
+        let startingClient = RemoteClient(), starting = RemoteTerminalStream(sessionKey: "host-starting", client: startingClient)
+        var attachAttempts = 0
+        startingClient.handler = { method, _ in
             if method == WireProtocol.mTerminalAttach {
-                silent.emit(["kind": "snapshot", "seq": 3, "cols": 80, "rows": 24,
-                             "data": Data("retry frame".utf8).base64EncodedString()], channel: "term:silent")
+                attachAttempts += 1
+                if attachAttempts < 3 {
+                    throw RemoteCallError(message: "The development machine is still starting up. Please try again in a moment",
+                                          code: "unavailable")
+                }
+                startingClient.emit(["kind": "snapshot", "seq": 1, "cols": 80, "rows": 24,
+                                     "data": Data("healed".utf8).base64EncodedString()], channel: "term:host-starting")
             }
             return [:] as [String: Any]
         }
-        missing.retry(); await settle()
-        check(missing.phase == .live, "Retry did not recover the timed-out terminal")
-        missing.stop(); await settle()
+        starting.start(); starting.updateFit(TerminalGrid(cols: 80, rows: 24))
+        let healDeadline = ContinuousClock.now + .seconds(5)
+        while starting.phase == .connecting, ContinuousClock.now < healDeadline {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        check(starting.phase == .live && attachAttempts == 3,
+              "terminal attach did not self-heal after host-starting errors")
+        starting.stop(); await settle()
 
         let delayed = RemoteClient(), resyncGate = Gate()
         let stopped = RemoteTerminalStream(sessionKey: "late-frame", client: delayed)

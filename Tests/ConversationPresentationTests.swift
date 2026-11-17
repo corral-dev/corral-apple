@@ -146,4 +146,33 @@ final class ConversationPresentationTests: XCTestCase {
         for _ in 0..<2_000 where client.diagnosticState.subscriptions > 0 { await Task.yield() }
         XCTAssertEqual(client.diagnosticState.subscriptions, 0)
     }
+
+    func testInitialWatchSelfHealsOnHostStartingError() async throws {
+        let client = client(), owner = ConversationPresentation()
+        defer { owner.dismiss(); client.disconnect() }
+        let store = present(owner, client: client, key: "codex:starting")
+        let firstWatch = try await request(WireProtocol.mSessionWatch, on: client)
+        client.dispatch([
+            "t": "res",
+            "id": firstWatch,
+            "ok": false,
+            "e": [
+                "code": "unavailable",
+                "message": "The development machine is still starting up. Please try again in a moment",
+            ],
+        ])
+        for _ in 0..<40 { await Task.yield() }
+        XCTAssertNil(store.loadError, "Recoverable startup errors must not surface a load failure screen")
+        XCTAssertTrue(store.isLoading)
+
+        let deadline = ContinuousClock.now + .seconds(2)
+        while !client.pendingRequests.values.contains(where: { $0.method == WireProtocol.mSessionWatch }),
+              ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try await finishSnapshot(on: client, text: "Recovered after host startup")
+        await waitForLoaded(store)
+        XCTAssertNil(store.loadError)
+        XCTAssertEqual(store.messages.last?.text, "Recovered after host startup")
+    }
 }

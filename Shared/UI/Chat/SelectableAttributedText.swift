@@ -614,16 +614,32 @@ private struct MacSelectableTextView: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
         #if DEBUG
         MacTextRowSwitchCounters.makes &+= 1
+        MacFirstScrollAttribution.makeCalls += 1
+        let makeStart = DispatchTime.now().uptimeNanoseconds
         #endif
         if measurementOnly { return NSView() }
         let container = selectionID.flatMap { document?.container(for: $0) }
         let storage = container == nil ? NSTextStorage() : (document?.storage ?? NSTextStorage())
         context.coordinator.textStorage = storage
+        #if DEBUG
+        let textView = macAttr(&MacFirstScrollAttribution.textViewMs) {
+            makeConfiguredTextView(storage: storage, container: container)
+        }
+        #else
         let textView = makeConfiguredTextView(storage: storage, container: container)
+        #endif
         guard usesScrollWrapper else {
             let mount = MacMessageTextMount()
+            #if DEBUG
+            macAttr(&MacFirstScrollAttribution.attachMs) { mount.attach(textView) }
+            macAttr(&MacFirstScrollAttribution.applyMs) {
+                apply(to: textView, scroll: nil, coordinator: context.coordinator)
+            }
+            MacFirstScrollAttribution.makeMs += Double(DispatchTime.now().uptimeNanoseconds - makeStart) / 1_000_000
+            #else
             mount.attach(textView)
             apply(to: textView, scroll: nil, coordinator: context.coordinator)
+            #endif
             return mount
         }
         let scroll = FadingTextScrollView()
@@ -644,6 +660,10 @@ private struct MacSelectableTextView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
+        #if DEBUG
+        MacFirstScrollAttribution.updateCalls += 1
+        let updateStart = DispatchTime.now().uptimeNanoseconds
+        #endif
         if let scroll = nsView as? FadingTextScrollView {
             guard let textView = scroll.documentView as? NSTextView else { return }
             apply(to: textView, scroll: scroll, coordinator: context.coordinator)
@@ -651,6 +671,9 @@ private struct MacSelectableTextView: NSViewRepresentable {
                   let textView = mount.textView, textView.superview === mount {
             apply(to: textView, scroll: nil, coordinator: context.coordinator)
         }
+        #if DEBUG
+        MacFirstScrollAttribution.updateMs += Double(DispatchTime.now().uptimeNanoseconds - updateStart) / 1_000_000
+        #endif
     }
 
     static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
@@ -676,6 +699,10 @@ private struct MacSelectableTextView: NSViewRepresentable {
         let ns = converted(coordinator)
         let hasPrecedingBlock = selectionID.map { document?.hasPrecedingBlock($0) == true } ?? false
         let hasFollowingBlock = selectionID.map { document?.hasFollowingBlock($0) == true } ?? false
+        // The document owns the separators it inserts around this block; the
+        // measurement reuses those instances so a changed context cannot leave
+        // the row height behind the drawn height.
+        let context = selectionID.flatMap { document?.boundaryContext(for: $0) } ?? (before: nil, after: nil)
         if coordinator.hasPrecedingBlock != hasPrecedingBlock || coordinator.hasFollowingBlock != hasFollowingBlock {
             coordinator.hasPrecedingBlock = hasPrecedingBlock
             coordinator.hasFollowingBlock = hasFollowingBlock
@@ -686,8 +713,16 @@ private struct MacSelectableTextView: NSViewRepresentable {
             natural = cached
         } else {
             let measurement = selectionID.flatMap { document?.measurement(for: $0) } ?? coordinator.measurement
+            #if DEBUG
+            natural = macAttr(&MacFirstScrollAttribution.measureMs) {
+                measurement.size(for: ns, font: font, width: width,
+                                 before: context.before, after: context.after)
+            }
+            MacFirstScrollAttribution.measureCalls += 1
+            #else
             natural = measurement.size(for: ns, font: font, width: width,
-                                       hasPrecedingBlock: hasPrecedingBlock, hasFollowingBlock: hasFollowingBlock)
+                                       before: context.before, after: context.after)
+            #endif
             if coordinator.sizes.count >= 24 { coordinator.sizes.removeAll() }
             coordinator.sizes[width] = natural
         }
@@ -775,11 +810,18 @@ private struct MacSelectableTextView: NSViewRepresentable {
     }
 
     private func converted(_ coordinator: Coordinator) -> NSAttributedString {
+        #if DEBUG
+        MacFirstScrollAttribution.convertedCalls += 1
+        let convertedStart = DispatchTime.now().uptimeNanoseconds
+        #endif
         if let selectionID, let text = document?.text(for: selectionID) {
             if coordinator.converted !== text {
                 coordinator.converted = text
                 coordinator.sizes.removeAll()
             }
+            #if DEBUG
+            MacFirstScrollAttribution.convertedMs += Double(DispatchTime.now().uptimeNanoseconds - convertedStart) / 1_000_000
+            #endif
             return text
         }
         let source = Source(attributed: attributed, fontSize: font.pointSize, foreground: foreground,
@@ -792,6 +834,9 @@ private struct MacSelectableTextView: NSViewRepresentable {
         coordinator.source = source
         coordinator.converted = ns
         coordinator.sizes.removeAll()
+        #if DEBUG
+        MacFirstScrollAttribution.convertedMs += Double(DispatchTime.now().uptimeNanoseconds - convertedStart) / 1_000_000
+        #endif
         return ns
     }
 
@@ -799,148 +844,54 @@ private struct MacSelectableTextView: NSViewRepresentable {
 
 /// Shared conversion for measurement, drawing and the conversation text network.
 private enum MacMessageTextRenderer {
+    /// Cache key for one resolved display font: the baked source descriptor
+    /// plus the exact target size. The size is recomputed with identical inputs
+    /// for identical runs, so equal keys mean equal fonts.
+    private struct ResolvedFontKey: Hashable {
+        let descriptor: ObjectIdentifier
+        let sizeBits: UInt
+    }
+
     static func convert(_ attributed: AttributedString, font: NSFont, foreground: NSColor,
                         workingDirectory: String? = nil) -> NSAttributedString {
         let mutable = NSMutableAttributedString(attributedString: NSAttributedString(attributed))
         let full = NSRange(location: 0, length: mutable.length)
         guard full.length > 0 else { return mutable }
         let reference = ChatMarkdown.referenceBodyPointSize
+        // Collect first, apply after: reaching the text while enumerating it is
+        // not supported, and replacing each run's whole attribute dictionary
+        // cost more than setting the two attributes this pass owns (0.3 ms vs
+        // 0.1 ms per message, 120-message probe 2026-11-16). The result is the
+        // same attributes: the font rescaled from the reference size and a
+        // foreground only where the run has none.
+        // Runs share a handful of sizes (body, code, headers): resolve one NSFont
+        // per (descriptor, size) instead of one per run. A hit is the same font
+        // a fresh creation would return, so the stored attributes are unchanged.
+        var fontCache: [ResolvedFontKey: NSFont] = [:]
+        var fonts: [(NSRange, NSFont)] = []
+        var colorless: [NSRange] = []
         mutable.enumerateAttributes(in: full, options: []) { attrs, range, _ in
-            var next = attrs
             if let existing = attrs[.font] as? NSFont {
-                let ratio = existing.pointSize / max(reference, 1)
-                next[.font] = NSFont(descriptor: existing.fontDescriptor, size: font.pointSize * ratio) ?? font
+                let descriptor = existing.fontDescriptor
+                let size = font.pointSize * (existing.pointSize / max(reference, 1))
+                let key = ResolvedFontKey(descriptor: ObjectIdentifier(descriptor), sizeBits: size.bitPattern)
+                if let hit = fontCache[key] {
+                    fonts.append((range, hit))
+                } else {
+                    let resolved = NSFont(descriptor: descriptor, size: size) ?? font
+                    fontCache[key] = resolved
+                    fonts.append((range, resolved))
+                }
             } else {
-                next[.font] = font
+                fonts.append((range, font))
             }
-            if attrs[.foregroundColor] == nil {
-                next[.foregroundColor] = foreground
-            }
-            mutable.setAttributes(next, range: range)
+            if attrs[.foregroundColor] == nil { colorless.append(range) }
         }
+        for (range, resolved) in fonts { mutable.addAttribute(.font, value: resolved, range: range) }
+        for range in colorless { mutable.addAttribute(.foregroundColor, value: foreground, range: range) }
         MacMarkdownTable.apply(to: mutable, source: attributed, bodyFont: font)
         MacPathLinks.apply(to: mutable, workingDirectory: workingDirectory)
         return mutable
-    }
-}
-
-/// Path mentions in message text become Finder links (owner request
-/// 2026-11-08: clicking a path opens the folder it is in). Covers absolute,
-/// `~/` and project-relative paths (resolved against the session directory),
-/// with `:line[:column]` or `#Lline` suffixes. A path is linked only when it
-/// exists on this Mac, or when its parent folder does (a deleted file still
-/// opens its folder); explicit Markdown links win. The click is handled by
-/// `MacPathLinks.open`: a folder opens, a file is revealed selected in Finder.
-/// iOS never gets these links (paths belong to the dev machine).
-enum MacPathLinks {
-    private static let pathRegex: NSRegularExpression? = try? NSRegularExpression(
-        pattern: "(?<![\\w/.~:@-])(?:~?/[\\w\\-.+@=%,]+(?:/[\\w\\-.+@=%,]*)*|(?:\\.{1,2}/)?[\\w\\-.+@]+(?:/[\\w\\-.+@]+)+/?|[\\w\\-+@]+\\.[A-Za-z][A-Za-z0-9]{0,7})(?:(?::\\d+){1,2}|#L\\d+(?:-L?\\d+)?)?",
-        options: []
-    )
-    private static let locationSuffix: NSRegularExpression? = try? NSRegularExpression(
-        pattern: "(?:(?::\\d+){1,2}|#L\\d+(?:-L?\\d+)?)$", options: []
-    )
-    private static let spaceTokenCharacters = CharacterSet(
-        charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.+@=%,/"
-    )
-
-    static func apply(to mutable: NSMutableAttributedString, workingDirectory: String?) {
-        guard let regex = pathRegex else { return }
-        let string = mutable.string as NSString
-        let full = NSRange(location: 0, length: string.length)
-        guard full.length > 0, full.length < 32_768 else { return }
-        let matches = regex.matches(in: mutable.string, options: [], range: full)
-        guard !matches.isEmpty else { return }
-        let base = workingDirectory.flatMap { $0.isEmpty ? nil : ($0 as NSString).expandingTildeInPath }
-        // Walk backwards so earlier ranges stay valid as we add attributes.
-        for match in matches.reversed() {
-            var range = trimmed(match.range, in: string)
-            guard range.length > 2 else { continue }
-            var hasLink = false
-            mutable.enumerateAttribute(.link, in: range, options: []) { value, _, stop in
-                if value != nil { hasLink = true; stop.pointee = true }
-            }
-            if hasLink { continue }
-            range = extendOverSpaces(range, in: string, base: base)
-            guard let url = target(for: string.substring(with: range), base: base) else { continue }
-            mutable.addAttribute(.link, value: url, range: range)
-        }
-    }
-
-    /// Opens a path link in Finder; false for any other link.
-    @discardableResult
-    static func open(_ link: Any) -> Bool {
-        guard let url = link as? URL ?? (link as? String).flatMap(URL.init(string:)), url.isFileURL else {
-            return false
-        }
-        var isDirectory: ObjCBool = false
-        if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), !isDirectory.boolValue {
-            NSWorkspace.shared.activateFileViewerSelecting([url])
-        } else {
-            NSWorkspace.shared.open(url)
-        }
-        return true
-    }
-
-    /// The file URL a mention points to: the path itself when it exists,
-    /// otherwise its existing parent folder.
-    static func target(for raw: String, base: String?) -> URL? {
-        var path = raw
-        if let suffix = locationSuffix?.firstMatch(in: path, range: NSRange(location: 0, length: (path as NSString).length)) {
-            path = (path as NSString).substring(to: suffix.range.location)
-        }
-        guard let resolved = resolve(path, base: base) else { return nil }
-        let fm = FileManager.default
-        var isDirectory: ObjCBool = false
-        if fm.fileExists(atPath: resolved, isDirectory: &isDirectory) {
-            return URL(fileURLWithPath: resolved, isDirectory: isDirectory.boolValue)
-        }
-        // Only an explicit path (with a folder part) falls back to its folder.
-        guard path.contains("/") else { return nil }
-        let parent = (resolved as NSString).deletingLastPathComponent
-        guard !parent.isEmpty, parent != "/", fm.fileExists(atPath: parent, isDirectory: &isDirectory),
-              isDirectory.boolValue else { return nil }
-        return URL(fileURLWithPath: parent, isDirectory: true)
-    }
-
-    private static func resolve(_ path: String, base: String?) -> String? {
-        if path.hasPrefix("~") { return (path as NSString).expandingTildeInPath }
-        if path.hasPrefix("/") { return path }
-        guard let base else { return nil }
-        return ((base as NSString).appendingPathComponent(path) as NSString).standardizingPath
-    }
-
-    /// Drop sentence punctuation the chat text leaves after a path.
-    private static func trimmed(_ range: NSRange, in string: NSString) -> NSRange {
-        var range = range
-        while range.length > 1 {
-            let last = string.character(at: NSMaxRange(range) - 1)
-            guard let scalar = UnicodeScalar(last), ".,;!?)]}'\"".unicodeScalars.contains(scalar) else { break }
-            range.length -= 1
-        }
-        return range
-    }
-
-    /// Paths with spaces ("My Documents"): the regex stops at the first space,
-    /// so extend over ` + token` while the extended path exists on disk.
-    private static func extendOverSpaces(_ range: NSRange, in string: NSString, base: String?) -> NSRange {
-        var range = range
-        let total = string.length
-        while NSMaxRange(range) < total {
-            let cursor = NSMaxRange(range)
-            guard string.character(at: cursor) == 32 /* space */ else { break }
-            var next = cursor + 1
-            while next < total && string.character(at: next) == 32 { next += 1 }
-            var end = next
-            while end < total, let scalar = UnicodeScalar(string.character(at: end)),
-                  spaceTokenCharacters.contains(scalar) { end += 1 }
-            guard end > next else { break }
-            let candidate = string.substring(with: NSRange(location: range.location, length: end - range.location))
-            guard let resolved = resolve(candidate, base: base),
-                  FileManager.default.fileExists(atPath: resolved) else { break }
-            range.length = end - range.location
-        }
-        return range
     }
 }
 

@@ -8,6 +8,16 @@ struct SessionIdentityBackground: View {
     @Environment(\.colorSchemeContrast) private var contrast
     let title: String
 
+    /// Owner request 2026-11-16: the balanced 0.10 (light) / 0.14 (dark) mark was
+    /// too faint to recognize at a glance. A bright emoji fades into a white pane
+    /// faster than into a dark one, so the light value is higher for the same
+    /// seen weight. Increased contrast keeps the decoration below content ink at
+    /// roughly half weight instead of removing it.
+    private var markOpacity: Double {
+        if contrast == .increased { return colorScheme == .dark ? 0.12 : 0.16 }
+        return colorScheme == .dark ? 0.22 : 0.30
+    }
+
     var body: some View {
         GeometryReader { geometry in
             if let icon = SessionPresentation.titleIcon(in: title) {
@@ -19,7 +29,7 @@ struct SessionIdentityBackground: View {
                     .font(.system(size: max(1, side * 0.82)))
                     .lineLimit(1)
                     .frame(width: side, height: side)
-                    .opacity(contrast == .increased ? 0.05 : (colorScheme == .dark ? 0.14 : 0.10))
+                    .opacity(markOpacity)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                     .padding(inset)
             }

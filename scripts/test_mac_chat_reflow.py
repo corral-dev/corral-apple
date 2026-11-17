@@ -17,7 +17,7 @@ SOURCES = [
     "Shared/UI/Platform/PlatformSupport.swift", "Shared/UI/Platform/NativeOverlayScrollers.swift",
     "Shared/UI/Platform/MacSessionContextMenu.swift",
     "Shared/Core/Conversation/ChatHistoryPullState.swift", "Shared/UI/Chat/ChatScrollView.swift",
-    "Shared/UI/Chat/MacConversationTextDocument.swift", "Shared/UI/Chat/SelectableAttributedText.swift",
+    "Shared/UI/Chat/MacPathLinks.swift", "Shared/UI/Chat/MacConversationTextDocument.swift", "Shared/UI/Chat/SelectableAttributedText.swift",
     "Shared/UI/Chat/ToolActivityView.swift", "scripts/mac-chat-reflow/Support.swift",
     "scripts/mac-chat-reflow/Probe.swift",
 ]
