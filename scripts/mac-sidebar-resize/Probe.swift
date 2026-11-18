@@ -74,34 +74,34 @@ private struct SplitFixture: View {
         let document = MacConversationTextDocument(), owner = NSObject()
         let font = NSFont.systemFont(ofSize: 13)
         let style = MacConversationTextDocument.Style(font: font, foreground: .labelColor, userForeground: .labelColor)
-        let sources = (1...40).map { MacConversationTextDocument.Source(id: $0, text: "Message \($0)", isUser: false) }
+        var sources = (1...40).map { MacConversationTextDocument.Source(id: $0, text: "Message \($0)", isUser: false) }
         func update(_ sources: [MacConversationTextDocument.Source]) {
             document.update(identity: ObjectIdentifier(owner), sources: sources, style: style) {
                 NSAttributedString(string: $0.text, attributes: [.font: font])
             }
         }
         update(sources)
-        var first = document.measurement(for: 1)
-        weak let retired = first
-        precondition(first === document.measurement(for: 1), "Lazy reattachment discarded message measurement")
-        let short = first!.size(for: document.text(for: 1)!, font: font, width: 120)
-        let longText = NSAttributedString(string: String(repeating: "中文 streaming text. ", count: 120), attributes: [.font: font])
-        let long = first!.size(for: longText, font: font, width: 120)
+        let firstContainer = document.container(for: 1)
+        precondition(firstContainer === document.container(for: 1), "Lazy reattachment discarded message container")
+        let short = document.size(for: 1, proposalWidth: 120, font: font)!
+        sources[0] = MacConversationTextDocument.Source(id: 1, text: String(repeating: "中文 streaming text. ", count: 120), isUser: false)
+        update(sources)
+        let long = document.size(for: 1, proposalWidth: 120, font: font)!
         precondition(long.height > short.height, "Changed source reused a stale size")
-        let narrow = first!.size(for: longText, font: font, width: 80)
+        let narrow = document.size(for: 1, proposalWidth: 80, font: font)!
         precondition(narrow.height > long.height, "Width reflow reused stale geometry")
-        precondition(first!.size(for: longText, font: font, width: 120) == long, "Returning width changed text geometry")
-        first = nil
-        for id in 2...40 { _ = document.measurement(for: id) }
-        precondition(retired == nil, "Detached measurements grew beyond the recent working set")
-        weak let removed = document.measurement(for: 40)
-        update(Array(sources.prefix(2)))
-        precondition(removed == nil, "Removed history retained detached text layout")
+        precondition(document.size(for: 1, proposalWidth: 120, font: font) == long, "Returning width changed text geometry")
+        weak var removed: NSTextStorage?
+        autoreleasepool {
+            removed = document.storage(for: 40)
+            update(Array(sources.prefix(2)))
+        }
+        precondition(removed == nil, "Removed history retained text storage")
         let replacement = MacConversationTextDocument()
         replacement.update(identity: ObjectIdentifier(owner), sources: sources, style: style) {
             NSAttributedString(string: $0.text, attributes: [.font: font])
         }
-        precondition(document.measurement(for: 1) !== replacement.measurement(for: 1), "Panes shared measurement ownership")
+        precondition(document.container(for: 1) !== replacement.container(for: 1), "Panes shared container ownership")
     }
 
     @MainActor static func measure(messages count: Int, panes: Int, baseline: Bool) -> [String: Any] {

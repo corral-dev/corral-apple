@@ -258,12 +258,11 @@ private struct NativeChatScrollView<Header: View, Content: View>: View {
         #endif
         #if os(macOS)
         .onReceive(NotificationCenter.default.publisher(for: NSTextView.didChangeSelectionNotification)) { notification in
-            guard let view = notification.object as? NSTextView,
+            guard let view = notification.object as? MacDirectMessageTextView,
                   let document = selectionDocument,
-                  view.layoutManager === document.layout,
-                  document.layout.textContainers.compactMap(\.textView).contains(where: {
-                      $0.window?.firstResponder === $0
-                  }),
+                  view.document === document,
+                  let window = view.window,
+                  document.isActivelyFocused(in: window),
                   followsLatest, view.selectedRange().length > 0 else { return }
             followsLatest = false
             // Selecting is a reading interaction: release the previous explicit

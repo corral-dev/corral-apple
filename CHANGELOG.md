@@ -6,6 +6,18 @@ next version's section. A `Release: minor` or `Release: major` line requests a
 larger version step; `Release: hold <reason>` keeps the changes unreleased until
 the named acceptance is done.
 
+## Mac 0.3.178 (191) / iPhone 1.0.220 (234)
+
+### English
+
+- Mac: replaced the conversation-wide shared TextKit buffer with independent per-message TextKit 1 layout and single-authority height measurement, preventing half-line horizontal clipping at the bottom of replies above agent activity pills while preserving cross-message selection, Copy and live zoom/width reflow.
+- iPhone & iPad: recoverable agent/project terminal states now keep waiting and automatically retry with capped backoff instead of showing a Retry failure screen, and the session watermark emoji uses higher contrast (0.30 alpha light, 0.22 dark).
+
+### 简体中文
+
+- Mac：用每条消息独立的 TextKit 1 排版与单源测高取代整段对话拼接的共享文本容器，消除回复末尾在助手活动胶囊上方被横向削掉半行的问题，同时保留跨消息划选、复制与字号/宽度实时重排。
+- iPhone 与 iPad：助手终端与项目终端遇到可自愈异常时保留等待状态并按封顶退避自动重试，不再弹出带「重试」按钮的失败页；会话背景 emoji 水印提高辨识度（浅色 0.30、深色 0.22 不透明度）。
+
 ## Mac 0.3.176 (189)
 
 Not published. Its changes ship in Mac 0.3.177.

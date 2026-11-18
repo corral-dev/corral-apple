@@ -224,8 +224,6 @@ struct MacConversationTable: NSViewRepresentable {
             var value: MacConversationRowValue
             var mediaRevision: Int = 0
             var isFirst: Bool
-            var hasPrecedingTextBlock: Bool
-            var hasFollowingTextBlock: Bool
             var render: MacConversationRenderKey
         }
 
@@ -746,16 +744,7 @@ struct MacConversationTable: NSViewRepresentable {
 
         private func contentKey(for row: MacConversationRow, isFirst: Bool) -> ContentKey? {
             guard let renderKey else { return nil }
-            let document = environment.macConversationTextDocument
-            let textID: Int?
-            if case .timeline(.message(let message), _, _) = row.value {
-                textID = message.seq
-            } else {
-                textID = nil
-            }
             return ContentKey(value: row.value, mediaRevision: row.mediaRevision, isFirst: isFirst,
-                              hasPrecedingTextBlock: textID.map { document?.hasPrecedingBlock($0) == true } ?? false,
-                              hasFollowingTextBlock: textID.map { document?.hasFollowingBlock($0) == true } ?? false,
                               render: renderKey)
         }
 

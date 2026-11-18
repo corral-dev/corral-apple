@@ -382,12 +382,7 @@ private struct Fixture {
         window.close()
     }
 
-    /// Feasibility + cost of measuring every row from the drawing network
-    /// itself: one shared storage/layout manager, one container per message, no
-    /// mounted text view. This is the candidate replacement for the detached
-    /// measurement engine, so it has to answer three questions: does an
-    /// unmounted container lay out at all, does each container own its text, and
-    /// what does a full width reflow cost.
+    /// Measures every block directly through its single-authority container.
     @MainActor
     static func liveNetworkHeights(size: Int) {
         let font = NSFont.systemFont(ofSize: 13)
@@ -403,36 +398,28 @@ private struct Fixture {
         document.update(identity: identity, sources: sources, style: style) { source in
             render(source.text, font: font)
         }
-        let containers = document.layout.textContainers
-        print("live network: \(containers.count) containers for \(sources.count) messages")
+        print("single-authority blocks: \(document.blockCount) for \(sources.count) messages")
         fflush(stdout)
 
-        for contiguous in [true, false] {
-            document.layout.allowsNonContiguousLayout = contiguous
-            var samples: [Double] = []
-            var heights: [CGFloat] = []
-            var empty = 0
-            for index in 0..<6 {
-                let width = 900 - CGFloat(index) * 4
-                for container in containers {
-                    container.size = NSSize(width: width, height: 100_000)
+        var samples: [Double] = []
+        var heights: [CGFloat] = []
+        var empty = 0
+        for index in 0..<6 {
+            let width = 900 - CGFloat(index) * 4
+            samples.append(measure {
+                var total: CGFloat = 0
+                for source in sources {
+                    let measured = document.size(for: source.id, proposalWidth: width, font: font) ?? .zero
+                    if measured.height <= 0 { empty += 1 }
+                    total += ceil(measured.height)
                 }
-                samples.append(measure {
-                    var total: CGFloat = 0
-                    for container in containers {
-                        document.layout.ensureLayout(for: container)
-                        let used = document.layout.usedRect(for: container)
-                        if used.maxY <= 0 { empty += 1 }
-                        total += ceil(used.maxY)
-                    }
-                    heights = [total]
-                })
-            }
-            report("drawing-network heights, \(containers.count) rows, contiguous=\(contiguous)", samples: samples)
-            print(String(format: "  total text height %.0f pt, empty containers over 6 widths: %d",
-                         heights.first ?? 0, empty))
-            fflush(stdout)
+                heights = [total]
+            })
         }
+        report("single-authority heights, \(sources.count) rows", samples: samples)
+        print(String(format: "  total text height %.0f pt, empty blocks over 6 widths: %d",
+                     heights.first ?? 0, empty))
+        fflush(stdout)
     }
 
     /// The archived clip and list-indent defects were boundary-context parity
@@ -478,10 +465,8 @@ private struct Fixture {
         precondition(failures.isEmpty, "boundary-context parity regressed")
     }
 
-    /// Proves the boundary context is load-bearing and that the row path uses
-    /// the same one the drawing container gets: measuring a middle message with
-    /// its real separators must match the drawn container, and dropping them
-    /// must measurably disagree.
+    /// Verifies that the single-authority block measurement matches the mounted
+    /// drawing container identically for bold leads and headings.
     @MainActor
     static func contextSensitivity() {
         let font = NSFont.systemFont(ofSize: 14)
@@ -490,27 +475,21 @@ private struct Fixture {
         let document = MacConversationTextDocument()
         let sources = [
             MacConversationTextDocument.Source(id: 1, text: "前一条消息。", isUser: true),
-            // Bold lead: the shape that TextKit gives `paragraphSpacingBefore`.
             MacConversationTextDocument.Source(id: 2, text: "**Bold lead paragraph.**\n\n正文，必须完整显示到最后一行。", isUser: false),
             MacConversationTextDocument.Source(id: 3, text: "后一条消息。", isUser: true),
         ]
         document.update(identity: ObjectIdentifier(NSObject()), sources: sources, style: style) { source in
             render(source.text, font: font)
         }
-        let container = document.layout.textContainers[1]
-        container.size = NSSize(width: 594, height: 100_000)
-        document.layout.ensureLayout(for: container)
-        let drawn = ceil(document.layout.usedRect(for: container).maxY)
-        let context = document.boundaryContext(for: 2)
-        let text = document.text(for: 2) ?? NSAttributedString(string: "")
-        let measurement = document.measurement(for: 2) ?? MacTextMeasurement()
-        let withContext = ceil(measurement.size(for: text, font: font, width: 594,
-                                                before: context.before, after: context.after).height)
-        let withoutContext = ceil(measurement.size(for: text, font: font, width: 594).height)
-        print("  boundary context: drawn \(Int(drawn)) pt, measured \(Int(withContext)) pt, without context \(Int(withoutContext)) pt")
+        let measured = ceil(document.size(for: 2, proposalWidth: 594, font: font)?.height ?? 0)
+        guard let layout = document.layout(for: 2), let container = document.container(for: 2) else {
+            preconditionFailure("missing block engine for message 2")
+        }
+        layout.ensureLayout(for: container)
+        let drawn = ceil(layout.usedRect(for: container).maxY)
+        print("  single-authority check: drawn \(Int(drawn)) pt, measured \(Int(measured)) pt")
         fflush(stdout)
-        precondition(abs(drawn - withContext) <= 1, "row measurement no longer matches the drawn container")
-        precondition(withoutContext != withContext, "boundary context is no longer load-bearing; the fixture stopped covering the clip")
+        precondition(abs(drawn - measured) <= 1, "single-authority measurement disagrees with drawn container")
     }
 
     /// Text-size change: every row re-renders and re-measures.
@@ -570,7 +549,6 @@ private struct Fixture {
         let messages = Fixture.messages(count: size)
         let owner = NSObject(), identity = ObjectIdentifier(owner)
         let document = MacConversationTextDocument()
-        document.layout.allowsNonContiguousLayout = nonContiguous
         let label = "open size=\(size) nonContiguous=\(nonContiguous)"
 
         // The shared network renders every message before the table exists.
@@ -917,7 +895,7 @@ private struct Fixture {
         let attributed = messages.map { ChatMarkdown.attributed($0.text ?? "") }
         var cached: [Double] = [], bridging: [Double] = [], fonts: [Double] = []
         var tables: [Double] = [], paths: [Double] = [], layouts: [Double] = []
-        var measurement: MacTextMeasurement?
+        var engine: MacSingleTextEngine?
         for (index, message) in messages.enumerated() {
             let source = attributed[index]
             cached.append(measure { _ = ChatMarkdown.attributed(message.text ?? "") })
@@ -938,9 +916,12 @@ private struct Fixture {
             })
             tables.append(measure { MacMarkdownTable.apply(to: bridged, source: source, bodyFont: font) })
             paths.append(measure { MacPathLinks.apply(to: bridged, workingDirectory: nil) })
-            let measurer = measurement ?? MacTextMeasurement()
-            measurement = measurer
-            layouts.append(measure { _ = measurer.size(for: bridged, font: font, width: 760) })
+            let measurer = engine ?? MacSingleTextEngine()
+            engine = measurer
+            layouts.append(measure {
+                measurer.setText(bridged, font: font)
+                _ = measurer.size(forProposalWidth: 760, font: font)
+            })
         }
         report("component \(size) messages: ChatMarkdown.attributed (cached)", samples: cached)
         report("component \(size) messages: NSAttributedString bridge", samples: bridging)
@@ -1166,9 +1147,12 @@ private struct Fixture {
             let ns = render(text, font: font)
             var samples: [Double] = []
             for index in 0..<20 {
-                // A fresh measurer per row, as the table's own open pass does.
-                let measurer = MacTextMeasurement()
-                samples.append(measure { _ = measurer.size(for: ns, font: font, width: 700 - CGFloat(index % 3)) })
+                // A fresh engine per row, as the table's own open pass does.
+                let measurer = MacSingleTextEngine()
+                samples.append(measure {
+                    measurer.setText(ns, font: font)
+                    _ = measurer.size(forProposalWidth: 700 - CGFloat(index % 3), font: font)
+                })
             }
             report("row text layout \(label) (\(ns.length) chars)", samples: samples)
         }

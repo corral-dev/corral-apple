@@ -85,7 +85,7 @@ enum MacChatMediaInspection {
             loader.diagrams.inspection = ChatDiagramInspection(drawing: drawing, source: block.original)
         }
         try? await Task.sleep(for: .seconds(2))
-        let native = document.storage
+        let native = document.combinedAttributedText()
         var attachments: [ChatDiagramAttachment] = []
         native.enumerateAttribute(.attachment, in: NSRange(location: 0, length: native.length)) { value, _, _ in
             if let attachment = value as? ChatDiagramAttachment { attachments.append(attachment) }
@@ -259,7 +259,8 @@ enum MacChatMediaInspection {
             self.window = window
             try? await Task.sleep(for: .seconds(2))
             var imageCount = 0
-            document.storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: document.storage.length)) { value, range, _ in
+            let native = document.combinedAttributedText()
+            native.enumerateAttribute(.attachment, in: NSRange(location: 0, length: native.length)) { value, range, _ in
                 if let image = value as? ChatImageAttachment {
                     imageCount += 1
                     report["imageAttachment"] = ["range": NSStringFromRange(range), "bounds": NSStringFromRect(image.bounds), "placeholder": image.isPlaceholder]

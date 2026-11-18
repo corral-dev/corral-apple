@@ -550,12 +550,9 @@ private struct MacSelectableTextView: NSViewRepresentable {
     /// width), so both are cached until the text or its styling changes.
     final class Coordinator {
         var appliedText: NSAttributedString?
-        var hasPrecedingBlock = false
-        var hasFollowingBlock = false
         var source: Source?
         var converted: NSAttributedString?
-        var sizes: [CGFloat: CGSize] = [:]
-        lazy var measurement = MacTextMeasurement()
+        lazy var standaloneEngine = MacSingleTextEngine()
         /// Keep the chosen native text network alive through representable updates.
         var textStorage: NSTextStorage?
     }
@@ -574,18 +571,17 @@ private struct MacSelectableTextView: NSViewRepresentable {
     /// rows keep the fading scroll container.
     private var usesScrollWrapper: Bool { maxHeight != nil }
 
-    private func makeConfiguredTextView(storage: NSTextStorage, container: NSTextContainer?) -> NSTextView {
+    private func makeConfiguredTextView(coordinator: Coordinator) -> NSTextView {
         let textView: NSTextView
-        if let selectionID, let existing = document?.textView(for: selectionID) {
+        if !usesScrollWrapper, let selectionID, let existing = document?.textView(for: selectionID) {
             textView = existing
         } else if usesScrollWrapper {
-            textView = Self.makeTextView(storage: storage)
+            textView = MacMessageTextView(frame: .zero, textContainer: coordinator.standaloneEngine.container)
         } else {
-            textView = Self.makeTextView(storage: storage, direct: true)
+            textView = MacDirectMessageTextView(frame: .zero, textContainer: coordinator.standaloneEngine.container)
         }
-        // These flags are shared across the conversation's native text network.
-        // Reassigning selectability while reattaching a lazy row can lay out all
-        // preceding containers even when the value is already correct.
+        // These flags are shared across the message text view. Reassigning them
+        // needlessly on reuse can trigger layout work even when already set.
         if textView.isEditable { textView.isEditable = false }
         if !textView.isSelectable { textView.isSelectable = true }
         if textView.drawsBackground { textView.drawsBackground = false }
@@ -595,15 +591,12 @@ private struct MacSelectableTextView: NSViewRepresentable {
             if !textView.isVerticallyResizable { textView.isVerticallyResizable = true }
             if textView.isHorizontallyResizable { textView.isHorizontallyResizable = false }
         } else {
-            // SwiftUI owns a direct row's frame (measured detached below);
-            // self-resizing would fight that layout on every reflow.
+            // SwiftUI owns a direct row's frame (measured through the block's
+            // single TextKit engine); self-resizing would fight that layout.
             if textView.isVerticallyResizable { textView.isVerticallyResizable = false }
             if textView.isHorizontallyResizable { textView.isHorizontallyResizable = false }
         }
-        let maximumSize = NSSize(
-            width: CGFloat.greatestFiniteMagnitude,
-            height: container == nil ? .greatestFiniteMagnitude : MacConversationTextDocument.initialCanvasHeight
-        )
+        let maximumSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         if textView.maxSize != maximumSize { textView.maxSize = maximumSize }
         let resizing: NSView.AutoresizingMask = usesScrollWrapper ? [.width] : []
         if textView.autoresizingMask != resizing { textView.autoresizingMask = resizing }
@@ -618,15 +611,19 @@ private struct MacSelectableTextView: NSViewRepresentable {
         let makeStart = DispatchTime.now().uptimeNanoseconds
         #endif
         if measurementOnly { return NSView() }
-        let container = selectionID.flatMap { document?.container(for: $0) }
-        let storage = container == nil ? NSTextStorage() : (document?.storage ?? NSTextStorage())
+        let storage: NSTextStorage
+        if !usesScrollWrapper, let selectionID, let docStorage = document?.storage(for: selectionID) {
+            storage = docStorage
+        } else {
+            storage = context.coordinator.standaloneEngine.storage
+        }
         context.coordinator.textStorage = storage
         #if DEBUG
         let textView = macAttr(&MacFirstScrollAttribution.textViewMs) {
-            makeConfiguredTextView(storage: storage, container: container)
+            makeConfiguredTextView(coordinator: context.coordinator)
         }
         #else
-        let textView = makeConfiguredTextView(storage: storage, container: container)
+        let textView = makeConfiguredTextView(coordinator: context.coordinator)
         #endif
         guard usesScrollWrapper else {
             let mount = MacMessageTextMount()
@@ -650,9 +647,6 @@ private struct MacSelectableTextView: NSViewRepresentable {
         scroll.autohidesScrollers = true
         scroll.scrollerStyle = .overlay
         scroll.verticalScrollElasticity = .none
-        // Reattaching a retained text view to a zero-sized clip view shrinks
-        // its width-tracking container to zero and invalidates shared glyphs.
-        // Preserve native geometry until SwiftUI supplies the actual row frame.
         scroll.frame.size = textView.frame.size
         scroll.documentView = textView
         apply(to: textView, scroll: scroll, coordinator: context.coordinator)
@@ -691,53 +685,42 @@ private struct MacSelectableTextView: NSViewRepresentable {
         coordinator.textStorage = nil
     }
 
-    /// Side-effect free measurement with a detached layout; the scroll mode switch
-    /// is deferred so layout never re-enters (same rule as the iOS host).
+    /// Single-authority measurement directly through the block's own TextKit 1
+    /// engine (or the standalone block engine outside a conversation document).
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSView, context: Context) -> CGSize? {
         guard let width = proposal.width, width.isFinite, width > 0 else { return nil }
         let coordinator = context.coordinator
-        let ns = converted(coordinator)
-        let hasPrecedingBlock = selectionID.map { document?.hasPrecedingBlock($0) == true } ?? false
-        let hasFollowingBlock = selectionID.map { document?.hasFollowingBlock($0) == true } ?? false
-        // The document owns the separators it inserts around this block; the
-        // measurement reuses those instances so a changed context cannot leave
-        // the row height behind the drawn height.
-        let context = selectionID.flatMap { document?.boundaryContext(for: $0) } ?? (before: nil, after: nil)
-        if coordinator.hasPrecedingBlock != hasPrecedingBlock || coordinator.hasFollowingBlock != hasFollowingBlock {
-            coordinator.hasPrecedingBlock = hasPrecedingBlock
-            coordinator.hasFollowingBlock = hasFollowingBlock
-            coordinator.sizes.removeAll()
-        }
         let natural: CGSize
-        if let cached = coordinator.sizes[width] {
-            natural = cached
+        if !usesScrollWrapper, let selectionID,
+           let docSize = {
+               #if DEBUG
+               MacFirstScrollAttribution.measureCalls += 1
+               return macAttr(&MacFirstScrollAttribution.measureMs) {
+                   document?.size(for: selectionID, proposalWidth: width, font: font)
+               }
+               #else
+               return document?.size(for: selectionID, proposalWidth: width, font: font)
+               #endif
+           }() {
+            natural = docSize
         } else {
-            let measurement = selectionID.flatMap { document?.measurement(for: $0) } ?? coordinator.measurement
+            let ns = converted(coordinator)
+            coordinator.standaloneEngine.setText(ns, font: font)
             #if DEBUG
             natural = macAttr(&MacFirstScrollAttribution.measureMs) {
-                measurement.size(for: ns, font: font, width: width,
-                                 before: context.before, after: context.after)
+                coordinator.standaloneEngine.size(forProposalWidth: width, font: font)
             }
             MacFirstScrollAttribution.measureCalls += 1
             #else
-            natural = measurement.size(for: ns, font: font, width: width,
-                                       before: context.before, after: context.after)
+            natural = coordinator.standaloneEngine.size(forProposalWidth: width, font: font)
             #endif
-            if coordinator.sizes.count >= 24 { coordinator.sizes.removeAll() }
-            coordinator.sizes[width] = natural
         }
         let scrolling = maxHeight.map { natural.height > $0 + 0.5 } ?? false
         let result = scrolling ? CGSize(width: natural.width, height: maxHeight ?? natural.height) : natural
-        if let container = selectionID.flatMap({ document?.container(for: $0) }),
-           container.size.height < natural.height + 1 {
-            DispatchQueue.main.async {
-                let height = max(container.size.height, natural.height + 1)
-                container.textView?.maxSize.height = height
-                container.size.height = height
-            }
-        }
         // Uncapped (the Mac default) and already unscrolled: nothing to update.
-        guard let scroll = nsView as? FadingTextScrollView, scrolling || scroll.hasVerticalScroller else { return result }
+        guard let scroll = nsView as? FadingTextScrollView else { return result }
+        coordinator.standaloneEngine.syncContainerWidth(natural.width)
+        guard scrolling || scroll.hasVerticalScroller else { return result }
         DispatchQueue.main.async {
             if scroll.hasVerticalScroller != scrolling {
                 scroll.hasVerticalScroller = scrolling
@@ -748,22 +731,25 @@ private struct MacSelectableTextView: NSViewRepresentable {
     }
 
     private func apply(to textView: NSTextView, scroll: FadingTextScrollView?, coordinator: Coordinator) {
-        let ns = converted(coordinator)
-        if selectionID.flatMap({ document?.container(for: $0) }) == nil, coordinator.appliedText !== ns {
-            let isFirstFill = coordinator.appliedText == nil
-            let previous = textView.selectedRange()
-            textView.textStorage?.setAttributedString(ns)
-            #if DEBUG
-            MacTextRowSwitchCounters.textSets &+= 1
-            #endif
-            if previous.length > 0, NSMaxRange(previous) <= ns.length {
-                textView.setSelectedRange(previous)
-            }
-            coordinator.appliedText = ns
-            if isFirstFill, let scroll {
-                // A capped bubble starts at its first line (the document view is flipped).
-                scroll.contentView.scroll(to: .zero)
-                scroll.reflectScrolledClipView(scroll.contentView)
+        let managedByDocument = !usesScrollWrapper && selectionID != nil && document?.container(for: selectionID!) != nil
+        if !managedByDocument {
+            let ns = converted(coordinator)
+            if coordinator.appliedText !== ns {
+                let isFirstFill = coordinator.appliedText == nil
+                let previous = textView.selectedRange()
+                coordinator.standaloneEngine.setText(ns, font: font)
+                #if DEBUG
+                MacTextRowSwitchCounters.textSets &+= 1
+                #endif
+                if previous.length > 0, NSMaxRange(previous) <= ns.length {
+                    textView.setSelectedRange(previous)
+                }
+                coordinator.appliedText = ns
+                if isFirstFill, let scroll {
+                    // A capped bubble starts at its first line (the document view is flipped).
+                    scroll.contentView.scroll(to: .zero)
+                    scroll.reflectScrolledClipView(scroll.contentView)
+                }
             }
         }
         let linkAttributes: [NSAttributedString.Key: Any] = [
@@ -780,33 +766,12 @@ private struct MacSelectableTextView: NSViewRepresentable {
         if !NSDictionary(dictionary: textView.selectedTextAttributes).isEqual(to: selectionAttributes) {
             textView.selectedTextAttributes = selectionAttributes
         }
-        // The Mac shows full-height bubbles (no cap): there is nothing to fade
-        // and no hidden tail to report. Skipping the layer/mask work here keeps
-        // fast flings from paying per-row CoreAnimation setup per update.
         if maxHeight != nil, let scroll {
             scroll.onMoreBelowChange = onMoreBelowChange
             scroll.refreshEdgeFade()
         } else if scroll?.onMoreBelowChange != nil {
             scroll?.onMoreBelowChange = nil
         }
-    }
-
-    /// TextKit 1 on purpose. A TextKit 2 view lays out only its viewport, and
-    /// nested in the conversation's scroll view it left revealed lines undrawn;
-    /// sizing with `boundingRect` also ran up to ~60 pt taller than the view's
-    /// own layout on long Markdown replies. Both showed as a blank band under a
-    /// reply (2026-10-05). One contiguous engine both measures and draws.
-    private static func makeTextView(storage: NSTextStorage, direct: Bool = false) -> NSTextView {
-        let layout = NSLayoutManager()
-        storage.addLayoutManager(layout)
-        let container = NSTextContainer(size: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
-        container.lineFragmentPadding = 0
-        container.widthTracksTextView = true
-        layout.addTextContainer(container)
-        if direct {
-            return MacDirectMessageTextView(frame: .zero, textContainer: container)
-        }
-        return MacMessageTextView(frame: .zero, textContainer: container)
     }
 
     private func converted(_ coordinator: Coordinator) -> NSAttributedString {
@@ -817,7 +782,6 @@ private struct MacSelectableTextView: NSViewRepresentable {
         if let selectionID, let text = document?.text(for: selectionID) {
             if coordinator.converted !== text {
                 coordinator.converted = text
-                coordinator.sizes.removeAll()
             }
             #if DEBUG
             MacFirstScrollAttribution.convertedMs += Double(DispatchTime.now().uptimeNanoseconds - convertedStart) / 1_000_000
@@ -833,7 +797,6 @@ private struct MacSelectableTextView: NSViewRepresentable {
                                                 workingDirectory: workingDirectory)
         coordinator.source = source
         coordinator.converted = ns
-        coordinator.sizes.removeAll()
         #if DEBUG
         MacFirstScrollAttribution.convertedMs += Double(DispatchTime.now().uptimeNanoseconds - convertedStart) / 1_000_000
         #endif

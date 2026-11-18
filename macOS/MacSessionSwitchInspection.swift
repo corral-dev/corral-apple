@@ -309,7 +309,7 @@ enum MacSessionSwitchInspection {
             // A sliver between lines (or only padding) legitimately has no glyphs.
             if text.visibleRect.height > 24,
                layout.glyphRange(forBoundingRect: text.visibleRect, in: container).length == 0 { emptyGlyphRows += 1 }
-            if let document = layout.delegate as? MacConversationTextDocument, let expected = document.range(of: text) {
+            if let document = text.document, let expected = document.range(of: text) {
                 let actual = layout.characterRange(forGlyphRange: layout.glyphRange(for: container), actualGlyphRange: nil)
                 if actual.location != expected.location || actual.length < expected.length { rangesWrong += 1 }
             }

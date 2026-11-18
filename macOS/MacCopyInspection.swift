@@ -34,26 +34,35 @@ enum MacCopyInspection {
             let serial = workspace.keyFocusSerial
             workspace.claimKeysAfterClick(in: key, window: window)
             let keptStart = workspace.keyFocusSerial == serial && window.firstResponder === text
-            let range: NSRange
+            var range = NSRange(location: 0, length: min(12, (text.string as NSString).length))
             var linkedBlocks = 0
-            if acrossBlocks, let layout = text.layoutManager {
-                let visibleRanges = texts.filter { $0.layoutManager === layout }.compactMap { view -> NSRange? in
-                    guard let container = view.textContainer else { return nil }
-                    layout.ensureLayout(for: container)
-                    return layout.characterRange(forGlyphRange: layout.glyphRange(for: container), actualGlyphRange: nil)
-                }.sorted { $0.location < $1.location }
-                linkedBlocks = visibleRanges.count
-                guard visibleRanges.count > 1 else { continue }
-                let lower = visibleRanges[0].location + min(2, visibleRanges[0].length)
-                let upper = visibleRanges[1].location + min(12, visibleRanges[1].length)
-                range = NSRange(location: lower, length: upper - lower)
+            var expected = (text.string as NSString).substring(with: range)
+            var expectedResponder = text
+            if acrossBlocks,
+               let direct = text as? MacDirectMessageTextView,
+               let document = direct.document {
+                let peers = texts.compactMap { $0 as? MacDirectMessageTextView }
+                    .filter { $0.document === document && $0.messageID != nil }
+                    .sorted { $0.convert($0.bounds, to: nil).maxY > $1.convert($1.bounds, to: nil).maxY }
+                linkedBlocks = peers.count
+                guard peers.count > 1,
+                      let firstID = peers[0].messageID,
+                      let secondID = peers[1].messageID else { continue }
+                let firstStart = min(2, (peers[0].string as NSString).length)
+                let secondEnd = min(12, (peers[1].string as NSString).length)
+                document.setSelectionForInspection(
+                    from: (id: firstID, offset: firstStart),
+                    to: (id: secondID, offset: secondEnd),
+                    responder: peers[0]
+                )
+                range = peers[0].selectedRange()
+                expected = document.selectedPlainText()
+                expectedResponder = peers[0]
             } else {
-                range = NSRange(location: 0, length: min(12, (text.string as NSString).length))
+                text.setSelectedRange(range)
             }
-            text.setSelectedRange(range)
             workspace.claimKeysAfterClick(in: key, window: window)
-            let keptRange = workspace.keyFocusSerial == serial && window.firstResponder === text
-            let expected = (text.string as NSString).substring(with: range)
+            let keptRange = workspace.keyFocusSerial == serial && window.firstResponder === expectedResponder
             let event = acrossBlocks ? nil : NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
                                         timestamp: 0, windowNumber: window.windowNumber, context: nil,
                                         characters: "c", charactersIgnoringModifiers: "c", isARepeat: false, keyCode: 8)
@@ -69,7 +78,7 @@ enum MacCopyInspection {
             let result: [String: Any] = ["tookFocus": tookFocus, "keptSelectionStart": keptStart,
                 "keptSelectionRange": keptRange, "shortcutHandled": shortcut,
                 "shortcutCopied": shortcutCopied, "nativeCopyMatchedSelection": nativeCopied,
-                "messageLength": text.string.count, "selectionLength": range.length,
+                "messageLength": text.string.count, "selectionLength": expected.count,
                 "crossBlock": acrossBlocks, "linkedVisibleBlocks": linkedBlocks]
             if let data = try? JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]) {
                 try? data.write(to: URL(fileURLWithPath: "/tmp/corral-mac-copy.json"))

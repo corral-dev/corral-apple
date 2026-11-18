@@ -13,7 +13,7 @@ SOURCES = [
     "Shared/UI/Design/Typography.swift", "Shared/UI/Design/PressableButtonStyle.swift",
     "Shared/UI/Platform/PlatformSupport.swift", "Shared/UI/Platform/MacSessionContextMenu.swift",
     "Shared/Core/Conversation/ChatComposerPolicy.swift",
-    "Shared/Core/Conversation/ComposerHistory.swift", "Shared/UI/Chat/MacConversationTextDocument.swift",
+    "Shared/Core/Conversation/ComposerHistory.swift", "Shared/UI/Chat/MacPathLinks.swift", "Shared/UI/Chat/MacConversationTextDocument.swift",
     "Shared/UI/Platform/MacComposerInputAnchor.swift",
     "macOS/Panes/MacPaneInteraction.swift", "scripts/mac-composer/PaneInteractionProbe.swift",
     "scripts/mac-composer/Support.swift", "scripts/mac-composer/Probe.swift",

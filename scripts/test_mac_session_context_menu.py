@@ -20,6 +20,7 @@ with tempfile.TemporaryDirectory(prefix='corral-context-menu-') as directory:
                       + metric + font + '}\n')
     sources = [
         'Shared/UI/Platform/MacSessionContextMenu.swift',
+        'Shared/UI/Chat/MacPathLinks.swift',
         'Shared/UI/Chat/MacConversationTextDocument.swift',
         'Shared/UI/Terminal/TerminalHostFeed.swift',
         'macOS/Terminal/StreamTerminalView.swift',

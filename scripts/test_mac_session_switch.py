@@ -18,6 +18,7 @@ with tempfile.TemporaryDirectory(prefix="corral-mac-session-switch-") as directo
         "swiftc", "-swift-version", "6", "-default-isolation", "MainActor",
         "-DDEBUG", "-parse-as-library", str(ROOT / "macOS/Panes/MacPaneSurface.swift"),
         str(ROOT / "macOS/Panes/EqualPaneLayout.swift"),
+        str(ROOT / "Shared/UI/Chat/MacPathLinks.swift"),
         str(ROOT / "Shared/UI/Chat/MacConversationTextDocument.swift"),
         str(ROOT / "Shared/UI/Platform/MacSessionContextMenu.swift"),
         str(combined), "-o", binary,

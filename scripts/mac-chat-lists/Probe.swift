@@ -71,13 +71,8 @@ struct MacChatListsProbe {
             layout.ensureLayout(for: container)
             let lines = lineFragments(layout: layout, container: container, storage: view.string as NSString)
             let height = layout.usedRect(for: container).height
-            let measured = document.measurement(for: source.id)?.size(
-                for: document.text(for: source.id) ?? NSAttributedString(string: ""),
-                font: NSFont.systemFont(ofSize: bodyPointSize),
-                width: rowWidth,
-                before: document.boundaryContext(for: source.id).before,
-                after: document.boundaryContext(for: source.id).after
-            ).height ?? -1
+            let measured = document.size(for: source.id, proposalWidth: rowWidth,
+                                         font: NSFont.systemFont(ofSize: bodyPointSize))?.height ?? -1
             check(source: source, lines: lines, drawnHeight: height, measuredHeight: measured)
         }
 
@@ -152,23 +147,22 @@ struct MacChatListsProbe {
                                         style: .init(font: font, foreground: .labelColor, userForeground: .labelColor)) {
                             render($0, font: font)
                         }
-                        guard let text = document.text(for: 2), let view = document.textView(for: 2),
-                              let container = view.textContainer, let ownRange = document.range(for: 2),
-                              let measurement = document.measurement(for: 2) else {
+                        guard let view = document.textView(for: 2),
+                              let layout = document.layout(for: 2),
+                              let container = view.textContainer,
+                              let ownRange = document.range(for: 2),
+                              let measured = document.size(for: 2, proposalWidth: width, font: font) else {
                             failures.append("paragraph fixture lost its native text network")
                             continue
                         }
-                        let measured = measurement.size(for: text, font: font, width: width,
-                                                        before: document.boundaryContext(for: 2).before,
-                                                        after: document.boundaryContext(for: 2).after)
                         view.textContainerInset = .zero
                         view.isVerticallyResizable = false
                         view.isHorizontallyResizable = false
                         view.frame = NSRect(origin: .zero, size: measured)
-                        document.layout.ensureLayout(for: container)
-                        let drawn = document.layout.usedRect(for: container).maxY
-                        let covered = document.layout.characterRange(
-                            forGlyphRange: document.layout.glyphRange(for: container), actualGlyphRange: nil)
+                        layout.ensureLayout(for: container)
+                        let drawn = layout.usedRect(for: container).maxY
+                        let covered = layout.characterRange(
+                            forGlyphRange: layout.glyphRange(for: container), actualGlyphRange: nil)
                         let tag = "sample \(sampleIndex) step \(step) font \(pointSize) width \(width)"
                         if measured.height != ceil(drawn) {
                             failures.append("\(tag): drawn \(drawn) vs row \(measured.height)")

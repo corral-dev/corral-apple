@@ -77,13 +77,91 @@ enum MacChatScrollGeometryProbe {
 }
 #endif
 
+/// Single-authority TextKit 1 engine for one standalone message or rich text block.
+///
+/// One `NSTextStorage` -> `NSLayoutManager` -> `NSTextContainer` (`widthTracksTextView = false`,
+/// infinite height) both measures and draws the text. There is no detached second
+/// layout engine and no cross-message `.containerBreak` / synthetic paragraph break.
+@MainActor
+final class MacSingleTextEngine {
+    let storage = NSTextStorage()
+    let layout = NSLayoutManager()
+    let container = NSTextContainer(size: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
+    private(set) var text = NSAttributedString()
+    private var defaultFont = NSFont.systemFont(ofSize: 14)
+    private var sizes: [CGFloat: CGSize] = [:]
+    private var widths: [CGFloat] = []
+
+    init() {
+        container.lineFragmentPadding = 0
+        container.widthTracksTextView = false
+        layout.addTextContainer(container)
+        storage.addLayoutManager(layout)
+    }
+
+    func setText(_ next: NSAttributedString, font: NSFont) {
+        if text === next && defaultFont == font { return }
+        text = next
+        defaultFont = font
+        storage.setAttributedString(next)
+        sizes.removeAll(keepingCapacity: true)
+        widths.removeAll(keepingCapacity: true)
+    }
+
+    /// Measures and lays out this block directly on its drawing container.
+    /// When the text hugs narrower than `proposalWidth` (e.g. short user bubbles),
+    /// the container settles at `fittedWidth` so `NSTextTable`/attachments match
+    /// the exact width the mounted `NSTextView` receives.
+    func size(forProposalWidth width: CGFloat, font: NSFont? = nil) -> CGSize {
+        let effectiveFont = font ?? defaultFont
+        if let font, font != defaultFont {
+            defaultFont = font
+            sizes.removeAll(keepingCapacity: true)
+            widths.removeAll(keepingCapacity: true)
+        }
+        widths.removeAll { $0 == width }
+        widths.append(width)
+        if let cached = sizes[width] { return cached }
+
+        if abs(container.size.width - width) > 0.01 || container.size.height != CGFloat.greatestFiniteMagnitude {
+            container.size = NSSize(width: width, height: CGFloat.greatestFiniteMagnitude)
+        }
+        layout.ensureLayout(for: container)
+        let used = layout.usedRect(for: container)
+        let fittedWidth = min(ceil(max(used.maxX, 1)), width)
+        if abs(fittedWidth - width) > 0.01 {
+            container.size.width = fittedWidth
+            layout.ensureLayout(for: container)
+        }
+        let finalUsed = layout.usedRect(for: container)
+        let height = finalUsed.maxY > 0 ? finalUsed.maxY : layout.defaultLineHeight(for: effectiveFont)
+        let result = CGSize(
+            width: fittedWidth,
+            height: ceil(height)
+        )
+        sizes[width] = result
+        if widths.count > 64 {
+            sizes.removeValue(forKey: widths.removeFirst())
+        }
+        return result
+    }
+
+    /// Keeps the drawing container aligned with the view's realized bounds.
+    func syncContainerWidth(_ width: CGFloat) {
+        guard width.isFinite, width > 0 else { return }
+        if abs(container.size.width - width) > 0.25 || container.size.height != CGFloat.greatestFiniteMagnitude {
+            container.size = NSSize(width: width, height: CGFloat.greatestFiniteMagnitude)
+        }
+    }
+}
+
 /// Uncapped Mac rows (the default: the conversation scrolls, not the bubble)
 /// host their text view directly instead of inside a per-row scroll wrapper.
-/// One `NSScrollView` + `NSClipView` pair per message laid out and drew on
-/// every switch; with 80 messages × 4 panes that is hundreds of nested
-/// scrollers for content that never scrolls itself. Wheel events forward to
-/// the conversation scroll view, matching the wrapper's non-scrolling path.
+/// Wheel events forward to the conversation scroll view.
 final class MacDirectMessageTextView: NSTextView {
+    weak var document: MacConversationTextDocument?
+    var messageID: Int?
+
     override func menu(for event: NSEvent) -> NSMenu? {
         guard isText(at: event) else { return paneSessionContextMenu() }
         return super.menu(for: event)
@@ -111,9 +189,9 @@ final class MacDirectMessageTextView: NSTextView {
         super.clicked(onLink: link, at: charIndex)
     }
 
-    /// A plain press-and-drag selects across the conversation's message
-    /// blocks. Word/paragraph clicks, modified clicks and links keep native
-    /// handling.
+    /// A plain press-and-drag selects across the conversation's independent
+    /// message blocks. Word/paragraph clicks, modified clicks and links keep
+    /// native handling.
     override func mouseDown(with event: NSEvent) {
         if event.clickCount == 1, isText(at: event), let storage = textStorage {
             let index = characterIndexForInsertion(at: convert(event.locationInWindow, from: nil))
@@ -124,27 +202,100 @@ final class MacDirectMessageTextView: NSTextView {
         }
         guard event.clickCount == 1,
               event.modifierFlags.intersection([.shift, .command, .option, .control]).isEmpty,
-              let document = layoutManager?.delegate as? MacConversationTextDocument,
+              let document,
               !isLink(at: event) else {
             super.mouseDown(with: event)
+            if let document, !document.isSyncingSelection {
+                document.singleViewDidChangeSelection(self)
+            }
             return
         }
         document.trackSelection(from: self, mouseDown: event)
     }
 
-    override func writeSelection(to pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
-        if type == .string, let storage = textStorage, NSMaxRange(selectedRange()) <= storage.length {
-            let selected = NSMutableAttributedString(attributedString: storage.attributedSubstring(from: selectedRange()))
-            var sources: [(NSRange, String)] = []
-            selected.enumerateAttribute(.attachment, in: NSRange(location: 0, length: selected.length)) { value, range, _ in
-                if let media = value as? any MacMessageMediaAttachment { sources.append((range, media.original)) }
+    override func draw(_ dirtyRect: NSRect) {
+        // When another block in the same conversation holds firstResponder during
+        // a cross-message selection, paint the active selection highlight color
+        // uniformly instead of AppKit's inactive gray on sibling blocks.
+        if let document, let window, window.isKeyWindow, window.firstResponder !== self,
+           document.isActivelyFocused(in: window), selectedRange().length > 0,
+           let layout = layoutManager, let container = textContainer {
+            let glyphs = layout.glyphRange(forCharacterRange: selectedRange(), actualCharacterRange: nil)
+            if glyphs.length > 0 {
+                let drawRange = layout.glyphRange(forBoundingRect: dirtyRect, in: container)
+                layout.drawBackground(forGlyphRange: drawRange, at: textContainerOrigin)
+                NSColor.selectedTextBackgroundColor.setFill()
+                layout.enumerateEnclosingRects(
+                    forGlyphRange: glyphs,
+                    withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
+                    in: container
+                ) { rect, _ in
+                    let offsetRect = rect.offsetBy(dx: self.textContainerOrigin.x, dy: self.textContainerOrigin.y)
+                        .intersection(dirtyRect)
+                    if !offsetRect.isEmpty { offsetRect.fill() }
+                }
+                layout.drawGlyphs(forGlyphRange: drawRange, at: textContainerOrigin)
+                return
             }
-            if !sources.isEmpty {
-                for (range, source) in sources.reversed() { selected.replaceCharacters(in: range, with: source) }
-                return pboard.setString(selected.string, forType: type)
+        }
+        super.draw(dirtyRect)
+    }
+
+    override func copy(_ sender: Any?) {
+        if let document, document.copySelection(to: NSPasteboard.general) {
+            return
+        }
+        super.copy(sender)
+    }
+
+    override func selectAll(_ sender: Any?) {
+        if let document {
+            document.selectAll(from: self)
+            return
+        }
+        super.selectAll(sender)
+    }
+
+    override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(copy(_:)) {
+            return (document?.hasSelection == true) || selectedRange().length > 0
+        }
+        if item.action == #selector(selectAll(_:)) {
+            return (document?.blockCount ?? 0) > 0 || (textStorage?.length ?? 0) > 0
+        }
+        return super.validateUserInterfaceItem(item)
+    }
+
+    override func writeSelection(to pboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
+        if let document, document.hasMultiBlockSelection {
+            return document.copySelection(to: pboard, types: types)
+        }
+        return super.writeSelection(to: pboard, types: types)
+    }
+
+    override func writeSelection(to pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        if let document, document.hasMultiBlockSelection {
+            return document.copySelection(to: pboard, types: [type])
+        }
+        if type == .string, let storage = textStorage, NSMaxRange(selectedRange()) <= storage.length {
+            let selected = Self.plainStringReplacingAttachments(in: storage, range: selectedRange())
+            if let selected {
+                return pboard.setString(selected, forType: type)
             }
         }
         return super.writeSelection(to: pboard, type: type)
+    }
+
+    static func plainStringReplacingAttachments(in storage: NSAttributedString, range: NSRange) -> String? {
+        guard range.location >= 0, NSMaxRange(range) <= storage.length else { return nil }
+        let selected = NSMutableAttributedString(attributedString: storage.attributedSubstring(from: range))
+        var sources: [(NSRange, String)] = []
+        selected.enumerateAttribute(.attachment, in: NSRange(location: 0, length: selected.length)) { value, range, _ in
+            if let media = value as? any MacMessageMediaAttachment { sources.append((range, media.original)) }
+        }
+        guard !sources.isEmpty else { return nil }
+        for (range, source) in sources.reversed() { selected.replaceCharacters(in: range, with: source) }
+        return selected.string
     }
 
     private func isLink(at event: NSEvent) -> Bool {
@@ -161,10 +312,8 @@ final class MacDirectMessageTextView: NSTextView {
     }
 }
 
-/// SwiftUI owns one mount per representable lifetime. The document owns the
-/// reusable text view, which can outlive that lifetime. Never hand the same
-/// NSView back to two SwiftUI platform-view hosts: an outgoing host can still
-/// lay out or dismantle after its replacement has appeared.
+/// SwiftUI owns one mount per representable lifetime. Each message block owns
+/// its reusable text view, which can outlive that mount lifetime.
 final class MacMessageTextMount: NSView {
     private(set) var textView: NSTextView?
 
@@ -195,16 +344,25 @@ final class MacMessageTextMount: NSView {
         super.layout()
         guard let view = textView, view.superview === self,
               bounds.width > 0, bounds.height > 0 else { return }
-        // Speculative zero-sized placements must not collapse the shared text
-        // container and invalidate every subsequent message's glyph layout.
+        // Sync the drawing container's width with the realized mount bounds;
+        // `widthTracksTextView` is false so speculative zero-sized placements
+        // can never collapse the container.
+        if let container = view.textContainer,
+           abs(container.size.width - bounds.width) > 0.25 || container.size.height != CGFloat.greatestFiniteMagnitude {
+            container.size = NSSize(width: bounds.width, height: CGFloat.greatestFiniteMagnitude)
+        }
         if view.frame != bounds { view.frame = bounds }
     }
 }
 
-/// One native text network per conversation. Each message is a separate text
-/// container, like a page in an AppKit document, with a shared selection.
+/// Per-conversation coordinator of independent single-message TextKit 1 stacks.
+///
+/// Each message owns an isolated `MacSingleTextEngine` (`NSTextStorage`,
+/// `NSLayoutManager`, `NSTextContainer`) and reusable `MacDirectMessageTextView`.
+/// The coordinator manages cross-message drag selection, uniform highlight
+/// synchronization across realized and recycled blocks, and unified Copy.
 @MainActor
-final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDelegate {
+final class MacConversationTextDocument: NSObject, @MainActor NSTextViewDelegate {
     struct Source: Equatable {
         let id: Int
         let text: String
@@ -218,67 +376,45 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
         let userForeground: NSColor
     }
 
-    static let initialCanvasHeight: CGFloat = 100_000
-
-    /// TextKit lays a container's first line out as a continuation of the
-    /// container break, so it applies `headIndent` and ignores
-    /// `firstLineHeadIndent`. Ordinary paragraphs hide this because their
-    /// indents agree; a list does not. Its marker would move to the hanging
-    /// indent and the marker tab (whose only stop is that same indent) would
-    /// eject the item text onto the next line, one line taller than the row's
-    /// detached measurement (owner capture 2026-10-27). A near-zero paragraph
-    /// break after each container break gives the next block a real paragraph
-    /// start without visible height. See
-    /// docs/troubleshooting/2026-10-27-mac-message-first-line-list-indent.md.
-    fileprivate static let paragraphStartFont = NSFont.systemFont(ofSize: 0.1)
-
     private final class Block {
-        // AppKit ignores explicit container breaks with a near-infinite height.
-        // Use a finite canvas; the representable grows it for unusually tall text.
-        let container = NSTextContainer(size: NSSize(width: 760, height: MacConversationTextDocument.initialCanvasHeight))
+        let engine = MacSingleTextEngine()
         var source: Source
-        var text: NSAttributedString
-        var range = NSRange(location: 0, length: 0)
-        var view: NSTextView?
+        var view: MacDirectMessageTextView?
 
-        init(source: Source, text: NSAttributedString) {
+        init(source: Source, text: NSAttributedString, font: NSFont) {
             self.source = source
-            self.text = text
-            container.lineFragmentPadding = 0
-            container.widthTracksTextView = true
+            engine.setText(text, font: font)
         }
     }
 
-    private struct Position {
+    struct Position: Equatable {
         let id: Int
         let offset: Int
     }
 
-    let storage = NSTextStorage()
-    let layout = NSLayoutManager()
-    /// The conversation table's measured row heights (owned and typed by the
-    /// table), kept with the document so a rebuilt table reuses them.
-    var tableRowHeights: AnyObject?
+    struct Selection: Equatable {
+        var anchor: Position
+        var head: Position
+    }
+
     private var identity: ObjectIdentifier?
     private var sources: [Source] = []
     private var style: Style?
     private var blocks: [Block] = []
     private var byID: [Int: Block] = [:]
-    private var breaks: Set<Int> = []
-    private var measurements: [Int: MacTextMeasurement] = [:]
-    /// The exact separator strings inserted around each block's container.
-    private var paragraphBreak = NSAttributedString(string: "\n", attributes: [.font: paragraphStartFont])
-    private var containerBreak = NSAttributedString(string: "\n")
-    private var measurementOrder: [Int] = []
+    private var indexByID: [Int: Int] = [:]
+    private var selection: Selection?
+    private(set) var isSyncingSelection = false
 
-    override init() {
-        super.init()
-        storage.addLayoutManager(layout)
-        layout.delegate = self
-    }
+    var blockCount: Int { blocks.count }
 
-    /// Only changed messages are rendered. Containers for unloaded SwiftUI rows
-    /// stay in the network, so lazy realization cannot reorder or omit text.
+    /// The conversation table's measured row heights (owned and typed by the
+    /// table), kept with the document so a rebuilt table reuses them.
+    var tableRowHeights: AnyObject?
+
+    /// Only changed messages are rendered. Blocks for unloaded SwiftUI rows
+    /// stay owned here, so lazy realization keeps exact single-source geometry
+    /// and cross-message selection.
     func update(
         identity: ObjectIdentifier,
         sources: [Source],
@@ -296,128 +432,272 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
         #endif
         let sameConversation = self.identity == identity
         if !sameConversation {
-            measurements.removeAll()
-            measurementOrder.removeAll()
+            selection = nil
         }
-        let selection = sameConversation ? anyTextView?.selectedRange() : nil
-        let start = selection.flatMap { position(at: $0.location) }
-        let end = selection.flatMap { position(at: NSMaxRange($0)) }
         let oldByID = sameConversation ? byID : [:]
         let styleChanged = self.style != style
-        let oldRanges = blocks.map(\.range)
-        var changedIDs: Set<Int> = []
+
+        isSyncingSelection = true
         let next = sources.map { source -> Block in
             if let existing = oldByID[source.id] {
                 if existing.source != source || styleChanged {
-                    changedIDs.insert(source.id)
                     existing.source = source
-                    existing.text = render(source)
+                    existing.engine.setText(render(source), font: style.font)
+                    existing.view?.needsDisplay = true
                 }
                 return existing
             }
-            return Block(source: source, text: render(source))
+            return Block(source: source, text: render(source), font: style.font)
         }
+        isSyncingSelection = false
 
-        // A message-separator newline starts the next container. It remains an
-        // ordinary newline on the pasteboard, with no private marker to strip.
-        // The document owns these two separators so row measurement reuses the
-        // exact strings the drawing storage gets instead of rebuilding the
-        // boundary context (a rebuilt context produced the 2026-11-01 8 pt clip).
-        let paragraphBreak = NSAttributedString(string: "\n", attributes: [.font: Self.paragraphStartFont])
-        let containerBreak = NSAttributedString(string: "\n", attributes: [.font: style.font])
-        self.paragraphBreak = paragraphBreak
-        self.containerBreak = containerBreak
-        let combined = NSMutableAttributedString(string: "")
-        breaks.removeAll(keepingCapacity: true)
-        var startsParagraph = false
-        for (index, block) in next.enumerated() {
-            if startsParagraph {
-                combined.append(paragraphBreak)
-            }
-            block.range = NSRange(location: combined.length, length: block.text.length)
-            combined.append(block.text)
-            if index < next.count - 1 {
-                breaks.insert(combined.length)
-                combined.append(containerBreak)
-                startsParagraph = true
-            }
-        }
-
-        let sameOrder = blocks.elementsEqual(next, by: { $0 === $1 })
-        if !sameOrder {
-            for index in layout.textContainers.indices.reversed() {
-                layout.removeTextContainer(at: index)
-            }
-            for block in next { layout.addTextContainer(block.container) }
-        }
         blocks = next
         byID = Dictionary(uniqueKeysWithValues: next.map { ($0.source.id, $0) })
-        measurements = measurements.filter { byID[$0.key] != nil }
-        measurementOrder.removeAll { byID[$0] == nil }
+        indexByID = Dictionary(uniqueKeysWithValues: next.enumerated().map { ($1.source.id, $0) })
         self.identity = identity
         self.sources = sources
         self.style = style
-        if sameOrder, !styleChanged,
-           let first = next.firstIndex(where: { changedIDs.contains($0.source.id) }),
-           let last = next.lastIndex(where: { changedIDs.contains($0.source.id) }) {
-            // Retain layout before a streaming edit instead of invalidating the
-            // entire loaded conversation for every token batch.
-            let old = NSRange(location: oldRanges[first].location,
-                              length: NSMaxRange(oldRanges[last]) - oldRanges[first].location)
-            let updated = NSRange(location: next[first].range.location,
-                                  length: NSMaxRange(next[last].range) - next[first].range.location)
-            storage.replaceCharacters(in: old, with: combined.attributedSubstring(from: updated))
-        } else {
-            storage.setAttributedString(combined)
+
+        if let sel = selection, byID[sel.anchor.id] == nil || byID[sel.head.id] == nil {
+            selection = nil
         }
-        if styleChanged {
-            // Lazy rows retain their native views. Redraw them after typography
-            // reflows even when their SwiftUI wrapper keeps the same frame.
-            for block in next { block.view?.needsDisplay = true }
-        }
-        // Lazy rows realize their views on demand, so the first container
-        // often has none; the selection is shared by every view in the network.
-        if let start, let end, let lower = index(of: start), let upper = index(of: end), upper >= lower {
-            anyTextView?.setSelectedRange(NSRange(location: lower, length: upper - lower))
-        } else {
-            anyTextView?.setSelectedRange(NSRange(location: 0, length: 0))
-        }
+        syncSelectionToViews(stillSelecting: false)
     }
 
-    /// Any view attached to this network: they all share one selection. The
-    /// containers are the ground truth (rows realize views on demand, so the
-    /// first container often has none); registered views are the fallback.
-    private var anyTextView: NSTextView? {
-        layout.textContainers.lazy.compactMap(\.textView).first ?? blocks.lazy.compactMap(\.view).first
+    /// Single-authority measurement directly on the block's own drawing container.
+    func size(for id: Int, proposalWidth: CGFloat, font: NSFont? = nil) -> CGSize? {
+        byID[id]?.engine.size(forProposalWidth: proposalWidth, font: font ?? style?.font)
+    }
+
+    func container(for id: Int) -> NSTextContainer? { byID[id]?.engine.container }
+
+    func storage(for id: Int) -> NSTextStorage? { byID[id]?.engine.storage }
+
+    func layout(for id: Int) -> NSLayoutManager? { byID[id]?.engine.layout }
+
+    func text(for id: Int) -> NSAttributedString? { byID[id]?.engine.text }
+
+    func range(for id: Int) -> NSRange? {
+        guard let block = byID[id] else { return nil }
+        return NSRange(location: 0, length: block.engine.storage.length)
+    }
+
+    /// Combined text across all blocks in reading order (for inspection/tests).
+    func combinedAttributedText() -> NSAttributedString {
+        let result = NSMutableAttributedString()
+        for (index, block) in blocks.enumerated() {
+            if index > 0 {
+                result.append(NSAttributedString(string: "\n\n"))
+            }
+            result.append(block.engine.storage)
+        }
+        return result
+    }
+
+    /// Stable native text view for a loaded message block.
+    func textView(for id: Int) -> NSTextView? {
+        guard let block = byID[id] else { return nil }
+        if let view = block.view { return view }
+        let view = MacDirectMessageTextView(frame: .zero, textContainer: block.engine.container)
+        view.document = self
+        view.messageID = id
+        view.delegate = self
+        block.view = view
+        let range = selectedRange(for: id)
+        if range.length > 0 {
+            isSyncingSelection = true
+            view.setSelectedRange(range)
+            isSyncingSelection = false
+        }
+        return view
+    }
+
+    var hasSelection: Bool {
+        guard let ordered = orderedSelection() else { return false }
+        return ordered.startIndex != ordered.endIndex || ordered.startOffset != ordered.endOffset
+    }
+
+    var hasMultiBlockSelection: Bool {
+        guard let ordered = orderedSelection() else { return false }
+        return ordered.startIndex != ordered.endIndex
+    }
+
+    func isActivelyFocused(in window: NSWindow) -> Bool {
+        guard let responder = window.firstResponder as? MacDirectMessageTextView else { return false }
+        return responder.document === self
+    }
+
+    func selectedRange(for id: Int) -> NSRange {
+        guard let block = byID[id], let blockIndex = indexByID[id],
+              let ordered = orderedSelection() else {
+            return NSRange(location: 0, length: 0)
+        }
+        let length = block.engine.storage.length
+        if blockIndex < ordered.startIndex || blockIndex > ordered.endIndex {
+            return NSRange(location: 0, length: 0)
+        }
+        if ordered.startIndex == ordered.endIndex {
+            let start = min(max(0, ordered.startOffset), length)
+            let end = min(max(start, ordered.endOffset), length)
+            return NSRange(location: start, length: end - start)
+        }
+        if blockIndex == ordered.startIndex {
+            let start = min(max(0, ordered.startOffset), length)
+            return NSRange(location: start, length: length - start)
+        }
+        if blockIndex == ordered.endIndex {
+            let end = min(max(0, ordered.endOffset), length)
+            return NSRange(location: 0, length: end)
+        }
+        return NSRange(location: 0, length: length)
+    }
+
+    func selectedPlainText() -> String {
+        guard let ordered = orderedSelection(),
+              ordered.startIndex <= ordered.endIndex else { return "" }
+        var parts: [String] = []
+        for idx in ordered.startIndex...ordered.endIndex where blocks.indices.contains(idx) {
+            let block = blocks[idx]
+            let range = selectedRange(for: block.source.id)
+            guard range.length > 0 else { continue }
+            let storage = block.engine.storage
+            let plain = MacDirectMessageTextView.plainStringReplacingAttachments(in: storage, range: range)
+                ?? (storage.string as NSString).substring(with: range)
+            parts.append(plain)
+        }
+        return parts.joined(separator: "\n\n")
+    }
+
+    func selectedAttributedText() -> NSAttributedString {
+        guard let ordered = orderedSelection(),
+              ordered.startIndex <= ordered.endIndex else { return NSAttributedString() }
+        let combined = NSMutableAttributedString()
+        var wroteAny = false
+        for idx in ordered.startIndex...ordered.endIndex where blocks.indices.contains(idx) {
+            let block = blocks[idx]
+            let range = selectedRange(for: block.source.id)
+            guard range.length > 0 else { continue }
+            if wroteAny {
+                combined.append(NSAttributedString(string: "\n\n", attributes: style.map { [.font: $0.font] } ?? [:]))
+            }
+            combined.append(block.engine.storage.attributedSubstring(from: range))
+            wroteAny = true
+        }
+        return combined
+    }
+
+    @discardableResult
+    func copySelection(to pboard: NSPasteboard, types: [NSPasteboard.PasteboardType]? = nil) -> Bool {
+        guard hasSelection else { return false }
+        let plain = selectedPlainText()
+        let rich = selectedAttributedText()
+        let allowed = types ?? [.rtf, .rtfd, .string]
+        var declared: [NSPasteboard.PasteboardType] = []
+        if allowed.contains(.rtfd) && rich.containsAttachments(in: NSRange(location: 0, length: rich.length)) {
+            declared.append(.rtfd)
+        }
+        if allowed.contains(.rtf) {
+            declared.append(.rtf)
+        }
+        if allowed.contains(.string) {
+            declared.append(.string)
+        }
+        if declared.isEmpty { declared = [.string] }
+        pboard.declareTypes(declared, owner: nil)
+        var wrote = false
+        if declared.contains(.rtfd),
+           let data = rich.rtfd(from: NSRange(location: 0, length: rich.length), documentAttributes: [:]) {
+            wrote = pboard.setData(data, forType: .rtfd) || wrote
+        }
+        if declared.contains(.rtf),
+           let data = rich.rtf(from: NSRange(location: 0, length: rich.length), documentAttributes: [:]) {
+            wrote = pboard.setData(data, forType: .rtf) || wrote
+        }
+        if declared.contains(.string) {
+            wrote = pboard.setString(plain, forType: .string) || wrote
+        }
+        return wrote
+    }
+
+    func selectAll(from origin: MacDirectMessageTextView) {
+        guard let first = blocks.first, let last = blocks.last else { return }
+        origin.window?.makeFirstResponder(origin)
+        selection = Selection(
+            anchor: position(in: first, localOffset: 0),
+            head: position(in: last, localOffset: last.engine.storage.length)
+        )
+        syncSelectionToViews(stillSelecting: false)
+    }
+
+    #if DEBUG
+    func setSelectionForInspection(from start: (id: Int, offset: Int), to end: (id: Int, offset: Int),
+                                   responder: MacDirectMessageTextView) {
+        guard let startBlock = byID[start.id], let endBlock = byID[end.id] else { return }
+        responder.window?.makeFirstResponder(responder)
+        selection = Selection(
+            anchor: position(in: startBlock, localOffset: start.offset),
+            head: position(in: endBlock, localOffset: end.offset)
+        )
+        syncSelectionToViews(stillSelecting: false)
+    }
+    #endif
+
+    func textViewDidChangeSelection(_ notification: Notification) {
+        guard !isSyncingSelection, let view = notification.object as? MacDirectMessageTextView else { return }
+        singleViewDidChangeSelection(view)
+    }
+
+    func singleViewDidChangeSelection(_ view: MacDirectMessageTextView) {
+        guard !isSyncingSelection,
+              let id = view.messageID,
+              let block = byID[id] else { return }
+        let range = view.selectedRange()
+        if range.length == 0 {
+            if selection != nil {
+                selection = nil
+                syncSelectionToViews(stillSelecting: false, skipping: view)
+            }
+            return
+        }
+        selection = Selection(
+            anchor: position(in: block, localOffset: range.location),
+            head: position(in: block, localOffset: NSMaxRange(range))
+        )
+        syncSelectionToViews(stillSelecting: false, skipping: view)
     }
 
     /// Tracks a press-and-drag that began on `origin` until the button is
-    /// released. AppKit's own cross-container tracking only reaches a block
-    /// the window hit-tests at the pointer, so gaps, tool rows, overlays and
-    /// rows recycled during autoscroll stopped it or jumped to the start of
-    /// the conversation. Here every step resolves the pointer against the
-    /// on-screen geometry of this conversation's blocks; AppKit still draws
-    /// the selection and owns Copy.
-    func trackSelection(from origin: NSTextView, mouseDown event: NSEvent) {
-        guard let window = origin.window else { return }
+    /// released. Every step resolves the pointer against the on-screen geometry
+    /// of this conversation's independent blocks; scrolled-offscreen blocks
+    /// between anchor and head keep their selection in `selection` and apply it
+    /// if scrolled back into view.
+    func trackSelection(from origin: MacDirectMessageTextView, mouseDown event: NSEvent) {
+        guard let window = origin.window,
+              let originID = origin.messageID,
+              let originBlock = byID[originID] else { return }
         let scrollView = origin.enclosingScrollView
-        let anchor = origin.characterIndexForInsertion(at: origin.convert(event.locationInWindow, from: nil))
-        var current = anchor
+        let anchorLocal = min(max(0, origin.characterIndexForInsertion(at: origin.convert(event.locationInWindow, from: nil))),
+                              originBlock.engine.storage.length)
+        let anchorPos = position(in: originBlock, localOffset: anchorLocal)
+        var currentPos = anchorPos
         window.makeFirstResponder(origin)
         #if DEBUG
-        Self.selectionTrace = [("anchor", anchor)]
+        Self.selectionTrace = [("anchor", anchorLocal)]
         if let clip = scrollView?.contentView {
             Self.selectionTrace.append(("offDown", Int(clip.bounds.origin.y)))
             Self.selectionTrace.append(("frDown", Int(origin.convert(origin.bounds, to: nil).minY)))
         }
         #endif
-        func select(_ index: Int, stillSelecting: Bool) {
-            current = index
-            let range = NSRange(location: min(anchor, index), length: abs(index - anchor))
-            origin.setSelectedRange(range, affinity: index < anchor ? .upstream : .downstream,
-                                    stillSelecting: stillSelecting)
+        func applyDrag(_ pos: Position, stillSelecting: Bool) {
+            currentPos = pos
+            if stillSelecting || pos != anchorPos {
+                selection = Selection(anchor: anchorPos, head: pos)
+            } else {
+                selection = nil
+            }
+            syncSelectionToViews(stillSelecting: stillSelecting, caretFallback: stillSelecting ? nil : (origin, anchorLocal))
         }
-        select(anchor, stillSelecting: true)
+        applyDrag(anchorPos, stillSelecting: true)
         NSEvent.startPeriodicEvents(afterDelay: 0.1, withPeriod: 0.05)
         defer { NSEvent.stopPeriodicEvents() }
         var pointer = event.locationInWindow
@@ -426,22 +706,21 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
             case .leftMouseDragged:
                 pointer = next.locationInWindow
             case .periodic:
-                // Holding still past an edge keeps scrolling, like native text.
                 guard let scrollView, Self.autoscroll(scrollView, toward: pointer) else { continue }
                 #if DEBUG
                 Self.selectionTrace.append(("scroll", Int(scrollView.contentView.bounds.origin.y)))
                 #endif
             default:
                 pointer = next.locationInWindow
-                let routed = characterIndex(at: pointer, in: window, anchor: anchor)
+                let routed = position(at: pointer, in: window, anchor: anchorPos)
                 #if DEBUG
-                Self.selectionTrace.append(("up", routed ?? -1))
+                Self.selectionTrace.append(("up", routed.map { localOffset(for: $0) } ?? -1))
                 if let clip = scrollView?.contentView {
                     Self.selectionTrace.append(("offUp", Int(clip.bounds.origin.y)))
                     Self.selectionTrace.append(("frUp", Int(origin.convert(origin.bounds, to: nil).minY)))
                 }
                 #endif
-                select(routed ?? current, stillSelecting: false)
+                applyDrag(routed ?? currentPos, stillSelecting: false)
                 return
             }
             if next.type == .leftMouseDragged, let scrollView {
@@ -451,11 +730,11 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
                     #endif
                 }
             }
-            let routed = characterIndex(at: pointer, in: window, anchor: anchor)
+            let routed = position(at: pointer, in: window, anchor: anchorPos)
             #if DEBUG
-            Self.selectionTrace.append(("drag", routed ?? -1))
+            Self.selectionTrace.append(("drag", routed.map { localOffset(for: $0) } ?? -1))
             #endif
-            select(routed ?? current, stillSelecting: true)
+            applyDrag(routed ?? currentPos, stillSelecting: true)
         }
     }
 
@@ -464,34 +743,34 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
     static var selectionTrace: [(String, Int)] = []
     #endif
 
-    /// The insertion index under a window point, resolved against the
-    /// realized blocks of this conversation (top to bottom in reading order).
-    /// Inside a block it is the native glyph boundary; between blocks it is
-    /// the near edge seen from the anchor; above or below every realized block
-    /// it is the outermost realized boundary, which autoscroll then extends.
-    func characterIndex(at point: CGPoint, in window: NSWindow, anchor: Int) -> Int? {
-        // Screen order, not document order: lazy rows realize top to bottom,
-        // but the network must not assume the source array stays that way.
-        let realized = blocks.compactMap { block -> (Block, NSTextView, CGRect)? in
+    /// Resolves a window point to a message block and character offset inside it.
+    func position(at point: CGPoint, in window: NSWindow, anchor: Position) -> Position? {
+        let realized = blocks.compactMap { block -> (Block, MacDirectMessageTextView, CGRect)? in
             guard let view = block.view, view.window === window, !view.isHiddenOrHasHiddenAncestor else { return nil }
             return (block, view, view.convert(view.bounds, to: nil))
         }.sorted { $0.2.maxY > $1.2.maxY }
         guard let last = realized.last else { return nil }
         for (index, (block, view, frame)) in realized.enumerated() {
             if point.y > frame.maxY {
-                guard index > 0 else { return block.range.location }
-                let previous = realized[index - 1].0
-                return anchor <= NSMaxRange(previous.range) ? NSMaxRange(previous.range) : block.range.location
+                guard index > 0 else { return position(in: block, localOffset: 0) }
+                let (previous, _, prevFrame) = realized[index - 1]
+                // Split the inter-block gap at its midpoint so dragging toward a neighboring
+                // block snaps cleanly to that neighbor's nearest boundary (end of above / start of below).
+                let midY = (prevFrame.minY + frame.maxY) / 2
+                if point.y >= midY {
+                    return position(in: previous, localOffset: previous.engine.storage.length)
+                }
+                return position(in: block, localOffset: 0)
             }
             if point.y >= frame.minY {
                 var local = view.convert(point, from: nil)
                 local.x = min(max(local.x, 0), view.bounds.width)
                 local.y = min(max(local.y, 0), max(view.bounds.height - 1, 0))
-                let character = view.characterIndexForInsertion(at: local)
-                return min(max(character, block.range.location), NSMaxRange(block.range))
+                let character = min(max(0, view.characterIndexForInsertion(at: local)), block.engine.storage.length)
+                return position(in: block, localOffset: character)
             }
         }
-        return NSMaxRange(last.0.range)
+        return position(in: last.0, localOffset: last.0.engine.storage.length)
     }
 
     #if DEBUG
@@ -499,15 +778,14 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
 
     /// The storage range of the block currently hosting a realized view.
     func range(of view: NSTextView) -> NSRange? {
-        blocks.first { $0.view === view }?.range
+        guard let block = blocks.first(where: { $0.view === view }) else { return nil }
+        return NSRange(location: 0, length: block.engine.storage.length)
     }
 
-    /// One-shot drag-routing diagnostics for the selection inspection: the
-    /// on-screen geometry of every realized block, the insertion index the
-    /// pointer resolves to, and what the shared routing returns for it.
+    /// One-shot drag-routing diagnostics for the selection inspection.
     func debugRoute(at point: CGPoint, in window: NSWindow) -> [String: Any] {
         var blocksInfo: [[String: Any]] = []
-        let realized = blocks.compactMap { block -> (Block, NSTextView, CGRect)? in
+        let realized = blocks.compactMap { block -> (Block, MacDirectMessageTextView, CGRect)? in
             guard let view = block.view, view.window === window, !view.isHiddenOrHasHiddenAncestor else { return nil }
             return (block, view, view.convert(view.bounds, to: nil))
         }
@@ -515,7 +793,8 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
             let local = view.convert(point, from: nil)
             let contains = view.bounds.contains(local)
             blocksInfo.append([
-                "range": "\(block.range)",
+                "id": block.source.id,
+                "length": block.engine.storage.length,
                 "frame": NSStringFromRect(frame),
                 "bounds": NSStringFromRect(view.bounds),
                 "flipped": view.isFlipped,
@@ -525,14 +804,16 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
                 "insertion": contains ? view.characterIndexForInsertion(at: local) : -1,
             ])
         }
+        let anchor = blocks.first.map { position(in: $0, localOffset: 0) }
+        let resolved = anchor.flatMap { position(at: point, in: window, anchor: $0) }
         return ["blockCount": blocks.count, "realized": blocksInfo,
-                "result": characterIndex(at: point, in: window, anchor: 0) ?? -1]
+                "resultID": resolved?.id ?? -1,
+                "resultOffset": resolved.map { localOffset(for: $0) } ?? -1]
     }
     #endif
 
     /// Scrolls the conversation when the pointer is beyond its visible content
-    /// (content insets exclude the toolbar and composer overlap). Returns
-    /// whether it moved.
+    /// (content insets exclude the toolbar and composer overlap).
     @discardableResult
     static func autoscroll(_ scrollView: NSScrollView, toward point: CGPoint) -> Bool {
         let clip = scrollView.contentView
@@ -547,8 +828,6 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
         } else {
             return false
         }
-        // Proportional, bounded steps: a nudge past the edge creeps, a far
-        // pointer moves quickly but never jumps whole screens.
         let step = (distance < 0 ? -1 : 1) * min(max(abs(distance), 4), 60)
         var bounds = clip.bounds
         bounds.origin.y += clip.isFlipped ? step : -step
@@ -559,90 +838,79 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
         return true
     }
 
-    func container(for id: Int) -> NSTextContainer? { byID[id]?.container }
-
-    /// Stable native members of one coordinated TextKit network. SwiftUI's
-    /// lazy rows may retire and realize independently of the loaded messages.
-    /// Uncapped Mac rows host these views directly (no per-row scroll wrapper),
-    /// so they forward wheel events to the conversation scroll view themselves.
-    func textView(for id: Int) -> NSTextView? {
-        guard let block = byID[id] else { return nil }
-        if let view = block.view { return view }
-        let view = MacDirectMessageTextView(frame: .zero, textContainer: block.container)
-        block.view = view
-        return view
-    }
-
-    func range(for id: Int) -> NSRange? { byID[id]?.range }
-
-    func text(for id: Int) -> NSAttributedString? { byID[id]?.text }
-
-    /// Boundary context a block's row measurement must reproduce. Returning the
-    /// document's own separator objects keeps drawing and measurement on one
-    /// definition of the context instead of two hand-maintained copies.
-    func boundaryContext(for id: Int) -> (before: NSAttributedString?, after: NSAttributedString?) {
-        guard let block = byID[id] else { return (nil, nil) }
-        return (blocks.first === block ? nil : paragraphBreak,
-                blocks.last === block ? nil : containerBreak)
-    }
-
-    func hasPrecedingBlock(_ id: Int) -> Bool {
-        guard let block = byID[id] else { return false }
-        return blocks.first !== block
-    }
-
-    func hasFollowingBlock(_ id: Int) -> Bool {
-        guard let block = byID[id] else { return false }
-        return blocks.last !== block
-    }
-
-    /// Lazy rows may be recreated during reflow. Reuse detached measurements
-    /// across those lifetimes, bounded to the recently visible working set.
-    func measurement(for id: Int) -> MacTextMeasurement? {
-        guard byID[id] != nil else { return nil }
-        let measurement = measurements[id] ?? MacTextMeasurement()
-        measurements[id] = measurement
-        measurementOrder.removeAll { $0 == id }
-        measurementOrder.append(id)
-        if measurementOrder.count > 32 {
-            measurements.removeValue(forKey: measurementOrder.removeFirst())
-        }
-        return measurement
-    }
-
-    /// Transfer focus before a lazy row leaves the native hierarchy. Let the
-    /// native text view retire its own TextKit coordination during destruction:
-    /// manual container disconnection leaves a stale selection cache on macOS 27.
+    /// Transfer focus before a lazy row leaves the native hierarchy.
     static func retireTextView(_ view: NSTextView) {
-        // NSWindow does not own its responder. A lazy row can leave the native
-        // hierarchy while an inspection/selection still retains its text view.
-        // Retire its focus while the object is valid, preferring a live sibling
-        // in the same conversation so the shared selection keeps native Copy.
         if let window = view.window ?? NSApp.windows.first(where: { $0.firstResponder === view }),
            window.firstResponder === view {
-            let sibling = view.layoutManager?.textContainers.compactMap(\.textView).first {
-                $0 !== view && $0.window === window && !$0.visibleRect.isEmpty
+            let sibling: NSTextView? = if let direct = view as? MacDirectMessageTextView,
+                                         let doc = direct.document {
+                doc.blocks.lazy.compactMap { $0.view ?? $0.engine.container.textView }.first {
+                    $0 !== view && $0.window === window && !$0.visibleRect.isEmpty
+                }
+            } else {
+                nil
             }
             window.makeFirstResponder(sibling)
         }
     }
 
-    func layoutManager(
-        _ layoutManager: NSLayoutManager,
-        shouldUse action: NSLayoutManager.ControlCharacterAction,
-        forControlCharacterAt charIndex: Int
-    ) -> NSLayoutManager.ControlCharacterAction {
-        breaks.contains(charIndex) ? .containerBreak : action
+    // MARK: - Selection helpers
+
+    private func syncSelectionToViews(
+        stillSelecting: Bool,
+        skipping skipped: NSTextView? = nil,
+        caretFallback: (MacDirectMessageTextView, Int)? = nil
+    ) {
+        isSyncingSelection = true
+        defer { isSyncingSelection = false }
+        let ordered = orderedSelection()
+        for block in blocks {
+            guard let view = block.view else { continue }
+            if view === skipped { continue }
+            let range: NSRange
+            let affinity: NSSelectionAffinity
+            if let ordered {
+                range = selectedRange(for: block.source.id)
+                affinity = ordered.isReversed ? .upstream : .downstream
+            } else if let caretFallback, caretFallback.0 === view {
+                let offset = min(max(0, caretFallback.1), block.engine.storage.length)
+                range = NSRange(location: offset, length: 0)
+                affinity = .downstream
+            } else {
+                range = NSRange(location: 0, length: 0)
+                affinity = .downstream
+            }
+            if view.selectedRange() != range {
+                view.setSelectedRange(range, affinity: affinity, stillSelecting: stillSelecting)
+            }
+            view.needsDisplay = true
+        }
     }
 
-    private func position(at index: Int) -> Position? {
-        guard index != NSNotFound else { return nil }
-        guard let block = blocks.first(where: { index >= $0.range.location && index <= NSMaxRange($0.range) }) else {
-            return nil
+    private struct OrderedSelection {
+        let startIndex: Int
+        let startOffset: Int
+        let endIndex: Int
+        let endOffset: Int
+        let isReversed: Bool
+    }
+
+    private func orderedSelection() -> OrderedSelection? {
+        guard let selection,
+              let aIdx = indexByID[selection.anchor.id],
+              let hIdx = indexByID[selection.head.id] else { return nil }
+        let aOff = localOffset(for: selection.anchor)
+        let hOff = localOffset(for: selection.head)
+        if aIdx < hIdx || (aIdx == hIdx && aOff <= hOff) {
+            return OrderedSelection(startIndex: aIdx, startOffset: aOff, endIndex: hIdx, endOffset: hOff, isReversed: false)
         }
-        let offset = min(index - block.range.location, block.text.length)
-        var sourceOffset = offset
-        block.text.enumerateAttribute(.attachment, in: NSRange(location: 0, length: offset)) { value, range, _ in
+        return OrderedSelection(startIndex: hIdx, startOffset: hOff, endIndex: aIdx, endOffset: aOff, isReversed: true)
+    }
+
+    private func position(in block: Block, localOffset offset: Int) -> Position {
+        let clamped = min(max(0, offset), block.engine.storage.length)
+        var sourceOffset = clamped
+        block.engine.storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: clamped)) { value, range, _ in
             if let media = value as? any MacMessageMediaAttachment {
                 sourceOffset += media.selectionLength - range.length
             }
@@ -650,110 +918,27 @@ final class MacConversationTextDocument: NSObject, @MainActor NSLayoutManagerDel
         return Position(id: block.source.id, offset: sourceOffset)
     }
 
-    private func index(of position: Position) -> Int? {
-        guard let block = byID[position.id] else { return nil }
+    private func localOffset(for position: Position) -> Int {
+        guard let block = byID[position.id] else { return 0 }
         var nativeOffset = position.offset
         var sourceCursor = 0
         var nativeCursor = 0
-        block.text.enumerateAttribute(.attachment, in: NSRange(location: 0, length: block.text.length)) { value, range, stop in
+        let length = block.engine.storage.length
+        block.engine.storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: length)) { value, range, stop in
             guard let media = value as? any MacMessageMediaAttachment else { return }
             sourceCursor += range.location - nativeCursor
-            let length = media.selectionLength
+            let span = media.selectionLength
             if position.offset <= sourceCursor { stop.pointee = true; return }
-            if position.offset < sourceCursor + length {
+            if position.offset < sourceCursor + span {
                 nativeOffset = range.location
                 stop.pointee = true
                 return
             }
-            nativeOffset -= length - range.length
-            sourceCursor += length
+            nativeOffset -= span - range.length
+            sourceCursor += span
             nativeCursor = NSMaxRange(range)
         }
-        return block.range.location + min(max(0, nativeOffset), block.range.length)
-    }
-}
-
-/// Detached from the live selection network so measuring cannot mutate it.
-@MainActor
-final class MacTextMeasurement: NSObject, NSLayoutManagerDelegate {
-    private let storage = NSTextStorage()
-    private let layout = NSLayoutManager()
-    private let container = NSTextContainer(size: NSSize(width: 0, height: MacConversationTextDocument.initialCanvasHeight))
-    private var source: NSAttributedString?
-    private var contextBefore: NSAttributedString?
-    private var contextAfter: NSAttributedString?
-    private var endsWithContainerBreak = false
-    private var sizes: [CGFloat: CGSize] = [:]
-    private var widths: [CGFloat] = []
-
-    override init() {
-        super.init()
-        storage.addLayoutManager(layout)
-        layout.delegate = self
-        container.lineFragmentPadding = 0
-        layout.addTextContainer(container)
-    }
-
-    func size(for text: NSAttributedString, font: NSFont, width: CGFloat,
-              before: NSAttributedString? = nil, after: NSAttributedString? = nil) -> CGSize {
-        if source !== text || !sameContext(before, after) {
-            contextBefore = before
-            contextAfter = after
-            endsWithContainerBreak = after != nil
-            // Match the live container's paragraph start. TextKit omits a
-            // first paragraph's spacing-before at storage start, but honors
-            // it after this break (bold leads/headings otherwise clip the tail).
-            storage.setAttributedString(before ?? NSAttributedString(string: ""))
-            storage.append(text)
-            if let after { storage.append(after) }
-            source = text
-            sizes.removeAll()
-            widths.removeAll()
-        }
-        widths.removeAll { $0 == width }
-        widths.append(width)
-        if let cached = sizes[width] { return cached }
-        if container.size.width != width { container.size.width = width }
-        ensureCompleteLayout()
-        let used = layout.usedRect(for: container)
-        // Every laid-out line already fits in ceil(used.maxX): re-laying out at
-        // that fitted width cannot split or join any line, so a second layout
-        // pass can never change the height (stream probe fittedLayoutCheck:
-        // 0 differs in 1608 text/width cases, 2026-11-16). Skip it; the width
-        // is still reported fitted for the row's own sizing.
-        let fittedWidth = min(ceil(max(used.maxX, 1)), width)
-        let result = CGSize(width: fittedWidth,
-                            height: ceil(max(layout.usedRect(for: container).maxY,
-                                             layout.defaultLineHeight(for: font))))
-        sizes[width] = result
-        if widths.count > 64 { sizes.removeValue(forKey: widths.removeFirst()) }
-        return result
-    }
-
-    /// The document hands out the same separator instances on every call, so
-    /// identity is both exact and cheap enough for the measurement hot path.
-    private func sameContext(_ before: NSAttributedString?, _ after: NSAttributedString?) -> Bool {
-        contextBefore === before && contextAfter === after
-    }
-
-    private func ensureCompleteLayout() {
-        layout.ensureLayout(for: container)
-        // Keep the canvas finite so explicit container breaks are honored, but
-        // grow it when a single very long message exceeds the initial canvas.
-        var previousEnd = -1
-        var end = NSMaxRange(layout.characterRange(forGlyphRange: layout.glyphRange(for: container), actualGlyphRange: nil))
-        while end < storage.length && end > previousEnd {
-            previousEnd = end
-            container.size.height *= 2
-            layout.ensureLayout(for: container)
-            end = NSMaxRange(layout.characterRange(forGlyphRange: layout.glyphRange(for: container), actualGlyphRange: nil))
-        }
-    }
-
-    func layoutManager(_ layoutManager: NSLayoutManager,
-                       shouldUse action: NSLayoutManager.ControlCharacterAction,
-                       forControlCharacterAt charIndex: Int) -> NSLayoutManager.ControlCharacterAction {
-        endsWithContainerBreak && charIndex == storage.length - 1 ? .containerBreak : action
+        return min(max(0, nativeOffset), length)
     }
 }
 #endif

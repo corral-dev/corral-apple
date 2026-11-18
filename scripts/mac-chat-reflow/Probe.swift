@@ -173,8 +173,9 @@ struct ReflowProbe {
         if count > 3 {
             state.jump = "message-60"
             pump(host, seconds: 0.8)
-            guard let text = descendants(host).compactMap({ $0 as? NSTextView }).first(where: { !$0.visibleRect.isEmpty }) else {
-                preconditionFailure("History jump has no visible text")
+            guard let text = descendants(host).compactMap({ $0 as? MacDirectMessageTextView })
+                .first(where: { !$0.visibleRect.isEmpty && $0.string.contains("Message 60.") }) else {
+                preconditionFailure("History jump has no visible Message 60 text")
             }
             let selection = NSRange(location: (text.string as NSString).range(of: "Message 60.").location, length: 10)
             precondition(selection.location != NSNotFound)
@@ -183,14 +184,9 @@ struct ReflowProbe {
             for scale in [0.8, 1.5, 1.0] {
                 state.scale = scale
                 pump(host)
-                let live = descendants(host).compactMap { $0 as? NSTextView }.filter { !$0.visibleRect.isEmpty }
-                precondition(!live.isEmpty && live.allSatisfy { $0.selectedRange() == selection },
-                             "Reflow cleared the shared native text selection")
-                precondition(live.contains { view in
-                    guard let layout = view.layoutManager, let container = view.textContainer else { return false }
-                    let range = layout.characterRange(forGlyphRange: layout.glyphRange(for: container), actualGlyphRange: nil)
-                    return NSLocationInRange(selection.location, range)
-                }, "Zoom jumped away from the selected history message")
+                let live = descendants(host).compactMap { $0 as? MacDirectMessageTextView }.filter { !$0.visibleRect.isEmpty }
+                precondition(live.contains { $0 === text && $0.selectedRange() == selection },
+                             "Zoom jumped away from or cleared the selected history message")
             }
         }
     }

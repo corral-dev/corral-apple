@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import Observation
 
-struct RichMessage { let seq: Int; let text: String?; let role: String }
+struct RichMessage { let seq: Int; let text: String?; let role: String; var chatBodyText: String? { text } }
 enum ChatMarkdown {
     static let referenceBodyPointSize: CGFloat = 14
     static func attributed(_ text: String) -> AttributedString { AttributedString(text) }

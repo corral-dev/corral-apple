@@ -129,8 +129,9 @@ enum MacSelectionDragInspection {
         if let up = event(.leftMouseUp, end) { NSApp.postEvent(up, atStart: false) }
         let hit = content.hitTest(content.superview?.convert(start, from: nil) ?? start)
         let wasKey = window.isKeyWindow, wasActive = NSApp.isActive
+        let document = (from.view as? MacDirectMessageTextView)?.document
         var route: [String: Any] = [:]
-        if let document = from.view.layoutManager?.delegate as? MacConversationTextDocument {
+        if let document {
             let fromLocal = from.view.convert(start, from: nil)
             let toLocal = to.view.convert(end, from: nil)
             route = ["startInBounds": from.view.bounds.contains(fromLocal),
@@ -151,17 +152,36 @@ enum MacSelectionDragInspection {
         // Drop leftovers if the press never entered native tracking.
         while let leftover = NSApp.nextEvent(matching: [.leftMouseDragged, .leftMouseUp], until: nil,
                                              inMode: .default, dequeue: true) { _ = leftover; leftovers += 1 }
-        let selected = from.view.selectedRange()
+        let selectedStart = from.view.selectedRange()
+        let selectedEnd = to.view.selectedRange()
         try? await Task.sleep(for: .milliseconds(600))
         let after = linkedBlocks(in: content, pane: pane).map(\.frame)
         let shift = zip(before, after).map { max(abs($0.minY - $1.minY), abs($0.minX - $1.minX)) }.max() ?? -1
-        let expected = NSRange(location: min(startIndex, endIndex), length: abs(endIndex - startIndex))
-        // A gap between two blocks may resolve to either side of the separator.
         let slack = name.hasSuffix("gap") ? 1 : 0
-        let matches = abs(selected.location - expected.location) <= slack
-            && abs(NSMaxRange(selected) - NSMaxRange(expected)) <= slack
+        let matches: Bool
+        if from.view === to.view {
+            let expected = NSRange(location: min(startIndex, endIndex), length: abs(endIndex - startIndex))
+            matches = abs(selectedStart.location - expected.location) <= slack
+                && abs(NSMaxRange(selectedStart) - NSMaxRange(expected)) <= slack
+        } else {
+            let fromLength = from.view.textStorage?.length ?? 0
+            let toLength = to.view.textStorage?.length ?? 0
+            let forward = from.frame.maxY >= to.frame.maxY
+            let expectedStart = forward
+                ? NSRange(location: startIndex, length: max(0, fromLength - startIndex))
+                : NSRange(location: 0, length: startIndex)
+            let expectedEnd = forward
+                ? NSRange(location: 0, length: endIndex)
+                : NSRange(location: endIndex, length: max(0, toLength - endIndex))
+            matches = abs(selectedStart.location - expectedStart.location) <= slack
+                && abs(NSMaxRange(selectedStart) - NSMaxRange(expectedStart)) <= slack
+                && abs(selectedEnd.location - expectedEnd.location) <= slack
+                && abs(NSMaxRange(selectedEnd) - NSMaxRange(expectedEnd)) <= slack
+                && (document?.hasMultiBlockSelection == true)
+        }
         let passed = matches && shift < 0.5 && before.count == after.count
-        return ["case": name, "selected": "\(selected)", "expected": "\(expected)",
+        return ["case": name, "selectedStart": "\(selectedStart)", "selectedEnd": "\(selectedEnd)",
+                "selectedTextCount": document?.selectedPlainText().count ?? 0,
                 "maxBlockShift": shift, "passed": passed,
                 "firstResponderIsMessage": window.firstResponder is NSTextView,
                 "hit": hit.map { String(describing: type(of: $0)) } ?? "nil", "hitIsStartBlock": hit === from.view,
@@ -187,8 +207,8 @@ enum MacSelectionDragInspection {
     /// text, and the top rows slide under the toolbar where hit-testing lands
     /// on the toolbar instead of the message.
     private static func linkedBlocks(in content: NSView, pane: CGRect) -> [Block] {
-        let texts = descendants(content).compactMap { $0 as? NSTextView }.filter { text in
-            guard !text.isEditable, text.isSelectable, text.layoutManager?.textContainers.count ?? 0 > 1 else { return false }
+        let texts = descendants(content).compactMap { $0 as? MacDirectMessageTextView }.filter { text in
+            guard !text.isEditable, text.isSelectable, text.document != nil else { return false }
             let rect = text.convert(text.visibleRect, to: nil)
             guard rect.height > 30 else { return false }
             // The whole row must be on screen, not just a visible sliver.
