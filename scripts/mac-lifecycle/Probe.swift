@@ -67,6 +67,7 @@ enum WireProtocol {
     static let mSessionRestart = "session.restart", mSessionStop = "session.stop", mSessionResume = "session.resume"
     static let mSessionUserPrompts = "session.userPrompts"
     static let mSessionNew = "session.new", mSessionGet = "session.get", mSessionDelete = "session.delete"
+    static let mSessionExport = "session.export"
     static let mTerminalAttach = "terminal.attach", mTerminalDetach = "terminal.detach"
     static let mTerminalResize = "terminal.resize", mTerminalInput = "terminal.input"
     static let mTerminalResync = "terminal.resync", mInputText = "input.text"
@@ -1059,9 +1060,100 @@ struct LifecycleProbe {
         print("PASS key migration: rename in place, list-learned aliases, duplicate removal")
     }
 
+    @MainActor static func sessionMenuActionsRegressions() async {
+        let defaults = UserDefaults.standard
+        let savedModes = defaults.object(forKey: "corral.mac.paneModes")
+        let savedOrder = defaults.object(forKey: "corral.mac.paneModesOrder")
+        let savedNewMode = defaults.object(forKey: MacWorkspace.newSessionModeKey)
+        defer {
+            for (key, value) in [
+                ("corral.mac.paneModes", savedModes),
+                ("corral.mac.paneModesOrder", savedOrder),
+                (MacWorkspace.newSessionModeKey, savedNewMode),
+            ] {
+                if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
+            }
+        }
+        defaults.removeObject(forKey: MacWorkspace.newSessionModeKey)
+
+        let appModel = AppModel()
+        let client = RemoteClient()
+        appModel.client = client
+
+        let s1 = SessionSummary(key: "codex:s1", cwd: "/repo/app")
+        let s2 = SessionSummary(key: "claude:s2", cwd: "/repo/app")
+        let sOther = SessionSummary(key: "pi:s3", cwd: "/repo/other")
+        let feed = HostSessionFeed()
+        feed.listStore.sessions = [s1.key: s1, s2.key: s2, sOther.key: sOther]
+
+        let workspace = MacWorkspace()
+        workspace.attach(appModel: appModel)
+        workspace.selectHost("session-menu-actions-fixture")
+        workspace.feed = feed
+
+        // switchModeAndOpen opens an unshown session directly into the requested mode.
+        workspace.switchModeAndOpen(.terminal, for: s1)
+        check(workspace.paneKeys == [s1.key] && workspace.focusedKey == s1.key,
+              "switchModeAndOpen did not open and focus an unopened session")
+        check(workspace.mode(for: s1.key) == .terminal,
+              "switchModeAndOpen did not persist the requested terminal mode")
+
+        // Multi-select Open in Split allows 2..4 same-project agent sessions only.
+        check(workspace.canOpenAsSplit([s1, s2]),
+              "canOpenAsSplit rejected two same-project sessions")
+        check(!workspace.canOpenAsSplit([s1]),
+              "canOpenAsSplit allowed single session")
+        check(!workspace.canOpenAsSplit([s1, sOther]),
+              "canOpenAsSplit allowed mixed-project sessions")
+        check(!workspace.canOpenAsSplit([s1, SessionSummary(key: "shell:1", cwd: "/repo/app")]),
+              "canOpenAsSplit allowed a shell pane")
+
+        workspace.openSplit([s1, s2])
+        check(workspace.paneKeys == [s1.key, s2.key] && workspace.focusedKey == s1.key,
+              "openSplit did not replace workspace with the selected split")
+        for _ in 0..<4 { await Task.yield() }
+        check(client.calls.contains { $0.0 == WireProtocol.mLayoutSetGroup },
+              "openSplit did not sync the new split group to host")
+
+        // exportSession copies JSON and transitions exportFeedback cleanly, restoring prior pasteboard.
+        let previousPasteboard = NSPasteboard.general.string(forType: .string)
+        defer {
+            NSPasteboard.general.clearContents()
+            if let previousPasteboard {
+                NSPasteboard.general.setString(previousPasteboard, forType: .string)
+            }
+        }
+        client.handler = { method, params in
+            if method == WireProtocol.mSessionExport {
+                check(params["key"] as? String == s1.key, "exportSession sent wrong key")
+                return ["json": "{\"ok\":true,\"data\":{\"id\":\"codex:s1\"}}"]
+            }
+            return [:]
+        }
+        await workspace.exportSession(s1.key)
+        check(NSPasteboard.general.string(forType: .string) == "{\"ok\":true,\"data\":{\"id\":\"codex:s1\"}}",
+              "exportSession did not copy share JSON to pasteboard")
+        check(workspace.exportFeedback == .copied(s1.key),
+              "exportSession did not enter .copied feedback state")
+        check(workspace.actionError == nil, "successful exportSession set actionError")
+
+        // Failure resets exportFeedback and surfaces actionError.
+        client.handler = { method, _ in
+            if method == WireProtocol.mSessionExport {
+                throw RemoteCallError(message: "export blocked")
+            }
+            return [:]
+        }
+        await workspace.exportSession(s2.key)
+        check(workspace.exportFeedback == nil && !(workspace.actionError ?? "").isEmpty,
+              "failed exportSession did not surface error cleanly")
+        print("PASS session menu actions: switchModeAndOpen, openSplit, exportSession")
+    }
+
     @MainActor static func main() async throws {
         paneActivationRegressions()
         keyMigrationRegressions()
+        await sessionMenuActionsRegressions()
         await sessionBatchRegressions()
         modeObservationRegressions()
         preferredOpenModeRegressions()

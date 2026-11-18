@@ -601,7 +601,8 @@ private extension SessionSummary {
             attention: attention == .unread ? .none : attention,
             lastUser: lastUser, lastAgent: lastAgent, rich: rich, group: group,
             pinned: pinned, marker: isUnreadMarker ? "" : marker,
-            needsAttention: needsAttention, completionID: completionID
+            needsAttention: needsAttention, completionID: completionID,
+            loopCount: loopCount
         )
     }
 }

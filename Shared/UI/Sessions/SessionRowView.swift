@@ -88,12 +88,25 @@ struct SessionRowView: View {
 
             TimelineView(.periodic(from: .now, by: 30)) { context in
                 let time = SessionPresentation.timeLabel(for: session, now: context.date)
-                if !time.isEmpty {
-                    Text(time)
-                        .interfaceFont(Typography.sessionMeta)
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                        .lineLimit(1)
+                HStack(spacing: 4 * interfaceScale) {
+                    if let loopCount = SessionPresentation.positiveLoopCount(for: session),
+                       let loopText = SessionPresentation.compactLoopCount(loopCount) {
+                        SessionLoopCountLabel(count: loopCount, text: loopText, font: Typography.sessionMeta)
+                            .fixedSize()
+                        if !time.isEmpty {
+                            Text(verbatim: "·")
+                                .interfaceFont(Typography.sessionMeta)
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                    if !time.isEmpty {
+                        Text(time)
+                            .interfaceFont(Typography.sessionMeta)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
                 }
             }
             SessionStatusDots(session: session)
@@ -188,4 +201,35 @@ enum SessionRowLayout {
     static let rowVerticalPadding: CGFloat = 8
     /// 助手标识与标题顶部对齐的固定尺寸。
     static let badgeSize: CGFloat = 32
+}
+
+/// Compact agent-loop count (`repeat` symbol + monospaced digit) shared by iPhone and Mac rows.
+struct SessionLoopCountLabel: View {
+    @Environment(\.interfaceScale) private var interfaceScale
+    let count: Int
+    let text: String
+    let font: Font
+
+    var body: some View {
+        HStack(spacing: 2 * interfaceScale) {
+            Image(systemName: "repeat")
+                .imageScale(.small)
+                .accessibilityHidden(true)
+            Text(verbatim: text)
+                .monospacedDigit()
+        }
+        .interfaceFont(font)
+        .foregroundStyle(foregroundStyle)
+        .lineLimit(1)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(verbatim: "\(count) loops"))
+    }
+
+    private var foregroundStyle: AnyShapeStyle {
+        switch SessionPresentation.loopTier(for: count) {
+        case .light: AnyShapeStyle(.tertiary)
+        case .medium: AnyShapeStyle(.secondary)
+        case .heavy: AnyShapeStyle(.primary.opacity(0.78))
+        }
+    }
 }

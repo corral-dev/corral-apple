@@ -223,6 +223,23 @@
         }
       }
     },
+    "action.share" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Share"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分享"
+          }
+        }
+      }
+    },
     "chat.activity.tool" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -517,6 +534,227 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "还没有对话"
+          }
+        }
+      }
+    },
+    "chat.file.copied" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copied"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已复制"
+          }
+        }
+      }
+    },
+    "chat.file.copy_code" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copy"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复制"
+          }
+        }
+      }
+    },
+    "chat.file.copy_markdown" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copy Markdown"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复制 Markdown"
+          }
+        }
+      }
+    },
+    "chat.file.copy_path" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copy Path"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复制路径"
+          }
+        }
+      }
+    },
+    "chat.file.host_unsupported" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Update Corral on your computer to preview linked files."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请先升级开发机上的 Corral，再预览文件。"
+          }
+        }
+      }
+    },
+    "chat.file.large_source_notice" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This file is large and shown as plain source."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件较大，已切换为源码视图。"
+          }
+        }
+      }
+    },
+    "chat.file.line_badge %lld" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Line %lld"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "第 %lld 行"
+          }
+        }
+      }
+    },
+    "chat.file.loading" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Downloading file…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在下载文件…"
+          }
+        }
+      }
+    },
+    "chat.file.secondary_link_unsupported" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open linked files directly from the chat message."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请回到对话消息中点击对应文件链接。"
+          }
+        }
+      }
+    },
+    "chat.file.system_preview" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "System Preview"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "系统预览"
+          }
+        }
+      }
+    },
+    "chat.file.unavailable.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unable to Open File"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法打开文件"
+          }
+        }
+      }
+    },
+    "chat.file.view.rendered" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rendered"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "渲染"
+          }
+        }
+      }
+    },
+    "chat.file.view.source" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Source"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "源码"
           }
         }
       }
@@ -2370,13 +2608,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Chat"
+            "value" : "Chat View"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "聊天"
+            "value" : "对话视图"
           }
         }
       }
@@ -2449,19 +2687,53 @@
         }
       }
     },
+    "mac.pane.switch_to_chat" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Switch to Chat View"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切换到对话视图"
+          }
+        }
+      }
+    },
+    "mac.pane.switch_to_terminal" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Switch to Agent Terminal"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切换到助手终端"
+          }
+        }
+      }
+    },
     "mac.pane.terminal" : {
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Terminal"
+            "value" : "Agent Terminal"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "终端"
+            "value" : "助手终端"
           }
         }
       }
@@ -2472,13 +2744,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Switch Chat / Terminal"
+            "value" : "Switch Chat View / Agent Terminal"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "切换聊天 / 终端"
+            "value" : "切换对话视图 / 助手终端"
           }
         }
       }
@@ -2506,13 +2778,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Chat view or the assistant's own terminal"
+            "value" : "Chat View or Agent Terminal"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "聊天视图或助手自己的终端界面"
+            "value" : "对话视图或助手终端"
           }
         }
       }
@@ -2683,6 +2955,57 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "换助手接着做"
+          }
+        }
+      }
+    },
+    "mac.session.export" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Export Session"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "导出会话"
+          }
+        }
+      }
+    },
+    "mac.session.exported" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copied session JSON"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已复制会话 JSON"
+          }
+        }
+      }
+    },
+    "mac.session.exporting" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Exporting session…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在导出会话…"
           }
         }
       }
@@ -3978,13 +4301,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Open Terminal"
+            "value" : "Open Project Terminal"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "打开终端"
+            "value" : "打开项目终端"
           }
         }
       }
@@ -4108,13 +4431,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Chat"
+            "value" : "Chat View"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "对话"
+            "value" : "对话视图"
           }
         }
       }
@@ -4227,13 +4550,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Terminal"
+            "value" : "Agent Terminal"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "终端"
+            "value" : "助手终端"
           }
         }
       }
@@ -4724,6 +5047,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "会话可能已经创建，请先查看会话列表再决定是否另建。"
+          }
+        }
+      }
+    },
+    "session.workspace.copied" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copied path"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已复制路径"
           }
         }
       }

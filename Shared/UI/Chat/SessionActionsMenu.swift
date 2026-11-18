@@ -83,6 +83,28 @@ enum SessionActionsMenu {
     static func handoffParams(sourceKey: String, targetRuntimeID: String) -> [String: Any] {
         ["key": sourceKey, "runtime": targetRuntimeID]
     }
+
+    /// Decode compact share JSON returned by `session.export`.
+    static func decodeExportJSON(from payload: Any) throws -> String {
+        guard let dict = payload as? [String: Any],
+              let json = dict["json"] as? String else {
+            throw RemoteCallError(
+                code: WireProtocol.eInternal,
+                message: String(localized: String.LocalizationValue("error.unknown")),
+                hint: ""
+            )
+        }
+        return json
+    }
+
+    @MainActor
+    static func exportJSON(sourceKey: String, client: RemoteClient) async throws -> String {
+        let payload = try await client.call(
+            WireProtocol.mSessionExport,
+            params: copyParams(sourceKey: sourceKey)
+        )
+        return try decodeExportJSON(from: payload)
+    }
 }
 
 // MARK: - SwiftUI 菜单视图
@@ -95,20 +117,30 @@ enum SessionDetailMode: String, CaseIterable, Identifiable, Hashable {
 
     var title: LocalizedStringKey {
         switch self {
-        case .chat: "session.detail.chat"
-        case .terminal: "session.detail.terminal"
+        case .chat: "mac.pane.chat"
+        case .terminal: "mac.pane.terminal"
         }
+    }
+
+    var toggled: SessionDetailMode {
+        self == .chat ? .terminal : .chat
+    }
+
+    var switchTitle: LocalizedStringKey {
+        self == .chat ? "mac.pane.switch_to_terminal" : "mac.pane.switch_to_chat"
+    }
+
+    var switchSymbol: String {
+        self == .chat ? "terminal" : "bubble.left.and.text.bubble.right"
     }
 }
 
-/// Top-trailing More menu uses a plain ellipsis with a 44-point target.
-/// Busy remote actions never block the local display picker.
+/// Shared single-session menu content used by both the detail More button and
+/// the mobile session-list context menu.
 @MainActor
-struct SessionActionsMenuView: View {
+struct SessionMenuItems: View {
     let session: SessionSummary
-    /// 接力候选（含来源自身；调用方应在 runtimes.list 回来后传入，已做 available 过滤亦可）。
-    var runtimes: [RuntimeEntry]
-    /// Empty, pending and failed catalogs have distinct presentations.
+    var runtimes: [RuntimeEntry] = []
     var runtimesLoaded: Bool = false
     var runtimesLoading: Bool = false
     var runtimesError: String? = nil
@@ -116,17 +148,20 @@ struct SessionActionsMenuView: View {
     var access: String?
     var clientReady: Bool
     var isBusy: Bool
+    var supportsExport: Bool = false
     var supportsRestart: Bool = false
-    var onRestart: () -> Void = {}
-    var onCopy: () -> Void
-    var onHandoff: (RuntimeEntry) -> Void
-    /// Project terminal for the session's folder; nil hides the item (old host,
-    /// or a platform that opens terminals elsewhere).
+    var onPin: (() -> Void)? = nil
     var onOpenTerminal: (() -> Void)? = nil
-    /// Local display selection is independent of remote mutation permissions.
+    var onCopy: (() -> Void)? = nil
+    var onHandoff: ((RuntimeEntry) -> Void)? = nil
+    var onPendingHandoff: ((RuntimeEntry) -> Void)? = nil
+    var onExport: (() -> Void)? = nil
+    var onRestart: (() -> Void)? = nil
+    var onStop: (() -> Void)? = nil
+    var onCopyPath: (() -> Void)? = nil
+    var onRequestDelete: (() -> Void)? = nil
     var displayMode: Binding<SessionDetailMode>? = nil
-
-    @State private var pendingHandoff: RuntimeEntry?
+    var onOpenAgentTerminal: (() -> Void)? = nil
 
     private var visible: Bool {
         SessionActionsMenu.isMenuVisible(access: access)
@@ -140,80 +175,111 @@ struct SessionActionsMenuView: View {
         SessionActionsMenu.handoffTargets(from: runtimes)
     }
 
+    private var isPinned: Bool {
+        session.pinned == true || session.group?.pinned == true
+    }
+
+    private var workspacePath: String {
+        SessionPresentation.fullWorkspacePath(from: session)
+    }
+
     var body: some View {
-        if visible || displayMode != nil {
-            Menu {
-                if let displayMode {
-                    Section {
-                        Picker("session.detail.mode", selection: displayMode) {
-                            ForEach(SessionDetailMode.allCases) { mode in
-                                #if os(iOS)
-                                Label(mode.title, systemImage: mode == .chat ? "bubble.left.and.text.bubble.right" : "terminal")
-                                    .labelStyle(.titleAndIcon)
-                                    .tag(mode)
-                                #else
-                                Text(mode.title).tag(mode)
-                                #endif
-                            }
-                        }
-                        .pickerStyle(.inline)
+        if let displayMode {
+            Section {
+                Button {
+                    displayMode.wrappedValue = displayMode.wrappedValue.toggled
+                } label: {
+                    Label(displayMode.wrappedValue.switchTitle, systemImage: displayMode.wrappedValue.switchSymbol)
+                }
+            }
+        } else if let onOpenAgentTerminal {
+            Section {
+                Button(action: onOpenAgentTerminal) {
+                    Label("mac.pane.switch_to_terminal", systemImage: "terminal")
+                }
+            }
+        }
+
+        if visible, (onPin != nil || onOpenTerminal != nil) {
+            Section {
+                if let onPin {
+                    Button(action: onPin) {
+                        Label(
+                            isPinned ? "sessions.action.unpin" : "sessions.action.pin",
+                            systemImage: isPinned ? "pin.slash" : "pin"
+                        )
+                    }
+                    .disabled(!enabled)
+                }
+                if let onOpenTerminal {
+                    Button(action: onOpenTerminal) {
+                        Label("session.actions.open_terminal", systemImage: "terminal")
+                    }
+                    .disabled(!enabled)
+                }
+            }
+        }
+
+        if (visible && (onCopy != nil || onHandoff != nil || onRestart != nil || (session.live && onStop != nil)))
+            || onExport != nil {
+            Section {
+                if visible {
+                    if let onCopy {
+                        copyButton(action: onCopy)
+                    }
+                    if let onHandoff {
+                        handoffMenu(onHandoff: onHandoff)
                     }
                 }
-                if visible {
-                    if let onOpenTerminal {
-                        Section {
-                            Button(action: onOpenTerminal) {
-                                Label("session.actions.open_terminal", systemImage: "terminal")
-                            }
-                            .disabled(!enabled)
-                        }
+                if let onExport {
+                    Button(action: onExport) {
+                        Label("mac.session.export", systemImage: "square.and.arrow.up")
                     }
-                    copySection
-                    handoffSection
-                    Section {
-                        Button {
-                            onRestart()
-                        } label: {
-                            Label(supportsRestart ? "session.actions.restart" : "session.actions.restart.update_host",
-                                  systemImage: "arrow.clockwise")
+                    .disabled(!clientReady || !supportsExport || isBusy)
+                }
+                if visible {
+                    if let onRestart {
+                        Button(action: onRestart) {
+                            Label(
+                                supportsRestart ? "session.actions.restart" : "session.actions.restart.update_host",
+                                systemImage: "arrow.clockwise"
+                            )
                         }
                         .disabled(!enabled || !supportsRestart)
                     }
-                }
-            } label: {
-                Label("session.actions.menu", systemImage: "ellipsis")
-            }
-            .disabled(displayMode == nil && !enabled)
-            .interfaceFrame(minWidth: TouchTarget.minimum, minHeight: TouchTarget.minimum)
-            .accessibilityHint(Text("session.actions.menu.hint"))
-            .confirmationDialog(
-                "session.actions.handoff.confirm_title",
-                isPresented: Binding(
-                    get: { pendingHandoff != nil },
-                    set: { if !$0 { pendingHandoff = nil } }
-                ),
-                titleVisibility: .visible
-            ) {
-                Button("session.actions.handoff.confirm") {
-                    if let target = pendingHandoff {
-                        pendingHandoff = nil
-                        onHandoff(target)
+                    if session.live, let onStop {
+                        Button(action: onStop) {
+                            Label("sessions.action.stop", systemImage: "stop.fill")
+                        }
+                        .disabled(!enabled)
                     }
                 }
-                Button("action.cancel", role: .cancel) { pendingHandoff = nil }
-            } message: {
-                if let target = pendingHandoff {
-                    handoffConfirmMessage(for: target)
+            }
+        }
+
+        Section {
+            Button {
+                PlatformPasteboard.copy(workspacePath)
+                onCopyPath?()
+            } label: {
+                Label("session.workspace.copy_path", systemImage: "folder")
+            }
+            .disabled(workspacePath.isEmpty)
+        }
+
+        if visible, let onRequestDelete {
+            Section {
+                Button(role: .destructive, action: onRequestDelete) {
+                    Label("sessions.action.delete", systemImage: "trash")
                 }
+                .disabled(!enabled)
             }
         }
     }
 
     @ViewBuilder
-    private var copySection: some View {
-        Button {
-            onCopy()
-        } label: {
+    private func copyButton(action: @escaping () -> Void) -> some View {
+        Button(action: action) {
             if isBusy {
                 HStack {
                     ProgressView()
@@ -228,7 +294,7 @@ struct SessionActionsMenuView: View {
     }
 
     @ViewBuilder
-    private var handoffSection: some View {
+    private func handoffMenu(onHandoff: @escaping (RuntimeEntry) -> Void) -> some View {
         Menu {
             if runtimesLoading {
                 Text("session.actions.handoff.loading")
@@ -242,8 +308,9 @@ struct SessionActionsMenuView: View {
             } else {
                 ForEach(targets) { target in
                     Button {
-                        if SessionActionsMenu.needsKimiNotice(runtimeID: target.id) {
-                            pendingHandoff = target
+                        if SessionActionsMenu.needsKimiNotice(runtimeID: target.id),
+                           let onPendingHandoff {
+                            onPendingHandoff(target)
                         } else {
                             onHandoff(target)
                         }
@@ -260,6 +327,109 @@ struct SessionActionsMenuView: View {
             Label("session.actions.handoff", systemImage: SessionActionsMenu.handoffSymbol)
         }
         .disabled(!enabled)
+    }
+}
+
+/// Top-trailing More menu uses a plain ellipsis with a 44-point target.
+/// Busy remote actions never block local display switching or path copy.
+@MainActor
+struct SessionActionsMenuView: View {
+    let session: SessionSummary
+    /// 接力候选（含来源自身；调用方应在 runtimes.list 回来后传入，已做 available 过滤亦可）。
+    var runtimes: [RuntimeEntry]
+    /// Empty, pending and failed catalogs have distinct presentations.
+    var runtimesLoaded: Bool = false
+    var runtimesLoading: Bool = false
+    var runtimesError: String? = nil
+    var onRetryRuntimes: () -> Void = {}
+    var access: String?
+    var clientReady: Bool
+    var isBusy: Bool
+    var supportsExport: Bool = false
+    var supportsRestart: Bool = false
+    var onPin: (() -> Void)? = nil
+    var onRestart: () -> Void = {}
+    var onCopy: () -> Void
+    var onHandoff: (RuntimeEntry) -> Void
+    var onExport: (() -> Void)? = nil
+    var onStop: (() -> Void)? = nil
+    var onCopyPath: (() -> Void)? = nil
+    var onDelete: (() -> Void)? = nil
+    /// Project terminal for the session's folder; nil hides the item (old host,
+    /// or a platform that opens terminals elsewhere).
+    var onOpenTerminal: (() -> Void)? = nil
+    /// Local display selection is independent of remote mutation permissions.
+    var displayMode: Binding<SessionDetailMode>? = nil
+
+    @State private var pendingHandoff: RuntimeEntry?
+    @State private var confirmDelete = false
+
+    private var hasAnyEnabledEntry: Bool {
+        displayMode != nil
+            || !SessionPresentation.fullWorkspacePath(from: session).isEmpty
+            || (clientReady && !isBusy)
+    }
+
+    var body: some View {
+        Menu {
+            SessionMenuItems(
+                session: session,
+                runtimes: runtimes,
+                runtimesLoaded: runtimesLoaded,
+                runtimesLoading: runtimesLoading,
+                runtimesError: runtimesError,
+                onRetryRuntimes: onRetryRuntimes,
+                access: access,
+                clientReady: clientReady,
+                isBusy: isBusy,
+                supportsExport: supportsExport,
+                supportsRestart: supportsRestart,
+                onPin: onPin,
+                onOpenTerminal: onOpenTerminal,
+                onCopy: onCopy,
+                onHandoff: onHandoff,
+                onPendingHandoff: { pendingHandoff = $0 },
+                onExport: onExport,
+                onRestart: onRestart,
+                onStop: onStop,
+                onCopyPath: onCopyPath,
+                onRequestDelete: onDelete != nil ? { confirmDelete = true } : nil,
+                displayMode: displayMode
+            )
+        } label: {
+            Label("session.actions.menu", systemImage: "ellipsis")
+        }
+        .disabled(!hasAnyEnabledEntry)
+        .interfaceFrame(minWidth: TouchTarget.minimum, minHeight: TouchTarget.minimum)
+        .accessibilityHint(Text("session.actions.menu.hint"))
+        .confirmationDialog(
+            "session.actions.handoff.confirm_title",
+            isPresented: Binding(
+                get: { pendingHandoff != nil },
+                set: { if !$0 { pendingHandoff = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("session.actions.handoff.confirm") {
+                if let target = pendingHandoff {
+                    pendingHandoff = nil
+                    onHandoff(target)
+                }
+            }
+            Button("action.cancel", role: .cancel) { pendingHandoff = nil }
+        } message: {
+            if let target = pendingHandoff {
+                handoffConfirmMessage(for: target)
+            }
+        }
+        .confirmationDialog(
+            "sessions.delete_confirm.title",
+            isPresented: $confirmDelete,
+            titleVisibility: .visible
+        ) {
+            Button("sessions.action.delete", role: .destructive) { onDelete?() }
+            Button("action.cancel", role: .cancel) {}
+        }
     }
 
     @ViewBuilder

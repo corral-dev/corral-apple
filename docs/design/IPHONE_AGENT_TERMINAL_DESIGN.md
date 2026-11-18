@@ -106,4 +106,14 @@ still includes the signed phone build and install-shelf publication.
 
 Supersedes the failure/Retry UI in the 2026-10-17 and 2026-10-24 sections above per the owner ruling recorded in [Self-healing terminal panes without failure/Retry UI](MACOS_CLIENT_DESIGN.md#self-healing-terminal-panes-without-failureretry-ui-owner-ruling-2026-11-16): delete `terminal.load_failed.title`, `terminal.start_failed.title`, and their `Retry` buttons from `AgentTerminalPane`, `ProjectTerminalScreen`, `TerminalGridView`, `MacTerminalPane`, and `MacShellPane`. Both `RemoteTerminalStream` and `AgentTerminalPane.resume()` self-heal recoverable errors (such as `host_starting`, `unavailable`, `timeout`, and missing snapshots) with capped backoff while presented, active, and connected instead of showing a Retry screen.
 
+## Unified mobile menus, mode wording and session JSON export (owner request, 2026-11-19)
+
+Supersedes the two-row inline Chat/Terminal radio `Picker` and `"Chat"` / `"Terminal"` (`"聊天"` / `"终端"`) labels from 2026-10-14:
+
+1. **Single-line dynamic mode switch and unified wording.** `SessionActionsMenuView` replaces the two-item inline `Picker` with a single dynamic button (`Switch to Agent Terminal` / `切换到助手终端` with `terminal` when in Chat View; `Switch to Chat View` / `切换到对话视图` with `bubble.left.and.text.bubble.right` when in Agent Terminal), keeping local view switching enabled offline, while busy, and on read-only pairings. `SessionDetailMode`, `SessionHeaderState.terminal` (`SessionHeaderPresentation`), and iPadOS `CorralIOSCommands` (`⌘E`) use the same `Chat View` / `Agent Terminal` (`对话视图` / `助手终端`) terminology.
+2. **Unified session actions across list context menu and detail More menu.** Both the session list long-press / iPad secondary-click menu (`SessionListItem`) and the conversation top-right `…` menu (`SessionActionsMenuView`) expose the same single-session actions:
+   - Mode action: inside an open session, toggles Chat View ↔ Agent Terminal; from the session list context menu, `Switch to Agent Terminal` opens the session directly into Agent Terminal (`SessionSplitContext.open` with initial mode).
+   - `Pin` / `Unpin`, `Fork Session`, `Continue with` (plain-text runtime names without icons), `Export Session` (`session.export` read-only/data-plane RPC copying share JSON to `PlatformPasteboard` with transient pill feedback `Exporting session…` / `Copied session JSON`), `Restart session`, `Stop` (shown while `session.live`), `Copy path` (`folder`), and destructive `Delete` (backed by native `confirmationDialog` without navigating into a deleted session).
+   - `SessionActionsMenuView` retains `Open Terminal` (project shell) for phone/iPad navigation when host `project_shell` is supported and pairing is writable.
+
 <!-- 该文档整理/压缩于 2026-10-20 -->

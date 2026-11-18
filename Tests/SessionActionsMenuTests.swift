@@ -148,5 +148,31 @@ final class SessionActionsMenuTests: XCTestCase {
     func testSessionCopyMethodName() {
         XCTAssertEqual(WireProtocol.mSessionCopy, "session.copy")
         XCTAssertEqual(WireProtocol.mSessionHandoff, "session.handoff")
+        XCTAssertEqual(WireProtocol.mSessionExport, "session.export")
+        XCTAssertTrue(WireProtocol.dataPlaneMethods.contains(WireProtocol.mSessionExport))
+    }
+
+    func testHostCapabilitiesDecodeSessionExport() throws {
+        let caps = try RemoteJSONDecoder.decode(
+            HostCapabilities.self,
+            from: ["command_receipts": true, "session_export": true] as [String: Any]
+        )
+        XCTAssertTrue(caps.sessionExport)
+        let encoded = try JSONEncoder().encode(caps)
+        let roundtrip = try JSONDecoder().decode(HostCapabilities.self, from: encoded)
+        XCTAssertTrue(roundtrip.sessionExport)
+    }
+
+    func testDecodeExportJSONExtractsStringOrThrows() throws {
+        let json = try SessionActionsMenu.decodeExportJSON(from: ["json": "{\"ok\":true}"] as [String: Any])
+        XCTAssertEqual(json, "{\"ok\":true}")
+        XCTAssertThrowsError(try SessionActionsMenu.decodeExportJSON(from: ["ok": true] as [String: Any]))
+    }
+
+    func testSessionDetailModeToggleMetadata() {
+        XCTAssertEqual(SessionDetailMode.chat.toggled, .terminal)
+        XCTAssertEqual(SessionDetailMode.terminal.toggled, .chat)
+        XCTAssertEqual(SessionDetailMode.chat.switchSymbol, "terminal")
+        XCTAssertEqual(SessionDetailMode.terminal.switchSymbol, "bubble.left.and.text.bubble.right")
     }
 }

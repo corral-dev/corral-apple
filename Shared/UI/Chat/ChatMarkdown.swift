@@ -124,6 +124,18 @@ nonisolated enum ChatMarkdown: Sendable {
         return AttributedString(source)
     }
 
+    static func styledInline(
+        _ parsed: AttributedString,
+        scale: CGFloat = 1,
+        baseWeight: PlatformFont.Weight = .regular
+    ) -> AttributedString {
+        var text = parsed
+        let bodySize = referenceBodyPointSize * scale
+        text.font = PlatformFont.systemFont(ofSize: bodySize, weight: baseWeight)
+        applyInlineStyles(&text, bodySize: bodySize, strongWeight: baseWeight == .regular ? .semibold : .bold)
+        return text
+    }
+
     private static func style(_ parsed: AttributedString) -> AttributedString {
         var text = parsed
         let bodySize = referenceBodyPointSize
@@ -135,11 +147,15 @@ nonisolated enum ChatMarkdown: Sendable {
         return text
     }
 
-    private static func applyInlineStyles(_ text: inout AttributedString, bodySize: CGFloat) {
+    private static func applyInlineStyles(
+        _ text: inout AttributedString,
+        bodySize: CGFloat,
+        strongWeight: PlatformFont.Weight = .semibold
+    ) {
         for (intent, range) in text.runs[\.inlinePresentationIntent].reversed() {
             guard let intent else { continue }
             if intent.contains(.stronglyEmphasized) {
-                text[range].font = PlatformFont.systemFont(ofSize: bodySize, weight: .semibold)
+                text[range].font = PlatformFont.systemFont(ofSize: bodySize, weight: strongWeight)
             } else if intent.contains(.emphasized) {
                 if let italic = italicFont(size: bodySize) {
                     text[range].font = italic

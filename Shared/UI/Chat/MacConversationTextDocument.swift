@@ -121,14 +121,20 @@ final class MacSingleTextEngine {
         }
         widths.removeAll { $0 == width }
         widths.append(width)
-        if let cached = sizes[width] { return cached }
+        if let cached = sizes[width] {
+            if abs(container.size.width - cached.width) > 0.01 || container.size.height != CGFloat.greatestFiniteMagnitude {
+                container.size = NSSize(width: cached.width, height: CGFloat.greatestFiniteMagnitude)
+                layout.ensureLayout(for: container)
+                container.textView?.needsDisplay = true
+            }
+            return cached
+        }
 
         if abs(container.size.width - width) > 0.01 || container.size.height != CGFloat.greatestFiniteMagnitude {
             container.size = NSSize(width: width, height: CGFloat.greatestFiniteMagnitude)
         }
         layout.ensureLayout(for: container)
-        let used = layout.usedRect(for: container)
-        let fittedWidth = min(ceil(max(used.maxX, 1)), width)
+        let fittedWidth = min(ceil(max(measuredContentWidth(), 1)), width)
         if abs(fittedWidth - width) > 0.01 {
             container.size.width = fittedWidth
             layout.ensureLayout(for: container)
@@ -144,6 +150,40 @@ final class MacSingleTextEngine {
             sizes.removeValue(forKey: widths.removeFirst())
         }
         return result
+    }
+
+    /// True horizontal extent of laid-out lines and `NSTextTableBlock` boxes.
+    /// Once a `NSTextView` is attached to `container`, resizing `container.size.width`
+    /// makes `NSLayoutManager.usedRect(for:)` report the full container width even for
+    /// short text; `enumerateLineFragments` preserves the true content extent.
+    private func measuredContentWidth() -> CGFloat {
+        let layout = self.layout
+        let storage = self.storage
+        let glyphs = layout.glyphRange(for: container)
+        var maxX: CGFloat = 0
+        if glyphs.length > 0 {
+            layout.enumerateLineFragments(forGlyphRange: glyphs) { lineRect, usedRect, _, fragmentGlyphs, _ in
+                var lineRight = usedRect.maxX
+                let character = layout.characterIndexForGlyph(at: fragmentGlyphs.location)
+                if character < storage.length,
+                   let paragraph = storage.attribute(.paragraphStyle, at: character, effectiveRange: nil) as? NSParagraphStyle,
+                   !paragraph.textBlocks.isEmpty {
+                    var blockRight = lineRect.maxX
+                    for block in paragraph.textBlocks {
+                        blockRight += block.width(for: .padding, edge: .maxX)
+                            + block.width(for: .border, edge: .maxX)
+                            + block.width(for: .margin, edge: .maxX)
+                    }
+                    lineRight = max(lineRight, blockRight)
+                }
+                maxX = max(maxX, lineRight)
+            }
+        }
+        let extraUsed = layout.extraLineFragmentUsedRect
+        if !extraUsed.isEmpty {
+            maxX = max(maxX, extraUsed.maxX)
+        }
+        return maxX
     }
 
     /// Keeps the drawing container aligned with the view's realized bounds.
@@ -350,6 +390,8 @@ final class MacMessageTextMount: NSView {
         if let container = view.textContainer,
            abs(container.size.width - bounds.width) > 0.25 || container.size.height != CGFloat.greatestFiniteMagnitude {
             container.size = NSSize(width: bounds.width, height: CGFloat.greatestFiniteMagnitude)
+            view.layoutManager?.ensureLayout(for: container)
+            view.needsDisplay = true
         }
         if view.frame != bounds { view.frame = bounds }
     }

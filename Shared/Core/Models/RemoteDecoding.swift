@@ -109,6 +109,21 @@ nonisolated extension KeyedDecodingContainer {
         return defaultValue
     }
 
+    func decodeFlexibleOptionalNonNegativeInt(forKey key: Key) -> Int? {
+        if isAbsentOrNull(key) { return nil }
+        if (try? decode(Bool.self, forKey: key)) != nil { return nil }
+        if let value = try? decode(Int.self, forKey: key) { return value >= 0 ? value : nil }
+        if let value = try? decode(Double.self, forKey: key), value.isFinite, value >= 0, value.rounded() == value {
+            return Int(value)
+        }
+        if let value = try? decode(String.self, forKey: key),
+           let parsed = Int(value.trimmingCharacters(in: .whitespacesAndNewlines)),
+           parsed >= 0 {
+            return parsed
+        }
+        return nil
+    }
+
     func decodeFlexibleDouble(forKey key: Key, default defaultValue: Double = 0) -> Double {
         if isAbsentOrNull(key) { return defaultValue }
         if let value = try? decode(Double.self, forKey: key) { return value }

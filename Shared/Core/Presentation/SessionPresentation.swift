@@ -236,4 +236,29 @@ enum SessionPresentation {
     static func displayTitle(for session: SessionSummary) -> String {
         session.title.isEmpty ? session.key : session.title
     }
+
+    enum LoopTier: Equatable {
+        case light
+        case medium
+        case heavy
+    }
+
+    static func positiveLoopCount(for session: SessionSummary) -> Int? {
+        guard let count = session.loopCount, count > 0 else { return nil }
+        return count
+    }
+
+    static func compactLoopCount(_ count: Int?) -> String? {
+        guard let count, count > 0 else { return nil }
+        if count >= 1_000 {
+            return String(format: "%.1fk", Double(count) / 1_000.0)
+        }
+        return "\(count)"
+    }
+
+    static func loopTier(for count: Int) -> LoopTier {
+        if count <= 3 { return .light }
+        if count <= 30 { return .medium }
+        return .heavy
+    }
 }

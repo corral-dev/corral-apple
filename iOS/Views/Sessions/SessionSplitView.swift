@@ -48,6 +48,8 @@ private struct SessionSplitView: View {
     @State private var selection: SessionRoute?
     /// A conversation opened by New Session (or copy/hand-off) focuses its composer once.
     @State private var autoFocusKey: String?
+    @State private var modeRequestCounter = 0
+    @State private var requestedMode: SessionModeRequest?
     @State private var showSettings = false
     @State private var newSessionRequest = 0
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
@@ -69,6 +71,7 @@ private struct SessionSplitView: View {
                         set: { select($0, focusComposer: false) }
                     ),
                     open: { select($0, focusComposer: $1) },
+                    openMode: { select($0, focusComposer: $1 == .chat, initialMode: $1) },
                     showSettings: { showSettings = true },
                     showPairing: onPair,
                     newSessionRequest: newSessionRequest,
@@ -105,8 +108,14 @@ private struct SessionSplitView: View {
         }
     }
 
-    private func select(_ route: SessionRoute?, focusComposer: Bool) {
+    private func select(_ route: SessionRoute?, focusComposer: Bool, initialMode: SessionDetailMode? = nil) {
         autoFocusKey = focusComposer ? route?.key : nil
+        if let initialMode {
+            modeRequestCounter &+= 1
+            requestedMode = SessionModeRequest(id: modeRequestCounter, mode: initialMode)
+        } else if selection?.key != route?.key {
+            requestedMode = nil
+        }
         selection = route
         prepareSelectedConversation()
     }
@@ -134,12 +143,29 @@ private struct SessionSplitView: View {
             SessionDetailView(
                 session: session,
                 autoFocusComposer: autoFocusKey == route.key,
+                initialMode: requestedMode?.mode ?? .chat,
+                modeRequest: requestedMode,
                 metadataStore: feed.listStore,
                 injectedStore: store,
                 onDidCreateSession: { created in
                     feed.listStore.patchSession(created)
                     feed.listStore.rememberOpened(created)
                     select(SessionRoute(key: created.key), focusComposer: true)
+                },
+                onPin: { Task { try? await feed.togglePin(session) } },
+                onStop: { Task { try? await feed.stop(session) } },
+                onDelete: { target in
+                    Task {
+                        do {
+                            try await feed.delete(target)
+                            if selection?.key == target.key {
+                                selection = nil
+                                presentation.dismiss()
+                            }
+                        } catch {
+                            // Error is surfaced by feed.loadError.
+                        }
+                    }
                 }
             )
             // A replaced client owns a different store even for the same key.
@@ -226,6 +252,15 @@ struct CorralIOSCommands: Commands {
     @FocusedValue(\.corralPairMachine) private var pairMachine
     @FocusedValue(\.corralSearchSessions) private var searchSessions
     @FocusedValue(\.corralToggleSessionMode) private var toggleSessionMode
+    @FocusedValue(\.corralFocusedSessionMode) private var focusedSessionMode
+
+    private var toggleViewTitle: LocalizedStringKey {
+        switch focusedSessionMode {
+        case .chat: "mac.pane.switch_to_terminal"
+        case .terminal: "mac.pane.switch_to_chat"
+        case nil: "mac.pane.toggle_view"
+        }
+    }
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
@@ -244,7 +279,7 @@ struct CorralIOSCommands: Commands {
                 .disabled(searchSessions == nil)
         }
         CommandMenu("mac.menu.session") {
-            Button("mac.pane.toggle_view") { toggleSessionMode?() }
+            Button(toggleViewTitle) { toggleSessionMode?() }
                 .keyboardShortcut("e", modifiers: .command)
                 .disabled(toggleSessionMode == nil)
         }
@@ -269,5 +304,6 @@ extension FocusedValues {
     @Entry var corralPairMachine: CorralCommandAction?
     @Entry var corralSearchSessions: CorralCommandAction?
     @Entry var corralToggleSessionMode: CorralCommandAction?
+    @Entry var corralFocusedSessionMode: SessionDetailMode?
 }
 #endif

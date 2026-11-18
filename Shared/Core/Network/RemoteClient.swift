@@ -70,6 +70,8 @@ final class RemoteClient: NSObject {
     var supportsUserPrompts: Bool { hostCapabilities.userPrompts }
     /// Host can preview images that messages cite (`media.image`).
     var supportsMediaImage = false
+    /// Host can download files linked by messages (`media.file`).
+    var supportsMediaFile = false
 
     /// 距最近一次任一平面成功收包（含 ping 的 pong）的秒数；尚未收包则为 nil。
     var lastReceiveAge: TimeInterval? {
@@ -484,6 +486,7 @@ final class RemoteClient: NSObject {
         hasBeenReady = false
         hostCapabilities = .empty
         supportsMediaImage = false
+        supportsMediaFile = false
         state = .disconnected
         diagnose(.disconnected)
     }

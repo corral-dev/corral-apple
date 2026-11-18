@@ -157,6 +157,7 @@ import Foundation
         }
         hostCapabilities = caps
         supportsMediaImage = WireProtocol.supportsMediaImage(fromHelloPayload: payload)
+        supportsMediaFile = WireProtocol.supportsMediaFile(fromHelloPayload: payload)
         let bind = WireProtocol.dataBind(fromHelloPayload: payload)
         hostOffersDataPlane = WireProtocol.shouldAttachDataPlane(dataBind: bind)
         if !hasDataPlane, WireProtocol.shouldAttachDataPlane(dataBind: bind), let bind {

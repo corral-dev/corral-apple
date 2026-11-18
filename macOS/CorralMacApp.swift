@@ -156,6 +156,7 @@ final class MacCommandCenter {
     /// Whether the main window currently has a connected, writable machine.
     var canCreateSession = false
     var hasFocusedPane = false
+    var focusedPaneMode: MacWorkspace.PaneMode?
     var focusedSessionPinned = false
     var backRequest = 0
     var forwardRequest = 0
@@ -185,9 +186,9 @@ struct MacCommands: Commands {
                 .keyboardShortcut("f", modifiers: .command)
         }
         CommandMenu("mac.menu.session") {
-            Button("mac.pane.toggle_view") { center.toggleViewRequest += 1 }
+            Button(toggleViewTitle) { center.toggleViewRequest += 1 }
                 .keyboardShortcut("e", modifiers: .command)
-                .disabled(!center.hasFocusedPane)
+                .disabled(center.focusedPaneMode == nil)
             Button("mac.session.open_in_split") { center.openInSplitRequest += 1 }
                 .keyboardShortcut("d", modifiers: .command)
                 .disabled(!center.canOpenInSplit)
@@ -233,5 +234,13 @@ struct MacCommands: Commands {
                 .disabled(!center.canUseTerminal)
         }
         SidebarCommands()
+    }
+
+    private var toggleViewTitle: LocalizedStringKey {
+        switch center.focusedPaneMode {
+        case .chat: "mac.pane.switch_to_terminal"
+        case .terminal: "mac.pane.switch_to_chat"
+        case nil: "mac.pane.toggle_view"
+        }
     }
 }

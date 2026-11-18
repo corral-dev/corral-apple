@@ -515,8 +515,7 @@ struct MacPaneHeader: View {
     /// Kebab: the system ellipsis turned upright (no vertical variant ships).
     private var sessionMenu: some View {
         Menu {
-            MacSessionMenuItems(session: session, runtimes: workspace.runtimes, mode: modeBinding,
-                                onClose: { workspace.requestClose(session.key) })
+            MacSessionMenuItems(session: session)
         } label: {
             Image(systemName: "ellipsis")
                 .interfaceFont(.system(size: 13, weight: .semibold))
@@ -555,17 +554,6 @@ struct MacPaneHeader: View {
             .interfacePadding(.leading, 6)
             .accessibilityHidden(true)
         }
-    }
-
-    private var modeBinding: Binding<MacWorkspace.PaneMode> {
-        Binding(
-            get: { workspace.mode(for: session.key) },
-            set: { mode in
-                workspace.setMode(mode, for: session.key)
-                workspace.focus(session.key)
-                workspace.requestKeyFocus(session.key)
-            }
-        )
     }
 
     private var titleHelp: String {

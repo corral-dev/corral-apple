@@ -19,7 +19,10 @@ enum ConversationTimelineItem: Equatable, Identifiable {
     }
 }
 struct ChatActivityState: Equatable {}
-extension EnvironmentValues { @Entry var chatImageLoader: ChatImageLoader? = nil }
+extension EnvironmentValues {
+    @Entry var chatImageLoader: ChatImageLoader? = nil
+    @Entry var chatFileLoader: NSObject? = nil
+}
 
 // Fixture-only stand-ins for the production media path, which the probe
 // deliberately does not compile (ChatImageLoader pulls RemoteClient, Network
@@ -250,9 +253,68 @@ private struct Fixture {
             tableCost()
             fittedLayoutCheck(size: 120)
             boundaryParity()
+            attachedHuggingAndCacheRestoreCheck()
             contextSensitivity()
             liveNetworkHeights(size: 120)
         }
+    }
+
+    /// Regression for two AppKit TextKit 1 bugs on attached `MacDirectMessageTextView`:
+    /// (1) `usedRect(for:)` returns `container.size.width` after container resize with a
+    /// textView attached, stretching short user bubbles (`"发版"`);
+    /// (2) hitting a wider cached `sizes[width]` after a narrower proposal left
+    /// `container.size.width` stuck narrow and clipped wrapped bottom lines.
+    @MainActor
+    static func attachedHuggingAndCacheRestoreCheck() {
+        let font = Typography.sessionUIFont(.bubbleBody, scale: 1)
+        let style = MacConversationTextDocument.Style(font: font, foreground: .labelColor, userForeground: .white)
+        let doc = MacConversationTextDocument()
+        let assistantText = "3. 绿色用户气泡边距异常排查与修复\n- 定位 (SelectableAttributedText.swift、MessageBubbleView.swift)\n- 复现像素测量对比截图与模拟器多宽复现：布局测量与绘制容器不一致"
+        let tableText = "Short\n\n| ColA | ColB |\n|---|---|\n| foo123 | bar456 |"
+        let identity = ObjectIdentifier(NSObject())
+        func syncSources(user: String) {
+            doc.update(identity: identity, sources: [
+                .init(id: 1, text: user, isUser: true),
+                .init(id: 2, text: assistantText, isUser: false),
+                .init(id: 3, text: tableText, isUser: false),
+            ], style: style) { source in
+                render(source.text, font: font)
+            }
+        }
+        syncSources(user: "发版")
+        let initialTableSize = doc.size(for: 3, proposalWidth: 664, font: font)!
+        let tv1 = doc.textView(for: 1)!
+        let tv2 = doc.textView(for: 2)!
+        let tv3 = doc.textView(for: 3)!
+        _ = (tv1, tv2, tv3)
+
+        // 1. Update text after NSTextView is attached + propose wide column -> must hug!
+        syncSources(user: "发版 ")
+        let userWide = doc.size(for: 1, proposalWidth: 664, font: font)!
+        let userMedium = doc.size(for: 1, proposalWidth: 500, font: font)!
+        if userWide.width >= 60 || userMedium.width >= 60 {
+            print("FAIL attached user bubble stretched: 664->\(userWide) 500->\(userMedium)")
+            exit(1)
+        }
+
+        // 2. Wide -> narrow -> wide cache hit must restore container width and relayout!
+        let wideSize = doc.size(for: 2, proposalWidth: 684, font: font)!
+        _ = doc.size(for: 2, proposalWidth: 180, font: font)!
+        let restored = doc.size(for: 2, proposalWidth: 684, font: font)!
+        let containerWidth = doc.container(for: 2)!.size.width
+        if restored != wideSize || abs(containerWidth - wideSize.width) > 0.25 {
+            print("FAIL cache hit left container narrow: expected \(wideSize), got \(restored), containerWidth=\(containerWidth)")
+            exit(1)
+        }
+
+        // 3. Mixed prose + NSTextTable keeps full table box extent even after NSTextView attachment.
+        let attachedTableSize = doc.size(for: 3, proposalWidth: 400, font: font)!
+        if abs(attachedTableSize.width - initialTableSize.width) > 1 {
+            print("FAIL attached table width drifted: initial=\(initialTableSize) attached=\(attachedTableSize)")
+            exit(1)
+        }
+        print("  attached hugging & cache-restore check: user=\(userWide.width)pt, restored=\(containerWidth)pt, table=\(attachedTableSize.width)pt")
+        fflush(stdout)
     }
 
     // MARK: Streaming

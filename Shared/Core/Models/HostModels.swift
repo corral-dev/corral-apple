@@ -205,6 +205,8 @@ nonisolated struct HostCapabilities: Codable, Sendable, Equatable {
     var userPrompts: Bool = false
     /// Host runs project shells for the project terminal (`shell.*`).
     var projectShell: Bool = false
+    /// Host exports a share-format JSON payload for a session (`session.export`).
+    var sessionExport: Bool = false
 
     static let empty = HostCapabilities(commandReceipts: false, toolDetail: false)
 
@@ -222,6 +224,7 @@ nonisolated struct HostCapabilities: Codable, Sendable, Equatable {
         case terminalLatest = "terminal_latest"
         case userPrompts = "user_prompts"
         case projectShell = "project_shell"
+        case sessionExport = "session_export"
     }
 
     init(commandReceipts: Bool, toolDetail: Bool = false, sessionRestart: Bool = false) {
@@ -243,6 +246,7 @@ nonisolated struct HostCapabilities: Codable, Sendable, Equatable {
         terminalStream = (try? container.decode(Bool.self, forKey: .terminalStream)) ?? features.contains("terminal_stream")
         userPrompts = (try? container.decode(Bool.self, forKey: .userPrompts)) ?? features.contains("user_prompts")
         projectShell = (try? container.decode(Bool.self, forKey: .projectShell)) ?? features.contains("project_shell")
+        sessionExport = (try? container.decode(Bool.self, forKey: .sessionExport)) ?? features.contains("session_export")
         if container.contains(.commandReceipts) {
             if let flag = try? container.decode(Bool.self, forKey: .commandReceipts) {
                 commandReceipts = flag
@@ -280,6 +284,7 @@ nonisolated struct HostCapabilities: Codable, Sendable, Equatable {
         try container.encode(terminalLatest, forKey: .terminalLatest)
         try container.encode(userPrompts, forKey: .userPrompts)
         try container.encode(projectShell, forKey: .projectShell)
+        try container.encode(sessionExport, forKey: .sessionExport)
     }
 }
 

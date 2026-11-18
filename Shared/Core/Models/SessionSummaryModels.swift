@@ -74,6 +74,7 @@ nonisolated struct SessionSummary: Codable, Sendable, Identifiable, Equatable, H
     /// older hosts; `SessionListFiltering` then falls back to the same rule.
     let needsAttention: Bool?
     let completionID: String
+    let loopCount: Int?
 
     var id: String { key }
 
@@ -91,6 +92,7 @@ nonisolated struct SessionSummary: Codable, Sendable, Identifiable, Equatable, H
         case rich, group, pinned, marker
         case needsAttention = "needs_attention"
         case completionID = "completion_id"
+        case loopCount = "loop_count"
     }
 
     init(
@@ -115,7 +117,8 @@ nonisolated struct SessionSummary: Codable, Sendable, Identifiable, Equatable, H
         pinned: Bool? = nil,
         marker: String? = nil,
         needsAttention: Bool? = nil,
-        completionID: String = ""
+        completionID: String = "",
+        loopCount: Int? = nil
     ) {
         self.key = key
         self.runtime = runtime
@@ -139,6 +142,7 @@ nonisolated struct SessionSummary: Codable, Sendable, Identifiable, Equatable, H
         self.marker = marker
         self.needsAttention = needsAttention
         self.completionID = completionID
+        self.loopCount = loopCount
     }
 
     /// Preserve metadata when the host promotes a provisional identity to a canonical key.
@@ -166,7 +170,8 @@ nonisolated struct SessionSummary: Codable, Sendable, Identifiable, Equatable, H
             pinned: pinned,
             marker: marker,
             needsAttention: needsAttention,
-            completionID: completionID
+            completionID: completionID,
+            loopCount: loopCount
         )
     }
 
@@ -212,6 +217,7 @@ nonisolated struct SessionSummary: Codable, Sendable, Identifiable, Equatable, H
             needsAttention = nil
         }
         completionID = container.decodeFlexibleString(forKey: .completionID)
+        loopCount = container.decodeFlexibleOptionalNonNegativeInt(forKey: .loopCount)
     }
 }
 

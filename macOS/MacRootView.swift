@@ -229,6 +229,9 @@ struct MacRootView: View {
         .onChange(of: workspace.focusedKey) { _, key in
             commands.hasFocusedPane = key != nil
         }
+        .onChange(of: focusedAgentPaneMode, initial: true) { _, mode in
+            commands.focusedPaneMode = mode
+        }
         .onChange(of: focusedSessionIsPinned, initial: true) { _, pinned in
             commands.focusedSessionPinned = pinned
         }
@@ -307,6 +310,62 @@ struct MacRootView: View {
 
     @ViewBuilder
     private var detail: some View {
+        detailContent
+            .overlay(alignment: .bottom) {
+                if let feedback = workspace.exportFeedback {
+                    HStack(spacing: 6) {
+                        if case .exporting = feedback {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        Text(exportFeedbackTitle(for: feedback))
+                            .interfaceFont(.system(size: 12, weight: .medium))
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(.regularMaterial, in: Capsule())
+                    .overlay(Capsule().strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5))
+                    .shadow(color: Color.black.opacity(0.12), radius: 8, y: 2)
+                    .padding(.bottom, 16)
+                    .allowsHitTesting(false)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                }
+            }
+            .animation(.easeInOut(duration: 0.18), value: workspace.exportFeedback)
+            .confirmationDialog(
+                deleteTitle,
+                isPresented: Binding(
+                    get: { !workspace.pendingDeleteTargets.isEmpty },
+                    set: { if !$0 { workspace.pendingDeleteTargets = [] } }
+                ),
+                titleVisibility: .visible,
+                presenting: workspace.pendingDeleteTargets
+            ) { targets in
+                Button(role: .destructive) {
+                    workspace.pendingDeleteTargets = []
+                    workspace.performBatchAction(.delete, on: targets) { key in
+                        targets.first(where: { $0.key == key }).map { SessionPresentation.displayTitle(for: $0) } ?? key
+                    }
+                } label: {
+                    Label("sessions.action.delete", systemImage: "trash")
+                }
+                Button("action.cancel", role: .cancel) { workspace.pendingDeleteTargets = [] }
+            } message: { targets in
+                Text(verbatim: deleteMessage(targets))
+            }
+            .alert("mac.sessions.action_failed", isPresented: Binding(
+                get: { workspace.batchError != nil }, set: { if !$0 { workspace.batchError = nil } }
+            )) {
+                Button("action.ok", role: .cancel) { workspace.batchError = nil }
+            } message: {
+                Text(verbatim: workspace.batchError ?? "")
+            }
+    }
+
+    @ViewBuilder
+    private var detailContent: some View {
         if let feed, !workspace.drawnPaneKeys.isEmpty {
             MacSplitArea(feed: feed, autoFocusKey: autoFocusKey)
                 .id(feed.host.hostID)
@@ -321,6 +380,29 @@ struct MacRootView: View {
             .interfaceFrame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(.systemGroupedBackground))
         }
+    }
+
+    private var focusedAgentPaneMode: MacWorkspace.PaneMode? {
+        guard let key = workspace.focusedKey, !ProjectShell.isShellKey(key) else { return nil }
+        return workspace.mode(for: key)
+    }
+
+    private func exportFeedbackTitle(for feedback: MacWorkspace.ExportFeedback) -> LocalizedStringKey {
+        switch feedback {
+        case .exporting: "mac.session.exporting"
+        case .copied: "mac.session.exported"
+        }
+    }
+
+    private var deleteTitle: Text {
+        if workspace.pendingDeleteTargets.count == 1 { Text("sessions.delete_confirm.title") }
+        else { Text("mac.sessions.delete_confirm \(workspace.pendingDeleteTargets.count)") }
+    }
+
+    private func deleteMessage(_ targets: [SessionSummary]) -> String {
+        let titles = targets.prefix(5).map { SessionPresentation.displayTitle(for: $0) }
+        let extra = targets.count > 5 ? [String(localized: "mac.sessions.more \(targets.count - 5)")] : []
+        return (titles + extra + [String(localized: "mac.sessions.delete_warning")]).joined(separator: "\n")
     }
 
     private var focusedSessionIsPinned: Bool {

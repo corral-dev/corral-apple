@@ -32,6 +32,8 @@ struct CorralApp: App {
                 #if DEBUG
                 if ProcessInfo.processInfo.arguments.contains("-CorralInspectMarkdownTables") {
                     MarkdownTableInspection()
+                } else if ProcessInfo.processInfo.arguments.contains("-CorralInspectMarkdownViewer") {
+                    MarkdownFileViewerInspection()
                 } else if ProcessInfo.processInfo.arguments.contains("-CorralInspectDeletion") {
                     SessionDeletionInspection()
                 } else {

@@ -3,6 +3,11 @@ import SwiftUI
 import UIKit
 #endif
 
+struct SessionModeRequest: Equatable {
+    let id: Int
+    let mode: SessionDetailMode
+}
+
 struct SessionDetailView: View {
     @Environment(\.interfaceScale) private var interfaceScale
     @Environment(AppModel.self) private var appModel
@@ -24,13 +29,18 @@ struct SessionDetailView: View {
     init(
         session: SessionSummary,
         autoFocusComposer: Bool = false,
+        initialMode: SessionDetailMode = .chat,
+        modeRequest: SessionModeRequest? = nil,
         metadataStore: SessionListStore? = nil,
         injectedStore: ConversationStore? = nil,
         composerFocusRequest: Int = 0,
         onComposerFocusChange: ((Bool) -> Void)? = nil,
         scrollRequest: ChatScrollRequest? = nil,
         externalScrollToLatestRequest: Int = 0,
-        onDidCreateSession: ((SessionSummary) -> Void)? = nil
+        onDidCreateSession: ((SessionSummary) -> Void)? = nil,
+        onPin: (() -> Void)? = nil,
+        onStop: (() -> Void)? = nil,
+        onDelete: ((SessionSummary) -> Void)? = nil
     ) {
         self.injectedStore = injectedStore
         _conversationStore = State(initialValue: injectedStore)
@@ -42,10 +52,17 @@ struct SessionDetailView: View {
         sessionKey = session.key
         self.metadataStore = metadataStore
         self.autoFocusComposer = autoFocusComposer
+        self.modeRequest = modeRequest
         self.onDidCreateSession = onDidCreateSession
+        self.onPin = onPin
+        self.onStop = onStop
+        self.onDelete = onDelete
+        _pane = State(initialValue: initialMode)
+        _visitedTerminal = State(initialValue: initialMode == .terminal)
     }
     /// New-session path: focus the composer once after appear.
     var autoFocusComposer = false
+    var modeRequest: SessionModeRequest? = nil
     /// A conversation owned by the container (a Mac pane keeps it alive across
     /// chat/terminal switches and feeds its prompts panel). The container starts
     /// and stops it; this view only renders and sends through it.
@@ -60,9 +77,29 @@ struct SessionDetailView: View {
     var externalScrollToLatestRequest = 0
     /// 复制/接力成功后的新会话：列表页负责落盘并推进，详情页只上报。
     var onDidCreateSession: ((SessionSummary) -> Void)? = nil
+    var onPin: (() -> Void)? = nil
+    var onStop: (() -> Void)? = nil
+    var onDelete: ((SessionSummary) -> Void)? = nil
     @State private var pane: SessionDetailMode = .chat
+    @State private var transientNotice: TransientNotice?
+    @State private var transientNoticeTask: Task<Void, Never>?
+
+    private enum TransientNotice: Equatable {
+        case exporting
+        case exported
+        case copiedPath
+
+        var titleKey: LocalizedStringKey {
+            switch self {
+            case .exporting: "mac.session.exporting"
+            case .exported: "mac.session.exported"
+            case .copiedPath: "session.workspace.copied"
+            }
+        }
+    }
     @State private var conversationStore: ConversationStore?
     @State private var imageLoader: ChatImageLoader?
+    @State private var fileLoader: ChatFileLoader?
     @State private var visitedTerminal = false
     @State private var draft = ""
     @State private var draftAttachments: [DraftImageAttachment] = []
@@ -119,8 +156,9 @@ struct SessionDetailView: View {
         }
         // iPad menu bar ⌘E, as on the Mac (owner request 2026-11-01).
         .focusedSceneValue(\.corralToggleSessionMode, canShowAgentTerminal ? CorralCommandAction(id: sessionKey) {
-            pane = pane == .chat ? .terminal : .chat
+            pane = pane.toggled
         } : nil)
+        .focusedSceneValue(\.corralFocusedSessionMode, canShowAgentTerminal ? pane : nil)
         #if DEBUG
         // `-CorralInspectProjectTerminal`: open the project terminal once the host allows it.
         .onChange(of: canOpenProjectTerminal, initial: true) { _, allowed in
@@ -205,6 +243,11 @@ struct SessionDetailView: View {
         .onChange(of: canShowAgentTerminal) { _, allowed in
             if !allowed { pane = .chat }
         }
+        .onChange(of: modeRequest) { _, request in
+            guard let request, canShowAgentTerminal else { return }
+            if request.mode == .terminal { visitedTerminal = true }
+            pane = request.mode
+        }
         #if DEBUG
         .onChange(of: canShowAgentTerminal, initial: true) { _, allowed in
             if allowed, ProcessInfo.processInfo.arguments.contains("-CorralInspectAgentTerminal") {
@@ -216,6 +259,9 @@ struct SessionDetailView: View {
         .hapticScope(hapticScope)
         .onDisappear {
             persistDraft(draft)
+            fileLoader?.cancelActiveDownload()
+            transientNoticeTask?.cancel()
+            transientNoticeTask = nil
             let owned = injectedStore == nil ? conversationStore : nil
             Task {
                 await owned?.stop()
@@ -244,10 +290,16 @@ struct SessionDetailView: View {
             access: appModel.connectedAccess,
             clientReady: isHostReady,
             isBusy: isSending || isActionBusy,
+            supportsExport: appModel.client?.hostCapabilities.sessionExport == true,
             supportsRestart: appModel.client?.hostCapabilities.sessionRestart == true,
+            onPin: onPin,
             onRestart: startRestart,
             onCopy: { Task { await copySession() } },
             onHandoff: { target in Task { await handoffSession(to: target) } },
+            onExport: { Task { await exportSession() } },
+            onStop: onStop,
+            onCopyPath: showCopiedPathNotice,
+            onDelete: onDelete != nil ? { onDelete?(session) } : nil,
             onOpenTerminal: openTerminalAction,
             displayMode: canShowAgentTerminal ? $pane : nil
         )
@@ -345,6 +397,9 @@ struct SessionDetailView: View {
         if imageLoader == nil {
             imageLoader = ChatImageLoader(client: appModel.client, hostID: hostID, sessionKey: session.key)
         }
+        if fileLoader == nil {
+            fileLoader = ChatFileLoader(client: appModel.client, hostID: hostID, sessionKey: session.key)
+        }
         if let conversationStore { return conversationStore }
         let client = appModel.client
         let conv = ConversationStore(
@@ -420,6 +475,29 @@ struct SessionDetailView: View {
                 #endif
             }
             .interfaceFrame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay(alignment: .bottom) {
+                if let transientNotice {
+                    HStack(spacing: 6) {
+                        if transientNotice == .exporting {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        Text(transientNotice.titleKey)
+                            .interfaceFont(.system(size: 13, weight: .medium))
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(.regularMaterial, in: Capsule())
+                    .overlay(Capsule().strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5))
+                    .shadow(color: Color.black.opacity(0.12), radius: 8, y: 2)
+                    .padding(.bottom, Space.md)
+                    .allowsHitTesting(false)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                }
+            }
+            .animation(.easeInOut(duration: 0.18), value: transientNotice)
         }
     }
 
@@ -441,18 +519,87 @@ struct SessionDetailView: View {
                 onRetryMessage: retryFailedMessage
             )
             .environment(\.chatImageLoader, imageLoader)
+            #if os(iOS)
+            .environment(\.chatFileLoader, fileLoader)
+            #endif
             .sheet(item: Binding(get: { imageLoader?.diagrams.inspection }, set: { imageLoader?.diagrams.inspection = $0 })) { inspection in
                 ChatDiagramViewer(inspection: inspection)
             }
             .quickLookPreview(Binding(
-                get: { imageLoader?.previewURL },
-                set: { imageLoader?.previewURL = $0 }
+                get: { fileLoader?.quickLookURL ?? imageLoader?.previewURL },
+                set: { value in
+                    if value == nil {
+                        fileLoader?.quickLookURL = nil
+                        imageLoader?.previewURL = nil
+                    }
+                }
             ))
+            #if os(iOS)
+            .fullScreenCover(item: Binding(
+                get: { fileLoader?.markdownPresentation },
+                set: { if $0 == nil { fileLoader?.dismissMarkdown() } }
+            )) { presentation in
+                MarkdownFileViewer(
+                    presentation: presentation,
+                    hostID: draftHostID,
+                    onRetry: { fileLoader?.retryMarkdown() },
+                    onDismiss: { fileLoader?.dismissMarkdown() },
+                    onSystemPreview: { url in fileLoader?.quickLookURL = url }
+                )
+                .environment(\.sessionTextScale, appModel.sessionTextSize.scale)
+            }
+            .overlay {
+                if let download = fileLoader?.nonMarkdownDownload, download.error == nil {
+                    fileDownloadOverlay(download)
+                }
+            }
+            .alert(
+                "chat.file.unavailable.title",
+                isPresented: Binding(
+                    get: { fileLoader?.nonMarkdownDownload?.error != nil },
+                    set: { if !$0 { fileLoader?.dismissNonMarkdown() } }
+                )
+            ) {
+                Button("action.retry") { fileLoader?.retryNonMarkdown() }
+                Button("action.cancel", role: .cancel) { fileLoader?.dismissNonMarkdown() }
+            } message: {
+                Text(verbatim: fileLoader?.nonMarkdownDownload?.error ?? "")
+            }
+            #endif
             .environment(\.conversationScrollReadAction, acknowledgeScrollRead)
         } else {
             ProgressView()
         }
     }
+
+    #if os(iOS)
+    private func fileDownloadOverlay(_ download: ChatFileLoader.NonMarkdownDownload) -> some View {
+        VStack(spacing: Space.md * interfaceScale) {
+            if let progress = download.progress {
+                ProgressView(value: progress)
+                    .progressViewStyle(.linear)
+                    .frame(width: 180)
+            } else {
+                ProgressView()
+            }
+            Text("chat.file.loading")
+                .interfaceFont(.subheadline)
+                .foregroundStyle(.primary)
+            Text(verbatim: download.link.displayName)
+                .interfaceFont(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Button("action.cancel", role: .cancel) {
+                fileLoader?.dismissNonMarkdown()
+            }
+            .interfaceFont(.footnote.weight(.medium))
+        }
+        .padding(Space.lg)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
+        .shadow(color: .black.opacity(0.12), radius: 16, y: 6)
+        .padding(Space.xl)
+    }
+    #endif
 
     private var sessionHeaderLabel: some View {
         VStack(spacing: 2 * interfaceScale) {
@@ -815,6 +962,43 @@ struct SessionDetailView: View {
         } catch {
             HapticFeedback.shared.failure(error, operationID: operationID, scope: hapticScope)
             showComposerError(SessionActionsMenu.failureMessage(for: error), feedback: nil)
+        }
+    }
+
+    private func exportSession() async {
+        let operationID = hapticScope.beginOperation()
+        guard let client = appModel.client else {
+            showComposerError(String(localized: String.LocalizationValue("error.not_connected")))
+            return
+        }
+        transientNoticeTask?.cancel()
+        transientNotice = .exporting
+        isActionBusy = true
+        defer { isActionBusy = false }
+        do {
+            let json = try await SessionActionsMenu.exportJSON(sourceKey: sessionKey, client: client)
+            PlatformPasteboard.copy(json)
+            HapticFeedback.shared.emit(.success, operationID: operationID, scope: hapticScope)
+            showTransientNotice(.exported)
+        } catch {
+            if transientNotice == .exporting { transientNotice = nil }
+            HapticFeedback.shared.failure(error, operationID: operationID, scope: hapticScope)
+            showComposerError(SessionActionsMenu.failureMessage(for: error), feedback: nil)
+        }
+    }
+
+    private func showCopiedPathNotice() {
+        HapticFeedback.shared.emit(.selection, scope: hapticScope)
+        showTransientNotice(.copiedPath)
+    }
+
+    private func showTransientNotice(_ notice: TransientNotice) {
+        transientNoticeTask?.cancel()
+        transientNotice = notice
+        transientNoticeTask = Task {
+            try? await Task.sleep(for: .seconds(2.2))
+            guard !Task.isCancelled else { return }
+            transientNotice = nil
         }
     }
 

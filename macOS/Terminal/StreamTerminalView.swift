@@ -14,6 +14,10 @@ final class StreamTerminalView: SwiftTerm.TerminalView {
             return paneSessionContextMenu()
         }
         let menu = NSMenu()
+        menu.allowsContextMenuPlugIns = false
+        if #available(macOS 15.2, *) {
+            menu.automaticallyInsertsWritingToolsItems = false
+        }
         for (title, action) in [
             (String(localized: "action.copy"), #selector(copy(_:))),
             (String(localized: "composer.key.paste"), #selector(paste(_:))),

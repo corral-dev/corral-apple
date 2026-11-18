@@ -143,11 +143,15 @@ struct SelectableAttributedText: View {
     var onMoreBelowChange: ((Bool) -> Void)? = nil
     /// Original markdown source; iOS Copy puts this so selection pastes as markdown.
     var sourceMarkdown: String? = nil
+    /// Optional handler for `.link` taps; returning a closure intercepts the link.
+    var linkHandler: ((URL) -> (() -> Void)?)? = nil
 
     @Environment(\.sessionTextScale) private var sessionTextScale
     @Environment(\.interfaceScale) private var interfaceScale
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
+        let _ = dynamicTypeSize
         SelectableTextView(
             attributed: attributed,
             font: Typography.sessionUIFont(fontStyle, scale: sessionTextScale * interfaceScale),
@@ -155,7 +159,8 @@ struct SelectableAttributedText: View {
             tint: UIColor(tint),
             maxHeight: maxHeight,
             onMoreBelowChange: onMoreBelowChange,
-            sourceMarkdown: sourceMarkdown
+            sourceMarkdown: sourceMarkdown,
+            linkHandler: linkHandler
         )
         .accessibilityLabel(Text(String(attributed.characters)))
     }
@@ -169,6 +174,7 @@ private struct SelectableTextView: UIViewRepresentable {
     let maxHeight: CGFloat?
     let onMoreBelowChange: ((Bool) -> Void)?
     let sourceMarkdown: String?
+    let linkHandler: ((URL) -> (() -> Void)?)?
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -188,7 +194,10 @@ private struct SelectableTextView: UIViewRepresentable {
         view.textContainerInset = .zero
         view.textContainer.lineFragmentPadding = 0
         view.textContainer.widthTracksTextView = true
-        view.adjustsFontForContentSizeCategory = true
+        view.contentInsetAdjustmentBehavior = .never
+        // Dynamic Type flows through SwiftUI's dynamicTypeSize -> sessionUIFont so
+        // the live view never rescales fonts independently of the detached sizer.
+        view.adjustsFontForContentSizeCategory = false
         // Let the parent width win so long lines wrap instead of stretching.
         view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         view.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -217,6 +226,9 @@ private struct SelectableTextView: UIViewRepresentable {
         uiView: UITextView,
         context: Context
     ) -> CGSize? {
+        if proposal.width == 0 {
+            return CGSize(width: 1, height: ceil(font.lineHeight))
+        }
         let maxWidth = proposal.width ?? (uiView.bounds.width > 1 ? uiView.bounds.width : nil)
         guard let maxWidth, maxWidth.isFinite, maxWidth > 0 else { return nil }
 
@@ -251,6 +263,7 @@ private struct SelectableTextView: UIViewRepresentable {
     }
 
     private func apply(to view: UITextView, coordinator: Coordinator) {
+        coordinator.linkHandler = linkHandler
         let ns = converted(coordinator)
         if let stable = view as? EdgeFadeTextView { stable.sourceMarkdown = sourceMarkdown }
         if coordinator.appliedText !== ns {
@@ -291,12 +304,6 @@ private struct SelectableTextView: UIViewRepresentable {
         font: UIFont,
         proposalWidth: CGFloat
     ) -> CGSize {
-        let constraint = CGSize(width: proposalWidth, height: .greatestFiniteMagnitude)
-        let used = ns.boundingRect(
-            with: constraint,
-            options: [.usesLineFragmentOrigin, .usesFontLeading],
-            context: nil
-        )
         let sizer = UITextView(usingTextLayoutManager: false)
         sizer.backgroundColor = .clear
         sizer.isEditable = false
@@ -307,8 +314,11 @@ private struct SelectableTextView: UIViewRepresentable {
         sizer.textContainer.widthTracksTextView = false
         sizer.textContainer.size = CGSize(width: proposalWidth, height: .greatestFiniteMagnitude)
         sizer.attributedText = ns
+        sizer.layoutManager.ensureLayout(for: sizer.textContainer)
+        let used = sizer.layoutManager.usedRect(for: sizer.textContainer)
         let fittedWidth = min(ceil(max(used.maxX, 1)), proposalWidth)
         sizer.textContainer.size = CGSize(width: fittedWidth, height: .greatestFiniteMagnitude)
+        sizer.layoutManager.ensureLayout(for: sizer.textContainer)
         let fitted = sizer.sizeThatFits(CGSize(width: fittedWidth, height: .greatestFiniteMagnitude))
         return CGSize(width: fittedWidth, height: ceil(max(fitted.height, font.lineHeight)))
     }
@@ -383,11 +393,19 @@ private struct SelectableTextView: UIViewRepresentable {
         var sizes: [CGFloat: CGSize] = [:]
         /// Last scroll mode queued for the live view; nil until the first measurement.
         var scheduledScrollMode: Bool?
+        var linkHandler: ((URL) -> (() -> Void)?)?
 
         func textView(_ textView: UITextView, primaryActionFor textItem: UITextItem, defaultAction: UIAction) -> UIAction? {
-            guard case .textAttachment(let attachment) = textItem.content,
-                  let openable = attachment as? any ChatTextAttachmentOpening else { return defaultAction }
-            return UIAction { _ in openable.open() }
+            switch textItem.content {
+            case .textAttachment(let attachment):
+                guard let openable = attachment as? any ChatTextAttachmentOpening else { return defaultAction }
+                return UIAction { _ in openable.open() }
+            case .link(let url):
+                guard let action = linkHandler?(url) else { return defaultAction }
+                return UIAction { _ in action() }
+            default:
+                return defaultAction
+            }
         }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
@@ -424,6 +442,8 @@ struct SelectableAttributedText: View {
     var onMoreBelowChange: ((Bool) -> Void)? = nil
     /// Original markdown source; Mac hover copy uses it (selection copy stays native).
     var sourceMarkdown: String? = nil
+    /// Kept in sync with the iOS interface; macOS uses `MacPathLinks`.
+    var linkHandler: ((URL) -> (() -> Void)?)? = nil
 
     @Environment(\.sessionTextScale) private var sessionTextScale
     @Environment(\.interfaceScale) private var interfaceScale

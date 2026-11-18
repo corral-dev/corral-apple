@@ -38,9 +38,6 @@ struct RuntimeEntry {}
 // Menu content is outside this cache/lifetime fixture; hosting uses the production protocol.
 struct MacSessionMenuItems: View {
     let session: SessionSummary
-    let runtimes: [RuntimeEntry]
-    @Binding var mode: MacWorkspace.PaneMode
-    let onClose: () -> Void
     var body: some View { EmptyView() }
 }
 struct MacPaneView: View {

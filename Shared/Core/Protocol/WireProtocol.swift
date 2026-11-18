@@ -44,6 +44,8 @@ nonisolated enum WireProtocol {
     static let mSessionUserPrompts = "session.userPrompts"
     /// Read-only: bounded preview of an image a message cites (`media_image` capability).
     static let mMediaImage = "media.image"
+    /// Read-only: bounded slice of a file linked in a message (`media_file` capability).
+    static let mMediaFile = "media.file"
 
     static let mScreenWatch = "screen.watch"
     static let mScreenUnwatch = "screen.unwatch"
@@ -63,6 +65,7 @@ nonisolated enum WireProtocol {
     /// Host omits tool bodies on history wire; fetch via `session.toolDetail`.
     static let capabilityToolDetail = "tool_detail"
     static let capabilityMediaImage = "media_image"
+    static let capabilityMediaFile = "media_file"
 
     static let mSessionNew = "session.new"
     static let mSessionResume = "session.resume"
@@ -73,6 +76,7 @@ nonisolated enum WireProtocol {
     static let mSessionStop = "session.stop"
     static let mSessionDelete = "session.delete"
     static let mSessionPin = "session.pin"
+    static let mSessionExport = "session.export"
     // Desktop layout: split groups shared with the TUI (Mac client only).
     static let mLayoutWatch = "layout.watch"
     static let mLayoutUnwatch = "layout.unwatch"
@@ -131,7 +135,9 @@ nonisolated enum WireProtocol {
         mSessionMessages,
         mSessionUserPrompts,
         mMediaImage,
+        mMediaFile,
         mSessionGet,
+        mSessionExport,
         mSessionWatch,
         mScreenWatch,
         mScreenScroll,
@@ -181,6 +187,11 @@ nonisolated enum WireProtocol {
     /// Whether hello advertised message image previews (`media_image`).
     static func supportsMediaImage(fromHelloPayload payload: Any) -> Bool {
         capabilityFlag(capabilityMediaImage, fromHelloPayload: payload)
+    }
+
+    /// Whether hello advertised message file downloads (`media_file`).
+    static func supportsMediaFile(fromHelloPayload payload: Any) -> Bool {
+        capabilityFlag(capabilityMediaFile, fromHelloPayload: payload)
     }
 
     /// Whether hello advertised on-demand tool bodies (`tool_detail`).

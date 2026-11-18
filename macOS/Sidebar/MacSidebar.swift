@@ -24,9 +24,6 @@ struct MacSidebar: View {
     @State private var pendingRevealSerial: Int?
     @State private var acknowledgedRevealSerial = 0
     @State private var revealGuardUntil: Date?
-    @State private var deleteTargets: [SessionSummary] = []
-    @State private var batch = MacSessionBatch()
-    @State private var batchError: String?
     #if DEBUG
     @State private var didInspectDeleteConfirmation = false
     @State private var inspectionTick = 0
@@ -144,7 +141,6 @@ struct MacSidebar: View {
                 sectionExpansion.removeAll()
                 filteredSectionExpansion.removeAll()
                 selectedKeys.removeAll()
-                deleteTargets.removeAll()
             }
             .onChange(of: workspace.focusedKey, initial: true) { _, key in
                 selectedKeys = key.map { visibleKeys.contains($0) ? [$0] : [] } ?? []
@@ -154,29 +150,6 @@ struct MacSidebar: View {
             }
             .onChange(of: visibleKeys) { _, _ in
                 selectedKeys = keepingCurrentSession(selectedKeys)
-            }
-            .confirmationDialog(
-                deleteTitle,
-                isPresented: Binding(get: { !deleteTargets.isEmpty }, set: { if !$0 { deleteTargets = [] } }),
-                titleVisibility: .visible,
-                presenting: deleteTargets
-            ) { targets in
-                Button(role: .destructive) {
-                    deleteTargets = []
-                    perform(.delete, on: targets)
-                } label: {
-                    Label("sessions.action.delete", systemImage: "trash")
-                }
-                Button("action.cancel", role: .cancel) { deleteTargets = [] }
-            } message: { targets in
-                Text(verbatim: deleteMessage(targets))
-            }
-            .alert("mac.sessions.action_failed", isPresented: Binding(
-                get: { batchError != nil }, set: { if !$0 { batchError = nil } }
-            )) {
-                Button("action.ok", role: .cancel) { batchError = nil }
-            } message: {
-                Text(verbatim: batchError ?? "")
             }
             .safeAreaBar(edge: .top, spacing: 0) {
                 MacSidebarFilters(
@@ -190,11 +163,11 @@ struct MacSidebar: View {
             }
             .safeAreaBar(edge: .bottom, spacing: 0) {
                 VStack(spacing: Space.sm * interfaceScale) {
-                    if selectedKeys.count > 1 || batch.isRunning {
+                    if selectedKeys.count > 1 || workspace.batch.isRunning {
                         HStack(spacing: Space.sm * interfaceScale) {
-                            if batch.isRunning {
+                            if workspace.batch.isRunning {
                                 ProgressView().controlSize(.small)
-                                Text("mac.sessions.progress \(batch.completed) \(batch.total)")
+                                Text("mac.sessions.progress \(workspace.batch.completed) \(workspace.batch.total)")
                             } else {
                                 Text("mac.sessions.selected \(selectedKeys.count)")
                             }
@@ -206,7 +179,7 @@ struct MacSidebar: View {
                             }
                             .fixedSize()
                             .accessibilityIdentifier("corral.session.selection-actions")
-                            .disabled(batch.isRunning)
+                            .disabled(workspace.batch.isRunning)
                             Button { clearBatchSelection() } label: {
                                 Label("mac.sessions.clear_selection", systemImage: "xmark")
                             }
@@ -321,8 +294,8 @@ struct MacSidebar: View {
         .contextMenu(forSelectionType: String.self) { keys in
             sessionMenu(orderedSessions(for: keys))
         }
-        .onDeleteCommand(perform: canCreate && !batch.isRunning && !selectedKeys.isEmpty ? {
-            deleteTargets = selectedSessions
+        .onDeleteCommand(perform: canCreate && !workspace.batch.isRunning && !selectedKeys.isEmpty ? {
+            workspace.requestDelete(selectedSessions)
         } : nil)
         // Session ▸ Open in Split (⌘D) acts on this selection.
         .onChange(of: selectedKeys, initial: true) { _, keys in
@@ -528,7 +501,7 @@ struct MacSidebar: View {
                 didInspectDeleteConfirmation = true
                 try? await Task.sleep(for: .seconds(1))
                 guard !Task.isCancelled else { return }
-                deleteTargets = [session]
+                workspace.requestDelete([session])
             }
             #endif
     }
@@ -548,112 +521,19 @@ struct MacSidebar: View {
 
     @ViewBuilder
     private func sessionMenu(_ targets: [SessionSummary]) -> some View {
-        if !targets.isEmpty {
-            Group {
-                if targets.count == 1, let session = targets.first {
-                    Button {
-                        workspace.addPane(session.key, project: session.cwd)
-                    } label: {
-                        Label("mac.session.open_in_split", systemImage: "rectangle.split.2x1")
-                    }
-                    .disabled(workspace.paneKeys.isEmpty || !workspace.canAddSessionToSplit(session))
-                }
-                Button {
-                    var seen: Set<String> = []
-                    let paths = targets.map(SessionPresentation.fullWorkspacePath)
-                        .filter { !$0.isEmpty && seen.insert($0).inserted }
-                    PlatformPasteboard.copy(paths.joined(separator: "\n"))
-                } label: {
-                    Label(targets.count == 1 ? "session.workspace.copy_path" : "mac.sessions.copy_paths",
-                          systemImage: "doc.on.clipboard")
-                }
-                Divider()
-                let pinned = targets.filter { workspace.layout.isPinned($0.key) }
-                let unpinned = targets.filter { !workspace.layout.isPinned($0.key) }
-                if !unpinned.isEmpty {
-                    Button { perform(.pin, on: unpinned) } label: {
-                        Label(pinTitle(pinning: true, targets: unpinned), systemImage: "pin")
-                    }
-                    .disabled(!canCreate || batch.isRunning)
-                }
-                if !pinned.isEmpty {
-                    Button { perform(.unpin, on: pinned) } label: {
-                        Label(pinTitle(pinning: false, targets: pinned), systemImage: "pin.slash")
-                    }
-                    .disabled(!canCreate || batch.isRunning)
-                }
-                Divider()
-                let live = targets.filter(\.live)
-                if !live.isEmpty {
-                    Button { perform(.stop, on: live) } label: {
-                        if targets.count == 1 {
-                            Label("sessions.action.stop", systemImage: "stop.fill")
-                        } else {
-                            Label("mac.sessions.stop \(live.count)", systemImage: "stop.fill")
-                        }
-                    }
-                    .disabled(!canCreate || batch.isRunning)
-                }
-                Button(role: .destructive) { deleteTargets = targets } label: {
-                    if targets.count == 1 {
-                        Label("sessions.action.delete", systemImage: "trash")
-                    } else {
-                        Label("mac.sessions.delete \(targets.count)", systemImage: "trash")
-                    }
-                }
-                .disabled(!canCreate || batch.isRunning)
+        if targets.count == 1, let session = targets.first {
+            MacSessionMenuItems(session: session)
+        } else if targets.count > 1 {
+            MacBatchSessionMenuItems(targets: targets, canMutate: canCreate) { action, items in
+                perform(action, on: items)
             }
-            .labelStyle(.titleAndIcon)
-            // Template symbols that invert with the highlighted row's text.
-            .tint(nil)
         }
-    }
-
-    /// TUI semantics: a split is one pin unit. A member row therefore names
-    /// the split action; only independent sessions keep the session wording.
-    /// A selection made entirely from one split also names the split action.
-    private func pinTitle(pinning: Bool, targets: [SessionSummary]) -> LocalizedStringKey {
-        let groupIDs = Set(targets.compactMap { workspace.layout.group(containing: $0.key)?.id })
-        let hasIndependent = targets.contains { workspace.layout.group(containing: $0.key) == nil }
-        if groupIDs.count == 1, !hasIndependent {
-            return pinning ? "mac.group.pin" : "mac.group.unpin"
-        }
-        if targets.count == 1 {
-            return pinning ? "mac.session.pin" : "mac.session.unpin"
-        }
-        return pinning
-            ? LocalizedStringKey("mac.sessions.pin \(targets.count)")
-            : LocalizedStringKey("mac.sessions.unpin \(targets.count)")
-    }
-
-    private var deleteTitle: Text {
-        if deleteTargets.count == 1 { Text("sessions.delete_confirm.title") }
-        else { Text("mac.sessions.delete_confirm \(deleteTargets.count)") }
-    }
-
-    private func deleteMessage(_ targets: [SessionSummary]) -> String {
-        let titles = targets.prefix(5).map { SessionPresentation.displayTitle(for: $0) }
-        let extra = targets.count > 5 ? [String(localized: "mac.sessions.more \(targets.count - 5)")] : []
-        return (titles + extra + [String(localized: "mac.sessions.delete_warning")]).joined(separator: "\n")
     }
 
     private func perform(_ action: MacSessionBatch.Action, on targets: [SessionSummary]) {
-        guard canCreate, !batch.isRunning, !targets.isEmpty else { return }
-        let hostID = workspace.hostID
-        let client = appModel.client
-        Task {
-            let result = await batch.run(keys: targets.map(\.key), isCurrent: {
-                workspace.hostID == hostID && appModel.client === client && canCreate
-            }) { key in
-                try await workspace.applySessionAction(action, key: key)
-            }
-            guard workspace.hostID == hostID else { return }
-            if !result.failures.isEmpty {
-                let names = Dictionary(targets.map { ($0.key, SessionPresentation.displayTitle(for: $0)) },
-                                       uniquingKeysWith: { first, _ in first })
-                batchError = String(localized: "mac.sessions.result \(result.succeeded.count) \(targets.count)")
-                    + "\n\n" + result.failures.map { "\(names[$0.key] ?? $0.key): \($0.message)" }.joined(separator: "\n")
-            }
+        guard canCreate else { return }
+        workspace.performBatchAction(action, on: targets) { key in
+            targets.first(where: { $0.key == key }).map { SessionPresentation.displayTitle(for: $0) } ?? key
         }
     }
 

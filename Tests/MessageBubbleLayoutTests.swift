@@ -395,5 +395,128 @@ final class MessageBubbleLayoutTests: XCTestCase {
             "Palette.assistantBubble must use secondarySystemGroupedBackground"
         )
     }
+
+    func testUserMultiLineBubbleStaysInsideScrollContentMargins() async throws {
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        )
+        let previousWindow = scene.windows.first(where: \.isKeyWindow)
+        defer { previousWindow?.makeKeyAndVisible() }
+
+        let userText = "移动端给 antigravity 发消息没有 steering 而是 follow up 好像需要多按个 alt+m 的快捷键才会 steering"
+        let assistantText = "已通过全部 3425 项 CLI CI 测试（0 失败）且 iOS Debug 无新增编译警告，正在截取 MarkdownFileViewer 模拟器浅色/深色画面。"
+        let host = UIHostingController(
+            rootView: ChatScrollView(
+                scrollToLatestRequest: 0,
+                latestID: "user",
+                scrollToMessageID: .constant(nil)
+            ) {
+                EmptyView()
+            } content: {
+                MessageBubbleView(message: RichMessage(seq: 1, role: "assistant", text: assistantText))
+                    .id("assistant")
+                MessageBubbleView(message: RichMessage(seq: -1, role: "user", text: userText, delivery: .pending))
+                    .id("user")
+            }
+            .frame(width: 390, height: 844)
+        )
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        host.view.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(250))
+        host.view.layoutIfNeeded()
+
+        let textViews = Self.descendants(of: host.view).compactMap { $0 as? UITextView }
+        XCTAssertEqual(textViews.count, 2)
+        let assistantTV = try XCTUnwrap(textViews.first { $0.text.contains("3425") })
+        let userTV = try XCTUnwrap(textViews.first { $0.text.contains("steering") })
+        let assistantRect = assistantTV.convert(assistantTV.bounds, to: host.view)
+        let userRect = userTV.convert(userTV.bounds, to: host.view)
+        XCTAssertEqual(userTV.contentInsetAdjustmentBehavior, .never)
+        XCTAssertFalse(userTV.adjustsFontForContentSizeCategory)
+
+        for scale in [CGFloat(0.85), 0.92, 1.0, 1.15, 1.3] {
+            for width in stride(from: CGFloat(240), through: 440, by: 20) {
+                let dHost = UIHostingController(
+                    rootView: MessageBubbleView(
+                        message: RichMessage(seq: -1, role: "user", text: userText, delivery: .pending),
+                        sessionTextScale: scale
+                    )
+                    .environment(\.sessionTextScale, scale)
+                    .frame(width: width - 32)
+                )
+                let dWin = UIWindow(windowScene: scene)
+                dWin.frame = CGRect(x: 0, y: 0, width: width, height: 844)
+                dWin.rootViewController = dHost
+                dWin.isHidden = false
+                dHost.view.layoutIfNeeded()
+                let tv = try XCTUnwrap(Self.descendants(of: dHost.view).compactMap { $0 as? UITextView }.first)
+                let drawn = tv.sizeThatFits(CGSize(width: tv.bounds.width, height: .greatestFiniteMagnitude))
+                let usedR = tv.layoutManager.usedRect(for: tv.textContainer)
+                XCTAssertLessThanOrEqual(
+                    tv.bounds.width - ceil(usedR.maxX),
+                    2,
+                    "Extra horizontal padding inside user bubble at scale=\(scale) width=\(width): bounds=\(tv.bounds) used=\(usedR)"
+                )
+                XCTAssertEqual(
+                    tv.bounds.height,
+                    ceil(drawn.height),
+                    accuracy: 2,
+                    "Vertical padding/clipping mismatch at scale=\(scale) width=\(width): bounds=\(tv.bounds) drawn=\(drawn)"
+                )
+                dWin.isHidden = true
+            }
+        }
+
+        // Also test mounted SessionDetailView at 393pt width with an assistant + user message.
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let savedHostDir = HostStore.directoryOverride
+        let savedDraftDir = ComposerDraftStore.directoryOverride
+        let savedHosts = HostStore.shared.hosts
+        HostStore.directoryOverride = folder
+        ComposerDraftStore.directoryOverride = folder
+        defer {
+            HostStore.shared.replaceAllForTesting(savedHosts)
+            HostStore.directoryOverride = savedHostDir
+            ComposerDraftStore.directoryOverride = savedDraftDir
+            try? FileManager.default.removeItem(at: folder)
+        }
+        let fixtureHost = HostInfo(hostID: "bubble-host-\(UUID().uuidString)", name: "Fixture", publicKeyHex: String(repeating: "0", count: 64))
+        HostStore.shared.replaceAllForTesting([fixtureHost])
+        let appModel = AppModel()
+        let detailSession = SessionSummary(key: "antigravity:bubble-repro", runtime: "antigravity", title: "Repro")
+        let detailStore = ConversationStore(sessionKey: detailSession.key, client: nil, live: false)
+        try Self.applyDetailMessage(assistantText, to: detailStore)
+        let detailHost = UIHostingController(rootView: Self.detailRoot(model: appModel, session: detailSession, store: detailStore))
+        let detailWin = UIWindow(windowScene: scene)
+        detailWin.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+        detailWin.rootViewController = detailHost
+        detailWin.makeKeyAndVisible()
+        defer { detailWin.isHidden = true }
+        detailHost.view.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(200))
+        detailStore.enqueueLocalUser(userText)
+        detailHost.view.setNeedsLayout()
+        detailHost.view.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(300))
+        detailHost.view.layoutIfNeeded()
+        let dUserTV = try XCTUnwrap(Self.descendants(of: detailHost.view).compactMap { $0 as? UITextView }.first(where: { $0.text.contains("steering") }))
+        let dUsed = dUserTV.layoutManager.usedRect(for: dUserTV.textContainer)
+        let dDrawn = dUserTV.sizeThatFits(CGSize(width: dUserTV.bounds.width, height: .greatestFiniteMagnitude))
+        XCTAssertLessThanOrEqual(dUserTV.bounds.width - ceil(dUsed.maxX), 2)
+        XCTAssertEqual(dUserTV.bounds.height, ceil(dDrawn.height), accuracy: 2)
+
+        // User bubble has horizontal padding Space.base inside its background, so the
+        // text's trailing edge must sit inside the scroll content column (12..370 -> 354).
+        let bubbleContentTrailingEdge = assistantRect.minX - Space.base + (390 - Space.base * 2) - Space.base
+        XCTAssertLessThanOrEqual(
+            userRect.maxX,
+            bubbleContentTrailingEdge + 2,
+            "User bubble text overflowed trailing margin: userRect=\(userRect) maxAllowed=\(bubbleContentTrailingEdge)"
+        )
+    }
 }
 #endif

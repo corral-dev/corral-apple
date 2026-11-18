@@ -13,7 +13,14 @@ extension NSView {
         var ancestor: NSView? = self
         while let view = ancestor {
             if let provider = view as? MacSessionContextMenuProviding,
-               let menu = provider.makeSessionContextMenu() { return menu }
+               let menu = provider.makeSessionContextMenu() {
+                // Keep session menus free of system AutoFill / Writing Tools plugin items.
+                menu.allowsContextMenuPlugIns = false
+                if #available(macOS 15.2, *) {
+                    menu.automaticallyInsertsWritingToolsItems = false
+                }
+                return menu
+            }
             ancestor = view.superview
         }
         return nil

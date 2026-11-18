@@ -980,4 +980,32 @@ final class SessionListStoreTests: XCTestCase {
         if let runtime { dict["runtime"] = runtime }
         return dict
     }
+
+    func test_session_summary_decodes_loop_count_and_presentation_tiers() throws {
+        var dict = sessionDict(key: "codex:loops", title: "Looped", runtime: "codex")
+        dict["loop_count"] = 42
+        let data = try JSONSerialization.data(withJSONObject: dict)
+        let decoded = try JSONDecoder().decode(SessionSummary.self, from: data)
+        XCTAssertEqual(decoded.loopCount, 42)
+        XCTAssertEqual(decoded.replacingKey("codex:new").loopCount, 42)
+        XCTAssertEqual(SessionPresentation.positiveLoopCount(for: decoded), 42)
+        XCTAssertEqual(SessionPresentation.compactLoopCount(42), "42")
+        XCTAssertEqual(SessionPresentation.compactLoopCount(1_250), "1.2k")
+        XCTAssertEqual(SessionPresentation.loopTier(for: 2), .light)
+        XCTAssertEqual(SessionPresentation.loopTier(for: 15), .medium)
+        XCTAssertEqual(SessionPresentation.loopTier(for: 42), .heavy)
+
+        for invalid in [0, -3, true, "bad", NSNull()] as [Any] {
+            var badDict = sessionDict(key: "codex:bad", title: "Bad", runtime: "codex")
+            badDict["loop_count"] = invalid
+            let badData = try JSONSerialization.data(withJSONObject: badDict)
+            let badDecoded = try JSONDecoder().decode(SessionSummary.self, from: badData)
+            if let number = invalid as? Int, number == 0 {
+                XCTAssertEqual(badDecoded.loopCount, 0)
+                XCTAssertNil(SessionPresentation.positiveLoopCount(for: badDecoded))
+            } else {
+                XCTAssertNil(badDecoded.loopCount)
+            }
+        }
+    }
 }

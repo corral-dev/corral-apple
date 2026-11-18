@@ -134,4 +134,4 @@ Before launching a newly built Corral Mac app for debugging or acceptance, termi
 
 ## iPhone agent terminal
 
-Chat / Terminal switching inside the top-right More menu uses SwiftTerm UIKit and the encrypted raw-terminal stream. A hidden/background terminal withdraws its stream and size vote; Chat preserves its draft and reading position. See [iPhone agent terminal](docs/design/IPHONE_AGENT_TERMINAL_DESIGN.md) for the adopted contract and physical acceptance limits.
+Single-line dynamic Chat View / Agent Terminal switching inside the top-right More menu uses SwiftTerm UIKit and the encrypted raw-terminal stream. A hidden/background terminal withdraws its stream and size vote; Chat View preserves its draft and reading position. See [iPhone agent terminal](docs/design/IPHONE_AGENT_TERMINAL_DESIGN.md) for the adopted contract and physical acceptance limits.

@@ -46,6 +46,12 @@ struct MacSessionRow: View {
                     }
                     secondaryLine
                         .truncationMode(.tail)
+                    if let loopCount = SessionPresentation.positiveLoopCount(for: session),
+                       let loopText = SessionPresentation.compactLoopCount(loopCount) {
+                        Spacer(minLength: Space.xs * interfaceScale)
+                        SessionLoopCountLabel(count: loopCount, text: loopText, font: .system(size: 11))
+                            .fixedSize()
+                    }
                 }
                 .interfaceFont(.system(size: 12))
                 .foregroundStyle(Color(nsColor: .secondaryLabelColor))
@@ -127,9 +133,11 @@ struct MacSessionRow: View {
 
     private var tooltip: String {
         let preview = String(SessionPresentation.preview(for: session).prefix(280))
+        let loopNote = SessionPresentation.positiveLoopCount(for: session).map { "\($0) loops" } ?? ""
         return [
             SessionPresentation.displayTitle(for: session),
             SessionPresentation.fullWorkspacePath(from: session),
+            loopNote,
             preview,
             splitHelp ?? "",
         ]

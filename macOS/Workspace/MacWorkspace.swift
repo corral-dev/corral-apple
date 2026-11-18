@@ -80,6 +80,17 @@ final class MacWorkspace {
     private(set) var layout: DesktopLayout = .empty
     /// A failed action's message for the window alert.
     var actionError: String?
+    /// Transient feedback while exporting a session's share JSON to the pasteboard.
+    enum ExportFeedback: Equatable {
+        case exporting(String)
+        case copied(String)
+    }
+    private(set) var exportFeedback: ExportFeedback?
+    @ObservationIgnored private var exportFeedbackTask: Task<Void, Never>?
+    /// Sessions awaiting confirmation before permanent deletion, shared across sidebar and panes.
+    var pendingDeleteTargets: [SessionSummary] = []
+    let batch = MacSessionBatch()
+    var batchError: String?
     /// Assistants installed on the host (for "Add pane" and Continue with…).
     let runtimeCatalog = RuntimeCatalog()
     var runtimes: [RuntimeEntry] { runtimeCatalog.runtimes }
@@ -180,6 +191,11 @@ final class MacWorkspace {
         terminalLatestRequests = [:]
         paneFrames = [:]
         actionError = nil
+        exportFeedbackTask?.cancel()
+        exportFeedbackTask = nil
+        exportFeedback = nil
+        pendingDeleteTargets = []
+        batchError = nil
         feed = nil
         shells.reset()
         pendingTerminalClose = nil
@@ -399,6 +415,20 @@ final class MacWorkspace {
         guard let key = focusedKey, !ProjectShell.isShellKey(key) else { return }
         setMode(mode(for: key) == .chat ? .terminal : .chat, for: key)
         requestKeyFocus(key)
+    }
+
+    /// Switch a session's view mode and bring it into the workspace if it was
+    /// acted on from the sidebar before being opened.
+    func switchModeAndOpen(_ mode: PaneMode, for session: SessionSummary) {
+        let key = canonicalPaneKey(session.key)
+        guard !ProjectShell.isShellKey(key) else { return }
+        setMode(mode, for: key)
+        if isShownPane(key) {
+            focus(key)
+            requestKeyFocus(key)
+        } else {
+            open(key, sessions: feed?.listStore.windowSessions ?? [session], takeKeys: true)
+        }
     }
 
     // MARK: - Opening and closing panes (TUI semantics)
@@ -630,6 +660,39 @@ final class MacWorkspace {
 
     func canAddSessionToSplit(_ session: SessionSummary) -> Bool {
         paneKeys.contains(session.key) || canAddAgent(project: session.cwd)
+    }
+
+    func canOpenAsSplit(_ sessions: [SessionSummary]) -> Bool {
+        let unique = canonicalUniqueSessions(sessions)
+        guard (2...Self.maxPanes).contains(unique.count) else { return false }
+        return Set(unique.map { Self.projectIdentity($0.cwd) }).count == 1
+    }
+
+    func openSplit(_ sessions: [SessionSummary]) {
+        let unique = canonicalUniqueSessions(sessions)
+        guard canOpenAsSplit(unique) else { return }
+        let keys = unique.map(\.key)
+        cancelSplitMotion()
+        adoptPreferredModes(for: keys, sessions: unique)
+        paneKeys = keys
+        focusedKey = keys[0]
+        requestKeyFocus(keys[0])
+        syncGroup()
+    }
+
+    private func canonicalUniqueSessions(_ sessions: [SessionSummary]) -> [SessionSummary] {
+        var seen: Set<String> = []
+        var result: [SessionSummary] = []
+        for session in sessions {
+            let key = canonicalPaneKey(session.key)
+            guard !ProjectShell.isShellKey(key), seen.insert(key).inserted else { continue }
+            var resolved = session
+            if resolved.key != key, let stored = feed?.listStore.session(for: key) {
+                resolved = stored
+            }
+            result.append(resolved)
+        }
+        return result
     }
 
     private func canAddAgent(project: String) -> Bool {
@@ -1178,6 +1241,61 @@ final class MacWorkspace {
 
     func stop(_ key: String) async {
         await call(WireProtocol.mSessionStop, ["key": key, "confirm": true])
+    }
+
+    func exportSession(_ key: String) async {
+        let resolvedKey = canonicalPaneKey(key)
+        guard !ProjectShell.isShellKey(resolvedKey), !PendingPane.isPending(resolvedKey) else { return }
+        exportFeedbackTask?.cancel()
+        exportFeedback = .exporting(resolvedKey)
+        let host = hostID
+        let payload = await call(WireProtocol.mSessionExport, ["key": resolvedKey], refreshLayout: false)
+        guard hostID == host, !Task.isCancelled else {
+            if exportFeedback == .exporting(resolvedKey) { exportFeedback = nil }
+            return
+        }
+        guard let dict = payload as? [String: Any], let json = dict["json"] as? String else {
+            if exportFeedback == .exporting(resolvedKey) { exportFeedback = nil }
+            if payload != nil {
+                actionError = String(localized: "error.unknown")
+            }
+            return
+        }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(json, forType: .string)
+        exportFeedback = .copied(resolvedKey)
+        exportFeedbackTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(2.2))
+            guard !Task.isCancelled else { return }
+            self?.exportFeedback = nil
+        }
+    }
+
+    func requestDelete(_ targets: [SessionSummary]) {
+        guard !batch.isRunning, !targets.isEmpty else { return }
+        pendingDeleteTargets = targets
+    }
+
+    func performBatchAction(
+        _ action: MacSessionBatch.Action,
+        on targets: [SessionSummary],
+        labelForKey: @escaping (String) -> String
+    ) {
+        guard let client = appModel?.client, let host = hostID, !batch.isRunning, !targets.isEmpty else { return }
+        Task {
+            let result = await batch.run(keys: targets.map(\.key), isCurrent: {
+                self.hostID == host && self.appModel?.client === client
+            }) { key in
+                try await self.applySessionAction(action, key: key)
+            }
+            guard self.hostID == host else { return }
+            if !result.failures.isEmpty {
+                let names = Dictionary(targets.map { ($0.key, labelForKey($0.key)) },
+                                       uniquingKeysWith: { first, _ in first })
+                batchError = String(localized: "mac.sessions.result \(result.succeeded.count) \(targets.count)")
+                    + "\n\n" + result.failures.map { "\(names[$0.key] ?? $0.key): \($0.message)" }.joined(separator: "\n")
+            }
+        }
     }
 
     func resume(_ key: String) async -> Bool {

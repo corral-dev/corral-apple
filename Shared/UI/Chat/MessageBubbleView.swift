@@ -85,6 +85,7 @@ struct MessageBubbleView: View, Equatable {
     var selectionDocumentID: ObjectIdentifier? = nil
     var mediaRevision: Int = 0
     @Environment(\.chatImageLoader) private var imageLoader
+    @Environment(\.chatFileLoader) private var fileLoader
 
     /// `onRetry` is excluded: its behavior is fully determined by `message`.
     static func == (lhs: MessageBubbleView, rhs: MessageBubbleView) -> Bool {
@@ -192,6 +193,19 @@ struct MessageBubbleView: View, Equatable {
     /// host-pasted attachment paths are the images, not prose).
     private var displayText: String? { message.chatBodyText }
 
+    private var fileLinkHandler: ((URL) -> (() -> Void)?)? {
+        #if os(iOS)
+        guard message.seq > 0, let fileLoader else { return nil }
+        let seq = message.seq
+        return { url in
+            guard let link = ChatFileLink.classify(url) else { return nil }
+            return { fileLoader.open(seq: seq, link: link) }
+        }
+        #else
+        return nil
+        #endif
+    }
+
     /// Bare path mentions keep the tile row; explicit Markdown images are inline
     /// attachments at their own position in the text.
     private var mentionImages: [ChatImageReference] {
@@ -216,8 +230,10 @@ struct MessageBubbleView: View, Equatable {
                         fontStyle: .bubbleBody,
                         maxHeight: bubbleTextCap,
                         onMoreBelowChange: { hasMoreBelow = $0 },
-                        sourceMarkdown: body
+                        sourceMarkdown: body,
+                        linkHandler: fileLinkHandler
                     )
+                    .environment(\.sessionTextScale, sessionTextScale)
                     #if os(macOS)
                     .environment(\.macMessageSelectionID, message.seq)
                     #endif

@@ -16,6 +16,8 @@ struct SessionSplitContext {
     var selection: Binding<SessionRoute?>
     /// Selects a conversation; `focusComposer` opens it ready for typing.
     var open: (_ route: SessionRoute, _ focusComposer: Bool) -> Void
+    /// Opens a conversation directly in the requested mode (e.g. Agent Terminal).
+    var openMode: (_ route: SessionRoute, _ mode: SessionDetailMode) -> Void = { _, _ in }
     var showSettings: () -> Void
     var showPairing: () -> Void
     /// Bumped by the empty detail column's New Session action.
@@ -85,6 +87,25 @@ struct SessionListView: View {
     /// Full-text results for the bottom search field (owner request 2026-10-19).
     @State private var fulltext = FulltextSearchStore()
     @State private var fulltextRetry = 0
+    @State private var runtimeCatalog = RuntimeCatalog()
+    @State private var isContextActionBusy = false
+    @State private var contextActionError: String?
+    @State private var transientNotice: ListTransientNotice?
+    @State private var transientNoticeTask: Task<Void, Never>?
+
+    private enum ListTransientNotice: Equatable {
+        case exporting
+        case exported
+        case copiedPath
+
+        var titleKey: LocalizedStringKey {
+            switch self {
+            case .exporting: "mac.session.exporting"
+            case .exported: "mac.session.exported"
+            case .copiedPath: "session.workspace.copied"
+            }
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -159,7 +180,8 @@ struct SessionListView: View {
                                         session: session,
                                         onPin: { Task { await togglePin(session) } },
                                         onStop: { Task { await stopSession(session) } },
-                                        onDelete: { target in Task { await deleteSession(target) } }
+                                        onDelete: { target in Task { await deleteSession(target) } },
+                                        contextActions: contextActions(for: session)
                                     )
                                     .onAppear { listStore.rememberOpened(session) }
                                 }
@@ -360,7 +382,44 @@ struct SessionListView: View {
         }
         .onDisappear {
             isActiveList = false
+            transientNoticeTask?.cancel()
+            transientNoticeTask = nil
             teardownWatch()
+        }
+        .task(id: readyClientID) {
+            runtimeCatalog.reset()
+            await loadRuntimes()
+        }
+        .overlay(alignment: .bottom) {
+            if let transientNotice {
+                HStack(spacing: 6) {
+                    if transientNotice == .exporting {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    Text(transientNotice.titleKey)
+                        .font(.subheadline.weight(.medium))
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background(.regularMaterial, in: Capsule())
+                .overlay(Capsule().strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5))
+                .shadow(color: Color.black.opacity(0.12), radius: 8, y: 2)
+                .padding(.bottom, max(searchBarClearance, Space.md))
+                .allowsHitTesting(false)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+        }
+        .animation(.easeInOut(duration: 0.18), value: transientNotice)
+        .alert("mac.sessions.action_failed", isPresented: Binding(
+            get: { contextActionError != nil },
+            set: { if !$0 { contextActionError = nil } }
+        )) {
+            Button("action.ok", role: .cancel) { contextActionError = nil }
+        } message: {
+            Text(verbatim: contextActionError ?? "")
         }
     }
 
@@ -457,7 +516,8 @@ struct SessionListView: View {
                         session: row.session,
                         onPin: { Task { await togglePin(row.session) } },
                         onStop: { Task { await stopSession(row.session) } },
-                        onDelete: { target in Task { await deleteSession(target) } }
+                        onDelete: { target in Task { await deleteSession(target) } },
+                        contextActions: contextActions(for: row.session)
                     ) {
                         FulltextResultRow(session: row.session, match: row.match)
                     }
@@ -831,9 +891,155 @@ struct SessionListView: View {
         let operationID = hapticScope.beginOperation()
         do {
             try await feed.delete(session)
+            if split.selection.wrappedValue?.key == session.key {
+                split.selection.wrappedValue = nil
+            }
             HapticFeedback.shared.emit(.committed, operationID: operationID, scope: hapticScope)
         } catch {
             HapticFeedback.shared.failure(error, operationID: operationID, scope: hapticScope)
+        }
+    }
+
+    private var isHostReady: Bool {
+        appModel.isConnected(to: host) && appModel.client?.state == .ready
+    }
+
+    private var readyClientID: ObjectIdentifier? {
+        guard isHostReady, let client = appModel.client else { return nil }
+        return ObjectIdentifier(client)
+    }
+
+    private func loadRuntimes(retry: Bool = false) async {
+        guard isHostReady, let client = appModel.client else { return }
+        await runtimeCatalog.load(for: client, retry: retry) {
+            try await client.call(WireProtocol.mRuntimesList)
+        }
+    }
+
+    private func contextActions(for session: SessionSummary) -> SessionListContextActions {
+        let caps = appModel.client?.hostCapabilities
+        let supportsTerminal = ProductFeatures.terminalPaneEnabled && caps?.terminalStream == true
+        return SessionListContextActions(
+            runtimes: runtimeCatalog.runtimes,
+            runtimesLoaded: runtimeCatalog.isLoaded,
+            runtimesLoading: runtimeCatalog.isLoading,
+            runtimesError: runtimeCatalog.errorMessage,
+            onRetryRuntimes: { Task { await loadRuntimes(retry: true) } },
+            access: appModel.connectedAccess,
+            clientReady: isHostReady,
+            isBusy: isContextActionBusy,
+            supportsTerminal: supportsTerminal,
+            supportsExport: caps?.sessionExport == true,
+            supportsRestart: caps?.sessionRestart == true,
+            onOpenAgentTerminal: { split.openMode(SessionRoute(key: session.key), .terminal) },
+            onFork: { Task { await forkSession(session) } },
+            onHandoff: { target in Task { await handoffSession(session, to: target) } },
+            onExport: { Task { await exportSession(session) } },
+            onRestart: { Task { await restartSession(session) } },
+            onCopyPath: {
+                HapticFeedback.shared.emit(.selection, scope: hapticScope)
+                showTransientNotice(.copiedPath)
+            }
+        )
+    }
+
+    private func forkSession(_ session: SessionSummary) async {
+        let operationID = hapticScope.beginOperation()
+        guard let client = appModel.client else {
+            contextActionError = String(localized: String.LocalizationValue("error.not_connected"))
+            return
+        }
+        isContextActionBusy = true
+        defer { isContextActionBusy = false }
+        do {
+            let payload = try await client.call(
+                WireProtocol.mSessionCopy,
+                params: SessionActionsMenu.copyParams(sourceKey: session.key)
+            )
+            let created = try SessionActionsMenu.decodeNewSession(from: payload)
+            listStore.patchSession(created)
+            listStore.rememberOpened(created)
+            HapticFeedback.shared.emit(.success, operationID: operationID, scope: hapticScope)
+            split.open(SessionRoute(key: created.key), true)
+        } catch {
+            HapticFeedback.shared.failure(error, operationID: operationID, scope: hapticScope)
+            contextActionError = SessionActionsMenu.failureMessage(for: error)
+        }
+    }
+
+    private func handoffSession(_ session: SessionSummary, to target: RuntimeEntry) async {
+        let operationID = hapticScope.beginOperation()
+        guard let client = appModel.client else {
+            contextActionError = String(localized: String.LocalizationValue("error.not_connected"))
+            return
+        }
+        isContextActionBusy = true
+        defer { isContextActionBusy = false }
+        do {
+            let payload = try await client.call(
+                WireProtocol.mSessionHandoff,
+                params: SessionActionsMenu.handoffParams(sourceKey: session.key, targetRuntimeID: target.id)
+            )
+            let created = try SessionActionsMenu.decodeNewSession(from: payload)
+            listStore.patchSession(created)
+            listStore.rememberOpened(created)
+            HapticFeedback.shared.emit(.success, operationID: operationID, scope: hapticScope)
+            split.open(SessionRoute(key: created.key), true)
+        } catch {
+            HapticFeedback.shared.failure(error, operationID: operationID, scope: hapticScope)
+            contextActionError = SessionActionsMenu.failureMessage(for: error)
+        }
+    }
+
+    private func exportSession(_ session: SessionSummary) async {
+        let operationID = hapticScope.beginOperation()
+        guard let client = appModel.client else {
+            contextActionError = String(localized: String.LocalizationValue("error.not_connected"))
+            return
+        }
+        transientNoticeTask?.cancel()
+        transientNotice = .exporting
+        isContextActionBusy = true
+        defer { isContextActionBusy = false }
+        do {
+            let json = try await SessionActionsMenu.exportJSON(sourceKey: session.key, client: client)
+            PlatformPasteboard.copy(json)
+            HapticFeedback.shared.emit(.success, operationID: operationID, scope: hapticScope)
+            showTransientNotice(.exported)
+        } catch {
+            if transientNotice == .exporting { transientNotice = nil }
+            HapticFeedback.shared.failure(error, operationID: operationID, scope: hapticScope)
+            contextActionError = SessionActionsMenu.failureMessage(for: error)
+        }
+    }
+
+    private func restartSession(_ session: SessionSummary) async {
+        let operationID = hapticScope.beginOperation()
+        guard let client = appModel.client else {
+            contextActionError = String(localized: String.LocalizationValue("error.not_connected"))
+            return
+        }
+        isContextActionBusy = true
+        defer { isContextActionBusy = false }
+        do {
+            let payload = try await client.call(WireProtocol.mSessionRestart, params: ["key": session.key])
+            if let restarted = try? SessionActionsMenu.decodeNewSession(from: payload) {
+                listStore.patchSession(restarted)
+            }
+            HapticFeedback.shared.emit(.success, operationID: operationID, scope: hapticScope)
+        } catch {
+            HapticFeedback.shared.failure(error, operationID: operationID, scope: hapticScope)
+            contextActionError = SessionActionsMenu.failureMessage(for: error)
+        }
+    }
+
+    private func showTransientNotice(_ notice: ListTransientNotice) {
+        transientNoticeTask?.cancel()
+        transientNotice = notice
+        transientNoticeTask = Task {
+            try? await Task.sleep(for: .seconds(2.2))
+            guard !Task.isCancelled else { return }
+            transientNotice = nil
         }
     }
 

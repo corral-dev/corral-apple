@@ -103,7 +103,7 @@ The menu bar is the single reference for the Mac client's keys. Every shortcut b
 | ⌥⌘T | New terminal pane | View | host runs project shells, writable |
 | ⌘+ / ⌘- / ⌥⌘0 | Zoom In / Out / Actual Size | View | zoom limit allows it |
 | ⌃⌘S | Show/Hide Sidebar | View | system command |
-| ⌘E | Switch Chat / Terminal | Session | a pane is focused |
+| ⌘E | Switch to Agent Terminal / Chat View | Session | an agent pane is focused |
 | ⌘D | Open in Split | Session | one sidebar session selected, split nonempty, same project |
 | ⌥⌘P | Pin / Unpin (split or session) | Session | a pane is focused, writable |
 | ⌘R | Restart Session | Session | a pane is focused, writable, host supports `session.restart` |
@@ -1445,5 +1445,25 @@ Owner decision: the sidebar may collapse as the window narrows and return as it 
 References inspected: production `MacRootView.splitView`, `MacSplitArea.requiredWidth`/`paneMinimum`, the `CorralMacApp` window frame floor and `MacResizeInspection`. The sizing constants and pure fit rules live in `macOS/Sidebar/MacSidebarSizing.swift` so the offline probe can exercise them. The sidebar's content width is measured with `onGeometryChange`; the window width comes from `MacWindowWidthReader` because a `NavigationSplitView` does not expose its containing window's width to content geometry. Public APIs: `NavigationSplitView(columnVisibility:)`, `NavigationSplitViewVisibility`, `onGeometryChange(for:of:action:)`, `NSWindow.didResizeNotification` and `SceneStorage`; declarations are present in the installed Xcode 27.2 SDK with the macOS 26 deployment target. Cross-client: the iPhone uses list/detail navigation with no persistent sidebar, and the TUI window is owned by the user's terminal; neither has this Mac-only sidebar fit behavior.
 
 Verification (2026-10-24, same-source Debug against the live host): with one agent pane, an 800×760 window showed the mounted 390-pt sidebar; a 600×760 window auto-collapsed to the full-width conversation, and the window reached the new 520-pt floor with the sidebar collapsed. A programmatic resize sweep (931 → 600 → 931) logged `auto=true` at 600 and `auto=false` at 931, and the wide capture showed the sidebar restored. The mounted 390-pt sidebar produced a 650-pt collapse point and an 80-pt hysteresis band. Clean Debug build and analyze introduced no new diagnostics (only the App Intents tooling notice), all 419 portable tests pass, localization covers 557 usages, and the new offline sizing probe passes all checks. Limits: the three- and four-pane minima (662 and 883) are computed and probe-verified but no 3/4-pane window was opened live; manual hide across a relaunch and physical divider dragging were not exercised without pointer input. The iPhone and TUI have no Mac scene/sidebar fit rule; no shared or iOS sources changed.
+
+## Unified session menus, mode wording and session JSON export (owner request, 2026-11-18)
+
+Owner decisions (superseding the inline Chat/Terminal radio picker in the 2026-10-18 header menu, the split-out sidebar context menu, and runtime icons inside Continue with):
+
+1. **All three Mac session menus are unified.** The sidebar context menu (`MacSidebar`), the session window right-click menu (`MacPaneSurface` / blank chat and terminal surfaces) and the pane bottom-bar kebab menu (`MacPaneHeader`) render the exact same single-session `MacSessionMenuItems` menu:
+   - Single-line dynamic mode switch (`Switch to Agent Terminal` / `切换到助手终端` when in Chat View; `Switch to Chat View` / `切换到对话视图` when in Agent Terminal). Triggering from a sidebar row whose session is not currently shown in a pane also opens and focuses that session in the target mode.
+   - `Open in Split` (enabled when a split exists, the session is not already shown, and its project matches) and `Close Pane` (enabled when the session is shown in a pane).
+   - `Pin` / `Unpin` (with TUI split-group pin semantics), `Fork Session` (`arrow.triangle.branch`), `Continue with` (`arrowshape.turn.up.right`), `Export Session` (`square.and.arrow.up`, concise label without `(Copy JSON)`), `Restart session` (`arrow.clockwise`), `Stop` (`stop.fill`, shown while `session.live`), `Copy path` (`folder`), and destructive `Delete` (`trash`, opening the shared confirmation dialog on the main window). Context menus returned via `paneSessionContextMenu()` disable AppKit contextual menu plugins (`allowsContextMenuPlugIns = false`, `automaticallyInsertsWritingToolsItems = false`) so macOS system `AutoFill` does not append to agent terminal or pane right-click menus.
+2. **No icons on agent runtimes in `Continue with`.** Runtime entries in the `Continue with` submenu render plain text names only, matching `Add Pane` and iPhone `Handoff`.
+3. **Mode switch UX and copy (`Chat View` / `Agent Terminal`, `对话视图` / `助手终端`).** Replace the two-item inline radio picker and `"Chat"` / `"Terminal"` (`"聊天"` / `"终端"`) labels across the session menu, the `Session` menu bar (`⌘E`, dynamically naming the target view for the focused agent pane), and Settings -> General -> Display (`New Sessions Open In`). This avoids confusion between casual chat / project shells and the structured conversation vs. the agent's own interactive TUI.
+4. **TUI feature parity on Mac:**
+   - **Export Session:** calls host `session.export` (read-only, data-plane-capable), copies the compact `share` JSON envelope directly to the Mac clipboard, and shows a brief non-blocking status pill above the detail area (or an alert on failure).
+   - **Multi-select `Open in Split`:** when 2–4 same-project sessions are selected in the sidebar, the multi-selection context menu and sidebar bottom-bar `Actions` menu offer `Open in Split`, opening them together as a split group matching TUI's Space multi-select split behavior.
+
+Cross-end check: iPhone and iPad mirror these menu, `Export Session`, and single-line `Chat View` / `Agent Terminal` (`⌘E` on iPadOS) upgrades across `SessionActionsMenuView` and `SessionListItem` (see [iPhone agent terminal](IPHONE_AGENT_TERMINAL_DESIGN.md#unified-mobile-menus-mode-wording-and-session-json-export-owner-request-2026-11-19)). TUI keeps its `Ctrl+T` modal (`Export session` writes to local cache and copies the file path).
+
+## Sidebar row loop count indicator (owner decision, 2026-11-19)
+
+`MacSessionRow` displays `SessionSummary.loopCount` at the trailing end of row 2 (`repeat` SF Symbol + compact `monospacedDigit()` count, `.fixedSize()`, neutral tiered secondary/tertiary label color, no capsule/label, omitted when `nil` or `<= 0`) so row 1's title, status dots, and compact time are never squeezed and the fixed 60-pt two-line row height stays unchanged; the preview truncates before the loop indicator. Row tooltip also appends the loop count when available.
 
 <!-- 该文档整理/压缩于 2026-10-20 -->

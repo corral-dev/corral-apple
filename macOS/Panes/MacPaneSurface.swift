@@ -402,16 +402,7 @@ struct MacPaneSurface: NSViewRepresentable {
         let menuLocale = locale
         entry.view.sessionContextMenu = { [weak appModel, weak workspace] in
             guard let appModel, let workspace else { return nil }
-            let mode = Binding(
-                get: { workspace.mode(for: menuSession.key) },
-                set: {
-                    workspace.setMode($0, for: menuSession.key)
-                    workspace.focus(menuSession.key)
-                    workspace.requestKeyFocus(menuSession.key)
-                })
-            return NSHostingMenu(rootView: MacSessionMenuItems(
-                session: menuSession, runtimes: workspace.runtimes, mode: mode,
-                onClose: { workspace.requestClose(menuSession.key) })
+            return NSHostingMenu(rootView: MacSessionMenuItems(session: menuSession)
                 .environment(appModel)
                 .environment(workspace)
                 .environment(\.locale, menuLocale))

@@ -81,7 +81,12 @@ struct ContextMenuProbe {
         }
         terminal.selectAll(nil)
         let blank = event(NSPoint(x: 500, y: 20), in: terminal)
-        require(terminal.menu(for: blank)?.items.first?.title == "First pane", "terminal blank ignores selection elsewhere")
+        let terminalSessionMenu = terminal.menu(for: blank)
+        require(terminalSessionMenu?.items.first?.title == "First pane", "terminal blank ignores selection elsewhere")
+        require(terminalSessionMenu?.allowsContextMenuPlugIns == false, "terminal blank suppresses context menu plugins")
+        if #available(macOS 15.2, *) {
+            require(terminalSessionMenu?.automaticallyInsertsWritingToolsItems == false, "terminal blank suppresses Writing Tools")
+        }
         let second = SessionMenuHost("Second pane")
         host.addSubview(second)
         terminal.removeFromSuperview()

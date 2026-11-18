@@ -35,6 +35,7 @@ let package = Package(
                 // under Xcode only.
                 "AppModelIdentityTests.swift",
                 "ChatActivityStateTests.swift",
+                "ChatFileViewerTests.swift",
                 "ChatKeyboardLayoutTests.swift",
                 "ChatMarkdownTests.swift",
                 "ChatScrollMomentumTests.swift",
@@ -56,6 +57,7 @@ let package = Package(
                 "HapticFeedbackPolicyTests.swift",
                 "ChatHistoryPullTests.swift",
                 "ChatImageReferenceTests.swift",
+                "ChatFileReferenceTests.swift",
                 "ConversationProvisionalWorkingTests.swift",
                 "ConversationPresentationTests.swift",
                 "ConversationRetentionTests.swift",

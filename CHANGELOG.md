@@ -6,6 +6,20 @@ next version's section. A `Release: minor` or `Release: major` line requests a
 larger version step; `Release: hold <reason>` keeps the changes unreleased until
 the named acceptance is done.
 
+## Mac 0.3.179 (192) / iPhone 1.0.221 (235)
+
+### English
+
+- Mac & iPhone: session list rows now show a compact agent loop count (`repeat` icon + number, scaled down as `1.2k` at 1,000+) with neutral 3-tier contrast (`1-3`, `4-30`, `>30`) and omit it when unavailable or zero.
+- iPhone & iPad: unified the session list context menu and the conversation `…` menu around `Chat View` / `Agent Terminal` toggle wording, plain `Continue with` runtime labels, and `Export Session` (copying session JSON with toast feedback), added file-link preview (`media.file`), and switched chat bubbles to single-authority TextKit 1 layout.
+- Mac: kept attached text hugging tight inside chat bubbles, restored cached container widths across layout updates, and aligned titlebar/menu-bar session actions (`MacWorkspace`, `MacSessionMenu`) with sidebar context menus.
+
+### 简体中文
+
+- Mac 与 iPhone：会话列表行新增紧凑的 agent loop 轮次指示器（`repeat` 图标加数字，1,000 起简写为 `1.2k`），采用三档中性对比度（`1-3`、`4-30`、`>30`），无数据或为 0 时隐藏。
+- iPhone 与 iPad：统一会话列表长按/右键菜单与对话右上角 `…` 菜单的文案与单项操作（动态单行切换「对话视图」/「助手终端」、纯文本「用其他助手继续」、一键复制 JSON「导出会话」并带轻提示），新增消息内文件链接预览（`media.file`），并将聊天气泡切换为单源 TextKit 1 排版。
+- Mac：修复附件文本在气泡内的紧凑贴合与缓存容器宽度恢复，并让标题栏与菜单栏会话操作（`MacWorkspace`、`MacSessionMenu`）与侧栏右键菜单保持一致。
+
 ## Mac 0.3.178 (191) / iPhone 1.0.220 (234)
 
 ### English
