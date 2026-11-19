@@ -6,6 +6,16 @@ next version's section. A `Release: minor` or `Release: major` line requests a
 larger version step; `Release: hold <reason>` keeps the changes unreleased until
 the named acceptance is done.
 
+## Mac 1.0.0 (193)
+
+### English
+
+- Mac 1.0.0 opens the desktop client's stable 1.x line. Behavior is unchanged from Mac 0.3.179 (192): this release carries only the version bump. The iPhone client stays at 1.0.221.
+
+### 简体中文
+
+- Mac 1.0.0 开启桌面客户端的 1.x 稳定版本线。行为与 Mac 0.3.179 (192) 完全一致，本次发布只包含版本号跃升；iPhone 客户端保持 1.0.221。
+
 ## Mac 0.3.179 (192) / iPhone 1.0.221 (235)
 
 ### English
