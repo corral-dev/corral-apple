@@ -96,12 +96,23 @@ struct SessionListView: View {
     private enum ListTransientNotice: Equatable {
         case exporting
         case exported
+        case stopping
+        case stopped
         case copiedPath
+
+        var isBusy: Bool {
+            switch self {
+            case .exporting, .stopping: true
+            case .exported, .stopped, .copiedPath: false
+            }
+        }
 
         var titleKey: LocalizedStringKey {
             switch self {
             case .exporting: "mac.session.exporting"
             case .exported: "mac.session.exported"
+            case .stopping: "sessions.status.stopping"
+            case .stopped: "sessions.status.stopped"
             case .copiedPath: "session.workspace.copied"
             }
         }
@@ -393,7 +404,7 @@ struct SessionListView: View {
         .overlay(alignment: .bottom) {
             if let transientNotice {
                 HStack(spacing: 6) {
-                    if transientNotice == .exporting {
+                    if transientNotice.isBusy {
                         ProgressView().controlSize(.small)
                     } else {
                         Image(systemName: "checkmark.circle.fill")
@@ -877,13 +888,20 @@ struct SessionListView: View {
     }
 
     private func stopSession(_ session: SessionSummary) async {
+        guard !isContextActionBusy else { return }
         let operationID = hapticScope.beginOperation()
+        transientNoticeTask?.cancel()
+        transientNotice = .stopping
+        isContextActionBusy = true
+        defer { isContextActionBusy = false }
         do {
-            if try await feed.stop(session) {
-                HapticFeedback.shared.emit(.committed, operationID: operationID, scope: hapticScope)
-            }
+            _ = try await feed.stop(session)
+            HapticFeedback.shared.emit(.committed, operationID: operationID, scope: hapticScope)
+            showTransientNotice(.stopped)
         } catch {
+            if transientNotice == .stopping { transientNotice = nil }
             HapticFeedback.shared.failure(error, operationID: operationID, scope: hapticScope)
+            contextActionError = SessionActionsMenu.failureMessage(for: error)
         }
     }
 

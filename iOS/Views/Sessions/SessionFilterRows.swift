@@ -79,8 +79,16 @@ struct SessionRuntimeFilterRow: View {
     @Binding var selected: Set<SessionRuntimeFilter>
 
     var body: some View {
-        SessionFilterScrollView {
-            HStack(spacing: SessionFilterStyle.chipSpacing) {
+        let activeRuntimes = SessionRuntimeFilter.ordered.filter { $0 != .all }
+        SessionFilterScrollView { viewportWidth in
+            AdaptiveFilterRowLayout(
+                viewportWidth: viewportWidth,
+                dividerIndex: 1,
+                dividerGap: 5,
+                itemGap: 4,
+                minItemWidth: 38,
+                maxItemWidth: 50
+            ) {
                 // Its own dimension, intersected with the assistant choices.
                 SessionFilterChip(selected: quickFilter != .all) {
                     Text(LocalizedStringKey(quickFilter.titleKey))
@@ -93,19 +101,20 @@ struct SessionRuntimeFilterRow: View {
                 .accessibilityLabel(Text(LocalizedStringKey(quickFilter.titleKey)))
                 .accessibilityValue(Text(verbatim: quickFilter.count(sessions: sessions).formatted()))
                 .accessibilityIdentifier("corral.filter.attention")
-                Divider()
+                // HStack gives SwiftUI Divider its vertical-hairline orientation inside a custom Layout.
+                HStack(spacing: 0) { Divider() }
                     .frame(height: 20)
                 // No All chip: an empty selection already means every assistant.
-                ForEach(SessionRuntimeFilter.ordered.filter { $0 != .all }, id: \.self) { option in
+                ForEach(activeRuntimes, id: \.self) { option in
                     // Icon only, large enough to tell apart; the name stays for VoiceOver.
-                    SessionFilterChip(selected: selected.contains(option)) {
+                    SessionFilterChip(selected: selected.contains(option), flexibleWidth: true) {
                         if let logo = Palette.runtimeLogoName(option.rawValue) {
                             Image(logo)
                                 .resizable()
                                 .interpolation(.high)
                                 .scaledToFit()
                                 .frame(width: SessionFilterStyle.runtimeIcon, height: SessionFilterStyle.runtimeIcon)
-                                .frame(width: SessionFilterStyle.runtimeSlot)
+                                .frame(height: SessionFilterStyle.runtimeSlot)
                                 .accessibilityHidden(true)
                         } else {
                             Text(verbatim: Palette.runtimeDisplayName(option.rawValue))
@@ -370,7 +379,15 @@ private struct SessionFilterScrollView<Content: View>: View {
     @Namespace private var coordinateSpace
     @State private var contentFrame: CGRect = .zero
     @State private var viewportWidth: CGFloat = 0
-    @ViewBuilder let content: () -> Content
+    @ViewBuilder let content: (CGFloat) -> Content
+
+    init(@ViewBuilder content: @escaping (CGFloat) -> Content) {
+        self.content = content
+    }
+
+    init(@ViewBuilder content: @escaping () -> Content) {
+        self.content = { _ in content() }
+    }
 
     private var hiddenOnLeft: Bool { contentFrame.minX < -0.5 }
     private var hiddenOnRight: Bool { contentFrame.maxX > viewportWidth + 0.5 }
@@ -379,7 +396,7 @@ private struct SessionFilterScrollView<Content: View>: View {
         let space = coordinateSpace
         return ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
-                content()
+                content(viewportWidth)
                     .onGeometryChange(for: CGRect.self) { geometry in
                         geometry.frame(in: .named(space))
                     } action: { frame in
@@ -436,6 +453,7 @@ private struct SessionFilterScrollView<Content: View>: View {
 /// Neither state reserves a trailing icon slot; both remain content-sized.
 private struct SessionFilterChip<Content: View>: View {
     let selected: Bool
+    var flexibleWidth = false
     @ViewBuilder let content: () -> Content
     let action: () -> Void
 
@@ -445,6 +463,7 @@ private struct SessionFilterChip<Content: View>: View {
         .buttonBorderShape(.capsule)
         .controlSize(.small)
         .tint(selected ? Palette.accent : Color.secondary)
+        .frame(maxWidth: flexibleWidth ? .infinity : nil)
         .frame(minHeight: TouchTarget.minimum)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
@@ -457,8 +476,8 @@ private struct SessionFilterChip<Content: View>: View {
             .font(.footnote.weight(.semibold))
             .foregroundStyle(selected ? Color.primary : Color.secondary)
             .lineLimit(1)
-            .fixedSize(horizontal: true, vertical: false)
-            .frame(minWidth: 20, minHeight: 24)
+            .fixedSize(horizontal: !flexibleWidth, vertical: false)
+            .frame(minWidth: flexibleWidth ? nil : 20, maxWidth: flexibleWidth ? .infinity : nil, minHeight: 24)
             .contentShape(Rectangle())
         }
     }
@@ -466,13 +485,13 @@ private struct SessionFilterChip<Content: View>: View {
 
 /// Both filter rows share the same compact chip geometry and typography.
 private enum SessionFilterStyle {
-    static let chipSpacing: CGFloat = 6
-    static let chipContentSpacing: CGFloat = 6
+    static let chipSpacing: CGFloat = 5
+    static let chipContentSpacing: CGFloat = 4
     static let moreGap: CGFloat = 4
     static let edgeFadeWidth: CGFloat = 24
-    /// Assistant chips are icon-only (owner request 2026-10-11).
-    static let runtimeIcon: CGFloat = 22
-    static let runtimeSlot: CGFloat = 28
+    /// Assistant chips are icon-only (owner request 2026-10-11; 6-runtime compact fit 2026-11-22).
+    static let runtimeIcon: CGFloat = 19
+    static let runtimeSlot: CGFloat = 22
 }
 
 #endif

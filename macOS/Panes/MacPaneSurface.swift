@@ -89,7 +89,6 @@ final class MacPaneSurfaceCache {
         /// Last measured window frame, restored while the next layout pass
         /// measures the rebuilt pane (click-to-focus stays accurate).
         var lastFrame: CGRect?
-        var bodySize: CGSize = .zero
 
         init() {
             view.sizingOptions = []
@@ -133,13 +132,22 @@ final class MacPaneSurfaceCache {
         }
         entry.lifetime.suspend(lease: lease)
         entry.view.isHidden = true
-        if !keepingMounted {
+        if keepingMounted {
+            entry.document?.releaseDetachedViews()
+        } else {
             entry.view.removeFromSuperview()
             entry.view.rootView = AnyView(EmptyView())
             entry.configuration = nil
             entry.store = nil
             entry.document = nil
             if entries[key] === entry { entries[key] = nil }
+        }
+    }
+
+    /// Releases detached text views across live and warm pane documents.
+    func releaseDetachedTextViews() {
+        for entry in entries.values {
+            entry.document?.releaseDetachedViews()
         }
     }
 
@@ -410,7 +418,7 @@ struct MacPaneSurface: NSViewRepresentable {
         entry.view.rootView = AnyView(MacPaneView(session: session, metadataStore: metadataStore,
                     allowsClose: allowsClose, autoFocusComposer: autoFocusComposer,
                     retainedStore: entry.store?.clientIdentity == appModel.clientIdentity ? entry.store : nil,
-                    retainedBodySize: entry.bodySize)
+                    retainedPaneWidth: entry.lastFrame?.width ?? 0)
             .environment(appModel)
             .environment(workspace)
             .environment(\.macPaneLifetime, entry.lifetime)

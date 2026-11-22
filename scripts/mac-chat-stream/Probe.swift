@@ -21,7 +21,7 @@ enum ConversationTimelineItem: Equatable, Identifiable {
 struct ChatActivityState: Equatable {}
 extension EnvironmentValues {
     @Entry var chatImageLoader: ChatImageLoader? = nil
-    @Entry var chatFileLoader: NSObject? = nil
+    @Entry var chatFileLoader: ChatFileLoader? = nil
 }
 
 // Fixture-only stand-ins for the production media path, which the probe
@@ -58,6 +58,17 @@ struct MessageImagesView: View {
 struct LocalEchoImagesView: View {
     let payloads: [Data]
     let isUser: Bool
+    var body: some View { EmptyView() }
+}
+final class ChatFileLoader {
+    func open(seq: Int, link: ChatFileLink) {}
+}
+struct MessageFileAttachmentsView: View {
+    let seq: Int
+    let localFiles: [LocalFileAttachment]
+    let hostFilePaths: [String]
+    let isUser: Bool
+    let userForeground: Color
     var body: some View { EmptyView() }
 }
 
@@ -230,6 +241,7 @@ private struct Fixture {
 @main struct StreamProbe {
     @MainActor static func main() {
         NSApplication.shared.setActivationPolicy(.prohibited)
+        wideResize()
         let sizes = CommandLine.arguments.contains("--small") ? [20] : [20, 60, 120]
         for size in sizes {
             run(size: size, plainText: false)
@@ -442,6 +454,53 @@ private struct Fixture {
                      abs(returned - tableHeight)))
         fflush(stdout)
         window.close()
+    }
+
+    /// The native cell must follow the divider while an already-capped text
+    /// measure is reused. Crossing the cap still reflows and settles exactly.
+    @MainActor
+    static func wideResize() {
+        let state = StreamState(), owner = NSObject()
+        state.messages = Fixture.messages(count: 20)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1040, height: 760),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: OpenScreen(state: state, owner: owner,
+                                                       document: MacConversationTextDocument()))
+        window.contentView = host
+        window.orderFront(nil)
+        settle(host, window, seconds: 0.4)
+        guard let table = descendants(host).compactMap({ $0 as? NSTableView }).first,
+              let wideHeight = contentHeight(host) else { preconditionFailure("Missing native conversation") }
+        func resize(to width: CGFloat) {
+            var frame = window.frame
+            frame.size.width = width
+            window.setFrame(frame, display: false)
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+        }
+        #if DEBUG
+        let measurements = MacConversationTableCounters.measurements
+        #endif
+        for width in stride(from: 1030.0, through: 880.0, by: -10) { resize(to: width) }
+        waitForQuiescence(host, window, timeout: 3)
+        precondition(abs(table.frame.width - 880) < 1, "The table did not track the window width")
+        precondition(contentHeight(host) == wideHeight, "Capped rows changed height")
+        #if DEBUG
+        precondition(MacConversationTableCounters.measurements == measurements,
+                     "A width change above the readable cap measured rows again")
+        #endif
+        resize(to: 640)
+        waitForQuiescence(host, window, timeout: 3)
+        let narrow = freshContentHeight(messages: state.messages, scale: 1, width: 640)
+        precondition(narrow > wideHeight, "The narrow case did not actually change text wrapping")
+        assertSettledTotal(host, reference: narrow, mechanism: "cross readable cap")
+        assertSettledPositions(host: host, mechanism: "cross readable cap")
+        resize(to: 1040)
+        waitForQuiescence(host, window, timeout: 3)
+        assertSettledTotal(host, reference: wideHeight, mechanism: "restore readable cap")
+        print("  wide resize: native width tracks, no capped-row remeasurement")
     }
 
     /// Measures every block directly through its single-authority container.

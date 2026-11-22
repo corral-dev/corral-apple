@@ -169,6 +169,7 @@ final class AppModel {
             connectionState = .failed(ConnectionFailureMessage.text(for: error))
             return
         }
+        configureClientTheme(remote)
         client = remote
         remote.lastHelloName = UIDeviceName.current
         // Application readiness requires authenticated hello; push registration is independent.
@@ -294,6 +295,7 @@ final class AppModel {
         activeTransport = nil
 
         let remote = try RemoteClient(hostStore: hostStore)
+        configureClientTheme(remote)
         client = remote
 
         // 与日常连接同一套抢答：局域网候选与中继并发，禁止串行死等。
@@ -562,11 +564,38 @@ final class AppModel {
     }
 }
 
+#if os(macOS)
+#if canImport(AppKit)
+import AppKit
+#endif
+#endif
 #if os(iOS)
 #if canImport(UIKit)
 import UIKit
 #endif
 #endif
+
+extension AppModel {
+    private func configureClientTheme(_ remote: RemoteClient) {
+        #if os(macOS) && canImport(AppKit)
+        remote.terminalThemeProvider = {
+            let appearance = NSApp?.effectiveAppearance ?? NSAppearance(named: .aqua)
+            let dark = appearance?.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            return (dark ? TerminalColorScheme.dark : .light).theme
+        }
+        #elseif os(iOS) && canImport(UIKit)
+        remote.terminalThemeProvider = {
+            let style = UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .flatMap(\.windows)
+                .first(where: \.isKeyWindow)?
+                .traitCollection.userInterfaceStyle
+                ?? UITraitCollection.current.userInterfaceStyle
+            return (style == .dark ? TerminalColorScheme.dark : .light).theme
+        }
+        #endif
+    }
+}
 
 /// 跨平台设备名。
 enum UIDeviceName {

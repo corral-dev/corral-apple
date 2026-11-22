@@ -145,6 +145,54 @@ final class ChatFileViewerTests: XCTestCase {
         }
     }
 
+    func testMarkdownFileViewerMultiLayerPushAndLoaderPop() throws {
+        let loader = ChatFileLoader(client: nil, hostID: "h1", sessionKey: "s1")
+        let link1 = ChatFileLink(ref: "CORE_PROFILE.md", displayName: "CORE_PROFILE.md", targetLine: nil, isMarkdown: true)
+        let link2 = ChatFileLink(ref: "DOMAIN_RULES.md#mobile-preview", displayName: "DOMAIN_RULES.md", targetLine: nil, targetAnchor: "mobile-preview", isMarkdown: true)
+
+        let rootURL = FileManager.default.temporaryDirectory.appendingPathComponent("core.md")
+        let layer2URL = FileManager.default.temporaryDirectory.appendingPathComponent("domain.md")
+        let rootFile = LoadedChatFile(
+            id: "r1",
+            localURL: rootURL,
+            name: "CORE_PROFILE.md",
+            displayPath: "~/CORE_PROFILE.md",
+            mime: "text/markdown",
+            size: 10,
+            sha256: "a",
+            targetLine: nil
+        )
+        let layer2File = LoadedChatFile(
+            id: "r2",
+            localURL: layer2URL,
+            name: "DOMAIN_RULES.md",
+            displayPath: "~/DOMAIN_RULES.md",
+            mime: "text/markdown",
+            size: 20,
+            sha256: "b",
+            targetLine: nil,
+            targetAnchor: "mobile-preview"
+        )
+        let rootLayer = ChatFileLoader.MarkdownPresentation(seq: 3, via: [], link: link1, phase: .loaded(rootFile))
+        let secondLayer = ChatFileLoader.MarkdownPresentation(seq: 3, via: rootLayer.childVia, link: link2, phase: .loaded(layer2File))
+        XCTAssertEqual(secondLayer.via, ["CORE_PROFILE.md"])
+        XCTAssertEqual(secondLayer.childVia, ["CORE_PROFILE.md", "DOMAIN_RULES.md#mobile-preview"])
+
+        loader.markdownPresentation = rootLayer
+        loader.pushedMarkdownLayers = [secondLayer]
+        XCTAssertEqual(loader.pushedMarkdownIDs, [secondLayer.id])
+        XCTAssertEqual(loader.presentation(for: secondLayer.id)?.link.displayName, "DOMAIN_RULES.md")
+
+        // Simulated native NavigationStack pop removes the trailing layer cleanly.
+        loader.pushedMarkdownIDs = []
+        XCTAssertTrue(loader.pushedMarkdownLayers.isEmpty)
+        XCTAssertNotNil(loader.markdownPresentation)
+
+        loader.dismissMarkdown()
+        XCTAssertNil(loader.markdownPresentation)
+        XCTAssertNil(loader.viewerQuickLookURL)
+    }
+
     private func findTextView(in root: UIView) -> UITextView? {
         if let tv = root as? UITextView { return tv }
         for subview in root.subviews {

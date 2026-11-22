@@ -6,10 +6,25 @@ import UIKit
 struct ImagePickerButton: View {
     var isEnabled: Bool = true
     var onPicked: (_ base64: String, _ preview: UIImage) -> Void
+    var onChooseFiles: (() -> Void)? = nil
     @State private var item: PhotosPickerItem?
+    @State private var showPhotosPicker = false
 
     var body: some View {
-        PhotosPicker(selection: $item, matching: .images) {
+        Menu {
+            Button {
+                showPhotosPicker = true
+            } label: {
+                Label("composer.attach_photo", systemImage: "photo.on.rectangle")
+            }
+            if let onChooseFiles {
+                Button {
+                    onChooseFiles()
+                } label: {
+                    Label("composer.attach_files", systemImage: "doc")
+                }
+            }
+        } label: {
             // A plus on the bottom-left of the floating card, matching the
             // ChatGPT composer: a plain add glyph, not a photo thumbnail.
             Image(systemName: "plus")
@@ -19,7 +34,8 @@ struct ImagePickerButton: View {
         }
         .buttonStyle(PressableButtonStyle())
         .disabled(!isEnabled)
-        .accessibilityLabel(Text("composer.attach_image"))
+        .accessibilityLabel(Text("composer.attach"))
+        .photosPicker(isPresented: $showPhotosPicker, selection: $item, matching: .images)
         .onChange(of: item) { _, newItem in
             guard let newItem else { return }
             Task {

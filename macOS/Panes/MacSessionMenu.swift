@@ -106,7 +106,7 @@ struct MacSessionMenuItems: View {
             } label: {
                 Label("sessions.action.stop", systemImage: "stop.fill")
             }
-            .disabled(!canMutate)
+            .disabled(!canMutate || workspace.isStopping(session.key))
         }
         Divider()
         Button {

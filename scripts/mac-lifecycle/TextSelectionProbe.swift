@@ -318,6 +318,59 @@ struct TextSelectionProbe {
             RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         }
         check(pruned == nil && bounded.textView(for: 1) == nil, "removed block's native view leaked")
+
+        weak var detachedView: NSTextView?
+        let detachedDoc = MacConversationTextDocument()
+        let keepMount = MacMessageTextMount(frame: NSRect(x: 0, y: 0, width: 320, height: 120))
+        var hostWindow: NSWindow? = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        hostWindow?.isReleasedWhenClosed = false
+        hostWindow?.contentView = keepMount
+        var mountedView: MacDirectMessageTextView?
+        autoreleasepool {
+            detachedDoc.update(
+                identity: ObjectIdentifier(owner),
+                sources: [
+                    .init(id: 1, text: "Detached paragraph alpha", isUser: false),
+                    .init(id: 2, text: "Mounted paragraph beta", isUser: false),
+                ],
+                style: style
+            ) {
+                NSAttributedString(string: $0.text, attributes: [.font: style.font])
+            }
+            detachedView = detachedDoc.textView(for: 1)
+            guard let mounted = detachedDoc.textView(for: 2) as? MacDirectMessageTextView else {
+                preconditionFailure("expected MacDirectMessageTextView for block 2")
+            }
+            mountedView = mounted
+            keepMount.attach(mounted)
+            detachedDoc.selectAll(from: mounted)
+            check(detachedDoc.hasSelection && detachedDoc.selectedPlainText().contains("Detached paragraph alpha"),
+                  "cross-block selection includes detached and mounted blocks")
+            detachedDoc.releaseDetachedViews()
+            check(mounted.superview === keepMount && detachedDoc.textView(for: 2) === mounted,
+                  "mounted view must remain intact when releasing detached views")
+            check(detachedDoc.hasSelection && detachedDoc.selectedPlainText().contains("Detached paragraph alpha"),
+                  "cross-block selection must survive releaseDetachedViews")
+            check(detachedDoc.container(for: 1)?.textView == nil,
+                  "detached container must clear textView reference")
+        }
+        let detachDeadline = Date().addingTimeInterval(2)
+        while detachedView != nil && Date() < detachDeadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+        check(detachedView == nil, "detached native text view leaked across releaseDetachedViews")
+        let recreated = detachedDoc.textView(for: 1)
+        check(recreated != nil
+                && recreated?.selectedRange() == NSRange(location: 0, length: "Detached paragraph alpha".count),
+              "re-materialized block should restore active selection")
+        _ = mountedView
+        keepMount.releaseTextView()
+        hostWindow?.close()
+        hostWindow = nil
+
         weak var released: NSTextView?
         weak var releasedDocument: MacConversationTextDocument?
         autoreleasepool {

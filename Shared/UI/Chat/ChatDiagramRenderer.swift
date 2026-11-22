@@ -10,17 +10,13 @@ import UIKit
 @MainActor
 final class ChatDiagramDrawing: NSObject {
     let pdf: Data
-    /// Original transparent canvas bitmap; the PDF page carries the viewer
-    /// surface color so PDFKit never paints a white page behind a dark drawing.
-    let png: Data?
     let size: CGSize
     let image: PlatformImage
 
-    init?(pdf: Data, size: CGSize, image: PlatformImage? = nil, png: Data? = nil) {
+    init?(pdf: Data, size: CGSize, image: PlatformImage? = nil) {
         guard pdf.count <= 4 * 1024 * 1024, size.width.isFinite, size.height.isFinite,
               size.width > 0, size.height > 0, let document = PDFDocument(data: pdf), let page = document.page(at: 0) else { return nil }
         self.pdf = pdf
-        self.png = png
         self.size = size
         let factor = min(2, sqrt(4_000_000 / (size.width * size.height)))
         self.image = image ?? page.thumbnail(
@@ -39,7 +35,7 @@ final class ChatDiagramDrawing: NSObject {
         if let inline { pdf = rasterPDF(image: inline, size: size, dark: dark) }
         if pdf == nil { pdf = fallbackPDF }
         guard let pdf else { return nil }
-        return ChatDiagramDrawing(pdf: pdf, size: size, image: inline, png: png)
+        return ChatDiagramDrawing(pdf: pdf, size: size, image: inline)
     }
 
     private static func rasterPDF(image: PlatformImage, size: CGSize, dark: Bool) -> Data? {
@@ -106,11 +102,10 @@ final class ChatDiagramRenderer: NSObject, WKNavigationDelegate, WKURLSchemeHand
             .union(["renderer.html", "renderer.js"])
         super.init()
         memory.totalCostLimit = 32 * 1024 * 1024
+        memory.countLimit = 48
         #if canImport(UIKit)
         NotificationCenter.default.addObserver(self, selector: #selector(releaseContext),
                                               name: UIApplication.didEnterBackgroundNotification, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(memoryPressure),
-                                              name: UIApplication.didReceiveMemoryWarningNotification, object: nil)
         #endif
     }
 
@@ -132,7 +127,7 @@ final class ChatDiagramRenderer: NSObject, WKNavigationDelegate, WKURLSchemeHand
         let png = try? Data(contentsOf: pngURL(host: host, key: key))
         guard let drawing = ChatDiagramDrawing(
             pdf: data, size: page.bounds(for: .mediaBox).size,
-            image: png.flatMap { PlatformImage(data: $0) }, png: png
+            image: png.flatMap { PlatformImage(data: $0) }
         ) else { return nil }
         retain(drawing, key: key)
         return drawing
@@ -229,7 +224,7 @@ final class ChatDiagramRenderer: NSObject, WKNavigationDelegate, WKURLSchemeHand
                 }
                 #endif
                 guard self.generation == ticket else { return }
-                self.finish(ChatDiagramDrawing.make(png: png, fallbackPDF: fallback, size: size, dark: job.dark))
+                self.finish(ChatDiagramDrawing.make(png: png, fallbackPDF: fallback, size: size, dark: job.dark), png: png)
             } catch {
                 if self.generation == ticket { self.finish(nil) }
             }
@@ -256,7 +251,7 @@ final class ChatDiagramRenderer: NSObject, WKNavigationDelegate, WKURLSchemeHand
         }
     }
 
-    private func finish(_ drawing: ChatDiagramDrawing?, rememberFailure: Bool = true) {
+    private func finish(_ drawing: ChatDiagramDrawing?, png: Data? = nil, rememberFailure: Bool = true) {
         guard let job = active else { return }
         watchdog?.cancel()
         watchdog = nil
@@ -267,7 +262,7 @@ final class ChatDiagramRenderer: NSObject, WKNavigationDelegate, WKURLSchemeHand
             let file = diskURL(host: job.host, key: job.key)
             try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? drawing.pdf.write(to: file, options: .atomic)
-            if let png = drawing.png { try? png.write(to: pngURL(host: job.host, key: job.key), options: .atomic) }
+            if let png { try? png.write(to: pngURL(host: job.host, key: job.key), options: .atomic) }
             pruneDisk()
         } else {
             if rememberFailure {
@@ -285,7 +280,10 @@ final class ChatDiagramRenderer: NSObject, WKNavigationDelegate, WKURLSchemeHand
         } else { pump() }
     }
 
-    @objc private func memoryPressure() { memory.removeAllObjects(); releaseContext() }
+    func purgeMemory() {
+        memory.removeAllObjects()
+        releaseContext()
+    }
     @objc private func releaseContext() {
         let pending = queue
         queue.removeAll()
@@ -303,8 +301,13 @@ final class ChatDiagramRenderer: NSObject, WKNavigationDelegate, WKURLSchemeHand
     }
 
     private func retain(_ drawing: ChatDiagramDrawing, key: String) {
-        let pixels = drawing.image.size.width * drawing.image.size.height * 4
-        memory.setObject(drawing, forKey: key as NSString, cost: drawing.pdf.count + Int(pixels))
+        let pixels: Int
+        if let cgImage = drawing.image.corralCGImage {
+            pixels = cgImage.bytesPerRow * cgImage.height
+        } else {
+            pixels = Int(drawing.image.size.width * drawing.image.size.height * 4)
+        }
+        memory.setObject(drawing, forKey: key as NSString, cost: drawing.pdf.count + pixels)
     }
 
     private func diskURL(host: String, key: String) -> URL {

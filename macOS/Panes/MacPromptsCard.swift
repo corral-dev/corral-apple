@@ -1,6 +1,38 @@
 import AppKit
 import SwiftUI
 
+/// Observe the card's actual limits inside the overlay. Once its width is
+/// capped, a divider step can reposition it without publishing new card size.
+struct MacPromptsCardViewport<Content: View>: View {
+    @Environment(\.interfaceScale) private var interfaceScale
+    @State private var limits: CGSize = .zero
+    let fitsBeside: Bool
+    @ViewBuilder let content: (CGSize) -> Content
+
+    var body: some View {
+        let full = MacPromptsCard.width * interfaceScale
+        let margin = Space.md * 2 * interfaceScale
+        let minimum = MacPromptsCard.overContentMinimumWidth * interfaceScale
+        let widthFraction = MacPromptsCard.overContentWidthFraction
+        let heightFraction = fitsBeside ? 0.7 : MacPromptsCard.overContentHeightFraction
+        let beside = fitsBeside
+        Color.clear
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+            .onGeometryChange(for: CGSize.self) { geometry in
+                let size = geometry.size
+                let preferred = beside ? full : max(minimum, size.width * widthFraction)
+                let width = max(0, min(full, preferred, size.width - margin))
+                return CGSize(width: width, height: max(120, size.height * heightFraction - 56))
+            } action: {
+                limits = $0
+            }
+            .overlay(alignment: .topTrailing) {
+                if limits.width > 0 { content(limits) }
+            }
+    }
+}
+
 /// The pane's Your prompts card (design: Prompts card). It floats at the
 /// pane's top trailing corner: beside the conversation when the pane has
 /// room (the pane shifts the conversation aside by `reserve`), over it in

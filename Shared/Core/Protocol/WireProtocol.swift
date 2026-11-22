@@ -57,6 +57,7 @@ nonisolated enum WireProtocol {
     static let mInputQuestion = "input.question"
     static let mInputKeys = "input.keys"
     static let mInputImage = "input.image"
+    static let mInputFile = "input.file"
     /// Query durable host receipt for a previously sent `command_id`.
     static let mCommandStatus = "command.status"
 
@@ -66,6 +67,7 @@ nonisolated enum WireProtocol {
     static let capabilityToolDetail = "tool_detail"
     static let capabilityMediaImage = "media_image"
     static let capabilityMediaFile = "media_file"
+    static let capabilityInputFile = "input_file"
 
     static let mSessionNew = "session.new"
     static let mSessionResume = "session.resume"
@@ -161,6 +163,38 @@ nonisolated enum WireProtocol {
         ["plane": planeData, "bind": bind, "name": name]
     }
 
+    /// RPC methods whose handler can accept the client's `#rrggbb` terminal
+    /// palette so newly hosted panes know light/dark before spawning the agent.
+    static let terminalThemeHintMethods: Set<String> = [
+        mHello,
+        mSessionNew,
+        mSessionResume,
+        mSessionRestart,
+        mSessionCopy,
+        mSessionHandoff,
+        mShellOpen,
+    ]
+
+    /// Attach `background`/`foreground` to theme-aware launch and control-hello requests.
+    static func applyingTerminalTheme(
+        _ theme: TerminalTheme?,
+        to params: [String: Any],
+        method: String
+    ) -> [String: Any] {
+        guard let theme,
+              terminalThemeHintMethods.contains(method),
+              params["background"] == nil else {
+            return params
+        }
+        if method == mHello, (params["plane"] as? String) == planeData {
+            return params
+        }
+        var updated = params
+        updated["background"] = theme.background
+        updated["foreground"] = theme.foreground
+        return updated
+    }
+
     static func shouldAttachDataPlane(dataBind: String?) -> Bool {
         guard let dataBind else { return false }
         return !dataBind.isEmpty
@@ -192,6 +226,11 @@ nonisolated enum WireProtocol {
     /// Whether hello advertised message file downloads (`media_file`).
     static func supportsMediaFile(fromHelloPayload payload: Any) -> Bool {
         capabilityFlag(capabilityMediaFile, fromHelloPayload: payload)
+    }
+
+    /// Whether hello advertised pasted file uploads (`input_file`).
+    static func supportsInputFile(fromHelloPayload payload: Any) -> Bool {
+        capabilityFlag(capabilityInputFile, fromHelloPayload: payload)
     }
 
     /// Whether hello advertised on-demand tool bodies (`tool_detail`).

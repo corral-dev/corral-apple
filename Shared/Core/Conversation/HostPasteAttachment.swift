@@ -27,9 +27,33 @@ nonisolated enum HostPasteAttachment {
         /[~.]?\/[A-Za-z0-9@.+_~\/\-]*?corral-pastes\/paste-[A-Za-z0-9_]+\.(?:png|jpe?g|gif|webp|heic|heif|bmp|tiff?)/
             .ignoresCase()
 
+    private nonisolated(unsafe) static let pastedFilePath =
+        /[~.]?\/[A-Za-z0-9@.+_~\/\-]*?corral-pastes\/paste-[A-Za-z0-9_]+-(?:[^\s\/]+?(?:\.[A-Za-z0-9]{1,12})+|[A-Za-z0-9._\-]+)/
+
     static func paths(in text: String?) -> [String] {
         guard let text, !text.isEmpty else { return [] }
         return text.matches(of: pastedPath).map { String(text[$0.range]) }
+    }
+
+    static func filePaths(in text: String?) -> [String] {
+        guard let text, !text.isEmpty else { return [] }
+        let imageRanges = text.matches(of: pastedPath).map(\.range)
+        return text.matches(of: pastedFilePath).compactMap { match in
+            let range = match.range
+            if imageRanges.contains(where: { $0.overlaps(range) }) {
+                return nil
+            }
+            return String(text[range])
+        }
+    }
+
+    static func displayName(forPastedFilePath path: String) -> String {
+        let base = (path as NSString).lastPathComponent
+        if let range = base.range(of: #"^paste-[A-Za-z0-9_]+-"#, options: .regularExpression) {
+            let trimmed = String(base[range.upperBound...])
+            if !trimmed.isEmpty { return trimmed }
+        }
+        return base.isEmpty ? "file" : base
     }
 
     /// `text` without the host's pasted attachment paths.
@@ -39,16 +63,18 @@ nonisolated enum HostPasteAttachment {
     /// The seams are tidied only when a path was actually removed.
     static func body(_ text: String?) -> String {
         guard let text, !text.isEmpty else { return "" }
+        let ranges = (text.matches(of: pastedPath).map(\.range) + text.matches(of: pastedFilePath).map(\.range))
+            .sorted { $0.lowerBound < $1.lowerBound }
+        guard !ranges.isEmpty else { return text.trimmingCharacters(in: .whitespacesAndNewlines) }
+
         var output = ""
         var cursor = text.startIndex
-        var removed = false
-        for match in text.matches(of: pastedPath) {
-            output += text[cursor..<match.range.lowerBound]
-            cursor = match.range.upperBound
-            removed = true
+        for range in ranges {
+            if range.lowerBound < cursor { continue }
+            output += text[cursor..<range.lowerBound]
+            cursor = range.upperBound
         }
         output += text[cursor...]
-        guard removed else { return text.trimmingCharacters(in: .whitespacesAndNewlines) }
 
         var tidied = ""
         var pendingSpace = false
@@ -73,7 +99,7 @@ nonisolated enum HostPasteAttachment {
         return tidied.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// True when a user turn is nothing but attached images (no typed body).
+    /// True when a user turn is nothing but attached images or files (no typed body).
     static func isAttachmentOnly(_ text: String?) -> Bool {
         let raw = text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return !raw.isEmpty && body(raw).isEmpty

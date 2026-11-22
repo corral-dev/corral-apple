@@ -8,6 +8,7 @@ import Foundation
         hostCapabilities = .empty
         supportsMediaImage = false
         supportsMediaFile = false
+        supportsInputFile = false
         dataBindingTask?.cancel()
         dataBindingTask = nil
         upgradeTask?.cancel()

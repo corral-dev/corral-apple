@@ -99,6 +99,8 @@ let package = Package(
                 "SessionUserPromptsTests.swift",
                 "ComposerHistoryTests.swift",
                 "ConnectionFailureTextTests.swift",
+                "CLIVersionSyncPolicyTests.swift",
+                "TerminalColorSchemeTests.swift",
                 "TerminalInputPassiveTests.swift",
             ],
             swiftSettings: [

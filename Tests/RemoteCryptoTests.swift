@@ -233,6 +233,10 @@ final class RemoteCryptoTests: XCTestCase {
             RemoteWebSocketSession.requestTimeout
         )
         XCTAssertFalse(config.waitsForConnectivity)
+        XCTAssertNil(config.urlCache)
+        XCTAssertNil(config.httpCookieStorage)
+        XCTAssertFalse(config.httpShouldSetCookies)
+        XCTAssertEqual(config.requestCachePolicy, .reloadIgnoringLocalCacheData)
     }
 
     @MainActor

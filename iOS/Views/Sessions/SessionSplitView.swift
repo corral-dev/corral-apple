@@ -153,7 +153,7 @@ private struct SessionSplitView: View {
                     select(SessionRoute(key: created.key), focusComposer: true)
                 },
                 onPin: { Task { try? await feed.togglePin(session) } },
-                onStop: { Task { try? await feed.stop(session) } },
+                onStop: { _ = try await feed.stop(session) },
                 onDelete: { target in
                     Task {
                         do {

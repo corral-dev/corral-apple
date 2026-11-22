@@ -110,6 +110,14 @@ final class MacTerminalSessions {
         terminals.removeAll()
     }
 
+    /// Release GPU renderers for hidden terminals immediately under memory
+    /// pressure without closing any session or discarding scrollback.
+    func releaseHiddenRenderers() {
+        for terminal in terminals.values where !terminal.view.isShown {
+            terminal.view.releaseMetalRendererIfHidden()
+        }
+    }
+
     private func closeLeastRecentlyShown() {
         while terminals.count > Self.capacity,
               let oldest = terminals.values.filter({ !$0.view.isShown }).min(by: { $0.lastShown < $1.lastShown }) {

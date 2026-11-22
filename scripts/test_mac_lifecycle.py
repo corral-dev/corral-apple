@@ -17,6 +17,7 @@ SOURCES = [
     'Shared/UI/Sessions/FulltextSearchStore.swift',
     'Shared/Core/Presentation/SessionNavigationHistory.swift',
     'macOS/Workspace/MacNavigationState.swift',
+    'macOS/Workspace/MacSessionPresentationPreferences.swift',
     'Shared/UI/Chat/ChatScrollRequest.swift',
     'macOS/Workspace/MacWorkspace.swift',
     'macOS/Sidebar/MacSessionBatch.swift',

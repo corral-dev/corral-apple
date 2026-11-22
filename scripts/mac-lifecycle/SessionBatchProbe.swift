@@ -93,6 +93,12 @@ extension LifecycleProbe {
             check(!workspace.paneKeys.contains("delete") && workspace.paneKeys.contains("keep"),
                   "deletion closed an unconfirmed pane")
             check(workspace.actionError == nil, "batch emitted a second per-item alert")
+
+            workspace.performBatchAction(.stop, on: [SessionSummary(key: "keep", live: true)], labelForKey: { $0 })
+            await settle()
+            for _ in 0..<20 where workspace.batch.isRunning { await settle() }
+            check(workspace.transientFeedback == .stoppedBatch(1), "batch stop did not show stoppedBatch feedback")
+            check(workspace.batchError == nil, "successful batch stop reported an error")
         } catch { preconditionFailure("batch fixture failed: \(error)") }
         print("PASS session batches: serialized snapshots, duplicate exclusion, partial failure, host retirement, split/session desired pins, confirmed deletion")
     }

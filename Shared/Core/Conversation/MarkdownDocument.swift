@@ -42,16 +42,54 @@ nonisolated struct MarkdownDocument: Sendable {
         }
     }
 
+    struct HeadingItem: Identifiable, Hashable, Sendable {
+        let id: Int
+        let level: Int
+        let title: String
+        let anchor: String
+    }
+
     let blocks: [Block]
     let truncatedToSource: Bool
+    let headings: [HeadingItem]
+    let blockLineRanges: [Int: ClosedRange<Int>]
+
+    func blockID(forLine line: Int) -> Int? {
+        guard line > 0, !blocks.isEmpty else { return nil }
+        if let exact = blocks.first(where: { block in
+            guard let range = blockLineRanges[block.id] else { return false }
+            return range.contains(line)
+        }) {
+            return exact.id
+        }
+        var nearestPreceding: Int?
+        for block in blocks {
+            guard let range = blockLineRanges[block.id] else { continue }
+            if range.lowerBound <= line {
+                nearestPreceding = block.id
+            } else {
+                break
+            }
+        }
+        return nearestPreceding ?? blocks.first?.id
+    }
+
+    func blockID(forAnchor anchor: String) -> Int? {
+        let trimmed = anchor.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let decoded = trimmed.removingPercentEncoding ?? trimmed
+        let slug = ChatFileLink.markdownAnchorSlug(decoded)
+        let candidate = slug.isEmpty ? decoded.lowercased() : slug
+        return headings.first(where: { $0.anchor == candidate })?.id
+    }
 
     static func parse(_ source: String) -> MarkdownDocument {
         let trimmedSource = source.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedSource.isEmpty else {
-            return MarkdownDocument(blocks: [], truncatedToSource: false)
+            return MarkdownDocument(blocks: [], truncatedToSource: false, headings: [], blockLineRanges: [:])
         }
         guard source.utf8.count <= maxParsedUTF8Bytes else {
-            return MarkdownDocument(blocks: [], truncatedToSource: true)
+            return MarkdownDocument(blocks: [], truncatedToSource: true, headings: [], blockLineRanges: [:])
         }
 
         var options = AttributedString.MarkdownParsingOptions()
@@ -59,7 +97,36 @@ nonisolated struct MarkdownDocument: Sendable {
         options.failurePolicy = .returnPartiallyParsedIfPossible
         options.appliesSourcePositionAttributes = true
         let parsed = (try? AttributedString(markdown: source, options: options)) ?? AttributedString(source)
-        return MarkdownDocument(blocks: buildBlocks(from: parsed), truncatedToSource: false)
+        let extracted = buildBlocks(from: parsed)
+        return MarkdownDocument(
+            blocks: extracted.blocks,
+            truncatedToSource: false,
+            headings: buildHeadings(from: extracted.blocks),
+            blockLineRanges: extracted.lineRanges
+        )
+    }
+
+    private static func buildHeadings(from blocks: [Block]) -> [HeadingItem] {
+        var seenCounts: [String: Int] = [:]
+        var result: [HeadingItem] = []
+        for block in blocks {
+            guard case .heading(let id, let level, let text) = block else { continue }
+            let title = String(text.characters).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !title.isEmpty else { continue }
+            let base = ChatFileLink.markdownAnchorSlug(title)
+            let count = seenCounts[base, default: 0]
+            seenCounts[base] = count + 1
+            let anchor: String
+            if base.isEmpty {
+                anchor = "section-\(id)"
+            } else if count == 0 {
+                anchor = base
+            } else {
+                anchor = "\(base)-\(count)"
+            }
+            result.append(HeadingItem(id: id, level: level, title: title, anchor: anchor))
+        }
+        return result
     }
 
     // MARK: - Block extraction
@@ -71,6 +138,16 @@ nonisolated struct MarkdownDocument: Sendable {
         case codeBlock(id: Int, language: String?, lines: [String])
         case blockQuote(id: Int, text: AttributedString, lastParagraphID: Int?)
         case table(id: Int, alignments: [PresentationIntent.TableColumn.Alignment], cells: [TableCoord: AttributedString])
+        var activeID: Int? {
+            switch self {
+            case .heading(let id, _, _): id
+            case .paragraph(let id, _): id
+            case .list(let id, _): id
+            case .codeBlock(let id, _, _): id
+            case .blockQuote(let id, _, _): id
+            case .table(let id, _, _): id
+            }
+        }
     }
 
     private struct PendingListItem {
@@ -87,10 +164,22 @@ nonisolated struct MarkdownDocument: Sendable {
         let column: Int
     }
 
-    private static func buildBlocks(from parsed: AttributedString) -> [Block] {
+    private static func buildBlocks(from parsed: AttributedString) -> (blocks: [Block], lineRanges: [Int: ClosedRange<Int>]) {
         var output: [Block] = []
         var active: ActiveGroup?
         var syntheticID = -1
+        var lineRanges: [Int: ClosedRange<Int>] = [:]
+
+        func recordSourceLine(for id: Int, position: AttributedString.MarkdownSourcePosition?) {
+            guard let position else { return }
+            let lower = min(position.startLine, position.endLine)
+            let upper = max(position.startLine, position.endLine)
+            if let existing = lineRanges[id] {
+                lineRanges[id] = min(existing.lowerBound, lower) ... max(existing.upperBound, upper)
+            } else {
+                lineRanges[id] = lower ... upper
+            }
+        }
 
         func nextID() -> Int {
             defer { syntheticID -= 1 }
@@ -170,14 +259,18 @@ nonisolated struct MarkdownDocument: Sendable {
 
         for run in parsed.runs {
             let slice = AttributedString(parsed[run.range])
+            let sourcePos = run.markdownSourcePosition
             guard let intent = run.presentationIntent, !intent.components.isEmpty else {
                 if !slice.characters.allSatisfy(\.isWhitespace) {
                     if case .paragraph(let id, var existing) = active {
                         existing.append(slice)
                         active = .paragraph(id: id, text: existing)
+                        recordSourceLine(for: id, position: sourcePos)
                     } else {
                         flushActive()
-                        active = .paragraph(id: nextID(), text: slice)
+                        let id = nextID()
+                        active = .paragraph(id: id, text: slice)
+                        recordSourceLine(for: id, position: sourcePos)
                     }
                 }
                 continue
@@ -188,6 +281,7 @@ nonisolated struct MarkdownDocument: Sendable {
                 flushActive()
                 let id = components.first(where: { if case .thematicBreak = $0.kind { return true }; return false })?.identity ?? nextID()
                 output.append(.thematicBreak(id: id))
+                recordSourceLine(for: id, position: sourcePos)
                 continue
             }
 
@@ -219,6 +313,7 @@ nonisolated struct MarkdownDocument: Sendable {
                             cells: [coord: slice]
                         )
                     }
+                    recordSourceLine(for: tableComp.identity, position: sourcePos)
                     continue
                 }
             }
@@ -236,6 +331,7 @@ nonisolated struct MarkdownDocument: Sendable {
                     flushActive()
                     active = .blockQuote(id: quoteComp.identity, text: slice, lastParagraphID: paraID)
                 }
+                recordSourceLine(for: quoteComp.identity, position: sourcePos)
                 continue
             }
 
@@ -255,6 +351,7 @@ nonisolated struct MarkdownDocument: Sendable {
                         lines: [text]
                     )
                 }
+                recordSourceLine(for: codeComp.identity, position: sourcePos)
                 continue
             }
 
@@ -311,6 +408,7 @@ nonisolated struct MarkdownDocument: Sendable {
                         ),
                     ])
                 }
+                recordSourceLine(for: outerList.identity, position: sourcePos)
                 continue
             }
 
@@ -324,6 +422,7 @@ nonisolated struct MarkdownDocument: Sendable {
                     flushActive()
                     active = .heading(id: headComp.identity, level: level, text: slice)
                 }
+                recordSourceLine(for: headComp.identity, position: sourcePos)
                 continue
             }
 
@@ -336,12 +435,13 @@ nonisolated struct MarkdownDocument: Sendable {
                     flushActive()
                     active = .paragraph(id: paraComp.identity, text: slice)
                 }
+                recordSourceLine(for: paraComp.identity, position: sourcePos)
                 continue
             }
         }
 
         flushActive()
-        return output
+        return (output, lineRanges)
     }
 
     private static func trimmedAttributed(_ text: AttributedString) -> AttributedString {

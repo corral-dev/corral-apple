@@ -207,6 +207,8 @@ nonisolated struct HostCapabilities: Codable, Sendable, Equatable {
     var projectShell: Bool = false
     /// Host exports a share-format JSON payload for a session (`session.export`).
     var sessionExport: Bool = false
+    /// Host accepts arbitrary pasted files via `input.file`.
+    var inputFile: Bool = false
 
     static let empty = HostCapabilities(commandReceipts: false, toolDetail: false)
 
@@ -225,6 +227,7 @@ nonisolated struct HostCapabilities: Codable, Sendable, Equatable {
         case userPrompts = "user_prompts"
         case projectShell = "project_shell"
         case sessionExport = "session_export"
+        case inputFile = "input_file"
     }
 
     init(commandReceipts: Bool, toolDetail: Bool = false, sessionRestart: Bool = false) {
@@ -247,6 +250,7 @@ nonisolated struct HostCapabilities: Codable, Sendable, Equatable {
         userPrompts = (try? container.decode(Bool.self, forKey: .userPrompts)) ?? features.contains("user_prompts")
         projectShell = (try? container.decode(Bool.self, forKey: .projectShell)) ?? features.contains("project_shell")
         sessionExport = (try? container.decode(Bool.self, forKey: .sessionExport)) ?? features.contains("session_export")
+        inputFile = (try? container.decode(Bool.self, forKey: .inputFile)) ?? features.contains("input_file")
         if container.contains(.commandReceipts) {
             if let flag = try? container.decode(Bool.self, forKey: .commandReceipts) {
                 commandReceipts = flag
@@ -285,6 +289,7 @@ nonisolated struct HostCapabilities: Codable, Sendable, Equatable {
         try container.encode(userPrompts, forKey: .userPrompts)
         try container.encode(projectShell, forKey: .projectShell)
         try container.encode(sessionExport, forKey: .sessionExport)
+        try container.encode(inputFile, forKey: .inputFile)
     }
 }
 

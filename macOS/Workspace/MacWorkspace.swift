@@ -12,10 +12,7 @@ import SwiftUI
 final class MacWorkspace {
     /// Presentation only, used to size a new project terminal at its current font.
     var interfaceScale: CGFloat = 1
-    enum PaneMode: String {
-        case chat
-        case terminal
-    }
+    typealias PaneMode = MacSessionPresentationPreferences.Mode
 
     static let maxPanes = 4
 
@@ -80,13 +77,25 @@ final class MacWorkspace {
     private(set) var layout: DesktopLayout = .empty
     /// A failed action's message for the window alert.
     var actionError: String?
-    /// Transient feedback while exporting a session's share JSON to the pasteboard.
-    enum ExportFeedback: Equatable {
+    /// Transient feedback for long-running or clipboard/lifecycle actions.
+    enum TransientFeedback: Equatable {
         case exporting(String)
         case copied(String)
+        case stopping(String)
+        case stopped(String)
+        case stoppingBatch(Int)
+        case stoppedBatch(Int)
+
+        var isBusy: Bool {
+            switch self {
+            case .exporting, .stopping, .stoppingBatch: true
+            case .copied, .stopped, .stoppedBatch: false
+            }
+        }
     }
-    private(set) var exportFeedback: ExportFeedback?
-    @ObservationIgnored private var exportFeedbackTask: Task<Void, Never>?
+    private(set) var transientFeedback: TransientFeedback?
+    private(set) var stoppingKeys: Set<String> = []
+    @ObservationIgnored private var transientFeedbackTask: Task<Void, Never>?
     /// Sessions awaiting confirmation before permanent deletion, shared across sidebar and panes.
     var pendingDeleteTargets: [SessionSummary] = []
     let batch = MacSessionBatch()
@@ -98,12 +107,6 @@ final class MacWorkspace {
     /// hold the caret, and a serial bumped on every request.
     private(set) var keyFocusTarget: String?
     private(set) var keyFocusSerial = 0
-    /// A person's open/closed choice for a session's prompts card, keyed by
-    /// the host-qualified canonical session (see `promptsCardKey`). A missing
-    /// entry means the pane default. The choice belongs to the session, never
-    /// to a pane or the window: one card's collapse never changes another.
-    private(set) var promptsCardOpen: [String: Bool] =
-        (UserDefaults.standard.dictionary(forKey: MacWorkspace.promptsCardOpenKey) as? [String: Bool]) ?? [:]
     /// Prompts card → scroll that pane's conversation to a prompt.
     private(set) var scrollRequests: [String: ChatScrollRequest] = [:]
     /// Prompts card's last row → return that pane to the latest position.
@@ -122,37 +125,21 @@ final class MacWorkspace {
     @ObservationIgnored private var layoutClient: RemoteClient?
     @ObservationIgnored private var readyHandlerID: UUID?
     @ObservationIgnored private var pressureHandler: UUID?
-    @ObservationIgnored weak var feed: HostSessionFeed?
+    @ObservationIgnored weak var feed: HostSessionFeed? {
+        didSet {
+            guard let feed, feed !== oldValue else { return }
+            reconcilePresentationAliases()
+        }
+    }
+    static let newSessionModeKey = MacSessionPresentationPreferences.newSessionModeKey
+    private let sessionPresentation: MacSessionPresentationPreferences
 
-    private static let modesKey = "corral.mac.paneModes"
-    private static let promptsCardOpenKey = "corral.mac.promptsCardOpen"
-    private static let promptsCardOrderKey = "corral.mac.promptsCardOpenOrder"
-    /// Settings: the view a session created by this client opens in.
-    static let newSessionModeKey = "corral.mac.newSessionMode"
-    @ObservationIgnored private var modes: [String: String] = UserDefaults.standard.dictionary(forKey: MacWorkspace.modesKey) as? [String: String] ?? [:]
-    private static let modeOrderKey = "corral.mac.paneModesOrder"
-    /// Stored mode keys, least recently chosen first (pruning order).
-    @ObservationIgnored private var modeOrder: [String] = UserDefaults.standard.stringArray(forKey: MacWorkspace.modeOrderKey) ?? []
-    /// Stored prompts-card keys, least recently chosen first (pruning order).
-    @ObservationIgnored private var promptsCardOrder: [String] =
-        UserDefaults.standard.stringArray(forKey: MacWorkspace.promptsCardOrderKey) ?? []
-    #if DEBUG
-    /// Debug and Release share one defaults domain: an inspection launch may
-    /// switch modes or cards on screen but must never rewrite the person's
-    /// choices.
-    private static let persistsSessionChoices = !ProcessInfo.processInfo.arguments.contains { $0.hasPrefix("-CorralInspect") }
-        && !ProcessInfo.processInfo.environment.keys.contains { $0.hasPrefix("CORRAL_INSPECTION_") }
-    #else
-    private static let persistsSessionChoices = true
-    #endif
-    /// Observed per session: one pane's chat/terminal switch must not
-    /// re-render every visible and retained pane (each is its own hosting
-    /// view, so a shared dictionary cost one transaction per pane).
-    @ObservationIgnored private var modeSignals: [String: ModeSignal] = [:]
+    init(sessionPresentation: MacSessionPresentationPreferences = MacSessionPresentationPreferences()) {
+        self.sessionPresentation = sessionPresentation
+    }
 
-    @Observable
-    final class ModeSignal {
-        fileprivate(set) var revision = 0
+    private func reconcilePresentationAliases() {
+        sessionPresentation.reconcileAliases(host: hostID, resolve: canonicalPaneKey)
     }
 
     func attach(appModel: AppModel) {
@@ -167,7 +154,9 @@ final class MacWorkspace {
     /// System memory pressure releases warm panes; the open pane keeps its
     /// subscription, drafts, reading position, selection and terminal state.
     private func releaseRebuildableResources() {
+        paneSurfaces.releaseDetachedTextViews()
         paneSurfaces.evictDormant(visible: Set(paneKeys))
+        terminals.releaseHiddenRenderers()
     }
 
     /// Reset host-owned state before showing another machine's cached list.
@@ -191,177 +180,54 @@ final class MacWorkspace {
         terminalLatestRequests = [:]
         paneFrames = [:]
         actionError = nil
-        exportFeedbackTask?.cancel()
-        exportFeedbackTask = nil
-        exportFeedback = nil
+        transientFeedbackTask?.cancel()
+        transientFeedbackTask = nil
+        transientFeedback = nil
+        stoppingKeys = []
         pendingDeleteTargets = []
         batchError = nil
         feed = nil
         shells.reset()
         pendingTerminalClose = nil
-        // Drop the previous host's mode signals; the persisted modes table is
-        // pruned lazily on write, signals are cheap to rebuild.
-        modeSignals = modeSignals.filter { $0.key.hasPrefix("\(id ?? ""):") }
+        sessionPresentation.discardEmptyEntries()
     }
 
-    // MARK: - Your prompts card open/closed (per session, remembered)
+    // MARK: - Session presentation
 
-    /// The prompts card's choice key: host-qualified and canonical, so a
-    /// promoted provisional key and a machine switch keep the same session's
-    /// own choice.
-    private func promptsCardKey(_ key: String) -> String {
-        "\(hostID ?? ""):\(feed?.listStore.resolvedKey(key) ?? key)"
-    }
-
-    /// This session's own open/closed choice, or nil before the person makes
-    /// one; without a choice the pane applies its default.
     func promptsCardChoice(for key: String) -> Bool? {
-        promptsCardOpen[promptsCardKey(key)]
+        sessionPresentation.promptsOpen(for: canonicalPaneKey(key), host: hostID)
     }
 
-    /// Record one session's own choice. Only that session's entry changes:
-    /// another pane's card and its remembered choice stay untouched.
     func setPromptsCardOpen(_ open: Bool, for key: String) {
-        let storageKey = promptsCardKey(key)
-        guard promptsCardOpen[storageKey] != open else { return }
-        promptsCardOpen[storageKey] = open
-        touchPromptsCardOrder(storageKey)
-        prunePromptsCardChoicesIfNeeded()
-        persistPromptsCardChoices()
-    }
-
-    private func touchPromptsCardOrder(_ storageKey: String) {
-        promptsCardOrder.removeAll { $0 == storageKey }
-        promptsCardOrder.append(storageKey)
-    }
-
-    private func persistPromptsCardChoices() {
-        guard Self.persistsSessionChoices else { return }
-        UserDefaults.standard.set(promptsCardOpen, forKey: Self.promptsCardOpenKey)
-        UserDefaults.standard.set(promptsCardOrder, forKey: Self.promptsCardOrderKey)
-    }
-
-    private func prunePromptsCardChoicesIfNeeded(limit: Int = 500) {
-        pruneChoices(&promptsCardOpen, order: &promptsCardOrder,
-                     hostPrefix: "\(hostID ?? ""):", limit: limit)
+        sessionPresentation.setPromptsOpen(open, for: canonicalPaneKey(key), host: hostID)
     }
 
     #if DEBUG
-    /// Inspection probes read and restore the whole table; production code
-    /// changes only one session's choice through `setPromptsCardOpen`.
-    func promptsCardChoicesSnapshot() -> [String: Bool] { promptsCardOpen }
-    func restorePromptsCardChoices(_ snapshot: [String: Bool]) { promptsCardOpen = snapshot }
+    func promptsCardChoicesSnapshot() -> [String: Bool] { sessionPresentation.promptsSnapshot() }
+    func restorePromptsCardChoices(_ snapshot: [String: Bool]) { sessionPresentation.restorePrompts(snapshot) }
     #endif
-
-    // MARK: - Chat / terminal per session (chat by default, remembered)
-
-    /// Keyed by the canonical session key, so a pane still holding the
-    /// provisional key of a new session reads the same choice.
-    private func modeKey(_ key: String) -> String {
-        "\(hostID ?? ""):\(feed?.listStore.resolvedKey(key) ?? key)"
-    }
 
     func mode(for key: String) -> PaneMode {
         if ProjectShell.isShellKey(key) { return .terminal }
-        let storageKey = modeKey(key)
-        // Establish observation on the first read, including a remembered
-        // Terminal choice. Creating the signal only in setMode leaves that
-        // first toggle unobserved until an unrelated view update arrives.
-        _ = modeSignal(storageKey).revision
-        return modes[storageKey].flatMap(PaneMode.init(rawValue:)) ?? .chat
+        return sessionPresentation.mode(for: canonicalPaneKey(key), host: hostID) ?? .chat
     }
 
     func setMode(_ mode: PaneMode, for key: String) {
-        let storageKey = modeKey(key)
-        guard modes[storageKey] != mode.rawValue else { return }
-        modes[storageKey] = mode.rawValue
-        touchModeOrder(storageKey)
-        modeSignal(storageKey).revision &+= 1
-        pruneModesIfNeeded()
-        persistModes()
+        sessionPresentation.setMode(mode, for: canonicalPaneKey(key), host: hostID)
     }
 
-    private func touchModeOrder(_ storageKey: String, replacing old: String? = nil) {
-        modeOrder.removeAll { $0 == storageKey || $0 == old }
-        modeOrder.append(storageKey)
-    }
-
-    private func persistModes() {
-        guard Self.persistsSessionChoices else { return }
-        UserDefaults.standard.set(modes, forKey: Self.modesKey)
-        UserDefaults.standard.set(modeOrder, forKey: Self.modeOrderKey)
-    }
-
-    /// Cap a host-qualified choice table so it cannot grow without bound
-    /// across machines and history. Other hosts' entries evict first, then
-    /// the least recently chosen; entries stored before the order was
-    /// recorded count as the oldest. Returns the removed keys.
-    @discardableResult
-    private func pruneChoices<Value>(_ table: inout [String: Value], order: inout [String],
-                                     hostPrefix: String, limit: Int) -> [String] {
-        guard table.count > limit else { return [] }
-        let ordered = Set(order)
-        let oldestFirst = table.keys.filter { !ordered.contains($0) }.sorted()
-            + order.filter { table[$0] != nil }
-        let victims = Array((oldestFirst.filter { !$0.hasPrefix(hostPrefix) }
-            + oldestFirst.filter { $0.hasPrefix(hostPrefix) }).prefix(table.count - limit))
-        for key in victims { table.removeValue(forKey: key) }
-        order.removeAll { table[$0] == nil }
-        return victims
-    }
-
-    /// Modes are keyed by host+session and would otherwise grow without bound
-    /// across machines and history. Cap the table; eviction only forgets a
-    /// remembered chat/terminal choice (the next open falls back to the Settings
-    /// preference, Chat when unset), other hosts' and then the least recently
-    /// chosen first. Entries stored before the order was recorded count as the
-    /// oldest.
-    private func pruneModesIfNeeded(limit: Int = 500) {
-        let victims = pruneChoices(&modes, order: &modeOrder,
-                                   hostPrefix: "\(hostID ?? ""):", limit: limit)
-        for key in victims { modeSignals.removeValue(forKey: key) }
-    }
-
-    private func modeSignal(_ storageKey: String) -> ModeSignal {
-        if let signal = modeSignals[storageKey] { return signal }
-        let signal = ModeSignal()
-        modeSignals[storageKey] = signal
-        return signal
-    }
-
-    /// A new session's provisional key becomes canonical after its first
-    /// prompt; its chosen view, prompts-card choice and open terminal must
-    /// survive the rename.
+    /// The host can report promotion for a session that is not in a pane.
     func sessionMigrated(from oldKey: String, to newKey: String) {
-        carryMode(from: oldKey, to: newKey)
-        carryPromptsCardChoice(from: oldKey, to: newKey)
+        sessionPresentation.promote(oldKey, to: canonicalPaneKey(newKey), host: hostID)
         terminals.migrate(from: oldKey, to: newKey)
         canonicalizePaneKeys()
     }
 
-    /// Move a session's own card choice to its canonical key. The pane rename
-    /// also does this; the list migration covers sessions not shown in a pane.
-    private func carryPromptsCardChoice(from oldKey: String, to newKey: String) {
-        let old = "\(hostID ?? ""):\(oldKey)"
-        let new = "\(hostID ?? ""):\(newKey)"
-        guard old != new, let open = promptsCardOpen.removeValue(forKey: old) else { return }
-        if promptsCardOpen[new] == nil {
-            promptsCardOpen[new] = open
-            touchPromptsCardOrder(new)
-        }
-        promptsCardOrder.removeAll { $0 == old }
-        persistPromptsCardChoices()
-    }
-
-    /// Pane identity is the canonical session key (design: One pane per
-    /// session across key migration). Shell keys have no aliases.
+    /// Pane identity is the canonical session key. Shell keys have no aliases.
     func canonicalPaneKey(_ key: String) -> String {
         ProjectShell.isShellKey(key) ? key : feed?.listStore.resolvedKey(key) ?? key
     }
 
-    /// Rename panes still holding a promoted provisional key. Aliases also
-    /// arrive with list replies and the cached list, not only as migration
-    /// events, so list changes and every navigation entry call this too.
     func canonicalizePaneKeys() {
         for key in paneKeys {
             let canonical = canonicalPaneKey(key)
@@ -369,46 +235,20 @@ final class MacWorkspace {
         }
     }
 
-    private func carryMode(from oldKey: String, to newKey: String) {
-        let old = "\(hostID ?? ""):\(oldKey)"
-        guard let stored = modes.removeValue(forKey: old) else { return }
-        let new = modeKey(newKey)
-        if modes[new] == nil {
-            modes[new] = stored
-            touchModeOrder(new, replacing: old)
-        } else {
-            modeOrder.removeAll { $0 == old }
-        }
-        modeSignal(old).revision &+= 1
-        modeSignal(new).revision &+= 1
-        persistModes()
-    }
-
-    /// The view a session opens in before the person has chosen one for it:
-    /// the Settings preference, Chat when it was never set.
-    private var preferredNewSessionMode: PaneMode {
-        UserDefaults.standard.string(forKey: Self.newSessionModeKey)
-            .flatMap(PaneMode.init(rawValue:)) ?? .chat
-    }
-
-    /// A session created here always starts in the preferred view.
     private func applyNewSessionMode(to key: String) {
-        let preferred = preferredNewSessionMode
+        let preferred = sessionPresentation.defaultMode
         if preferred != .chat { setMode(preferred, for: key) }
     }
 
-    /// A session this client did not create (TUI, phone, the agent's own
-    /// terminal) arrives with no remembered view, so its first deliberate open
-    /// follows the same preference. A header switch is remembered and wins from
-    /// then on. A session still running in another terminal window can only show
-    /// the terminal view's "running elsewhere" note, so it keeps the chat
-    /// preview rather than opening into a dead end.
+    /// Deliberate first opens may adopt the local preference. Browsing and
+    /// launch restoration never adopt it; a session running elsewhere
+    /// initially stays in Chat so the preview is usable.
     private func adoptPreferredModeIfUnset(for key: String, sessions: [SessionSummary] = []) {
-        guard !ProjectShell.isShellKey(key), modes[modeKey(key)] == nil else { return }
+        guard !ProjectShell.isShellKey(key),
+              sessionPresentation.mode(for: canonicalPaneKey(key), host: hostID) == nil else { return }
         let session = sessions.first { $0.key == key } ?? feed?.listStore.session(for: key)
         if let session, session.live, !session.hosted { return }
-        let preferred = preferredNewSessionMode
-        if preferred != .chat { setMode(preferred, for: key) }
+        applyNewSessionMode(to: key)
     }
 
     func toggleModeOfFocusedPane() {
@@ -536,6 +376,7 @@ final class MacWorkspace {
     /// The host's groups may have changed in the TUI meanwhile; a restored
     /// split must not overwrite them. The next pane change syncs as usual.
     func restorePanes(_ keys: [String]) {
+        reconcilePresentationAliases()
         let agentProject = keys.lazy
             .filter { !ProjectShell.isShellKey($0) }
             .compactMap { self.feed?.listStore.session(for: $0)?.cwd }
@@ -1011,6 +852,7 @@ final class MacWorkspace {
     /// Follow a promoted session key: history, reading position, search
     /// selection and the pane itself (its slot, focus and native host).
     func replaceKey(_ old: String, with new: String) {
+        sessionPresentation.promote(old, to: new, host: hostID)
         navigation.host.history.replace(old, with: new)
         if let position = navigation.host.reading.removeValue(forKey: old) {
             navigation.host.reading[new] = position
@@ -1027,7 +869,6 @@ final class MacWorkspace {
                 paneSurfaces.rename(old, to: new)
             }
             pendingEntrances.remove(old)
-            carryPromptsCardChoice(from: old, to: new)
             paneFrames[old] = nil
             if keyFocusTarget == old { keyFocusTarget = new }
         }
@@ -1208,10 +1049,25 @@ final class MacWorkspace {
             throw MacSessionBatch.Failure(message: failure ?? String(localized: "error.not_connected"))
         }
         if action == .delete {
+            let canonicalKey = canonicalPaneKey(key)
             navigation.host.history.remove(key)
             navigation.host.reading[key] = nil
+            if canonicalKey != key {
+                navigation.host.history.remove(canonicalKey)
+                navigation.host.reading[canonicalKey] = nil
+            }
             feed?.listStore.removeSession(key: key)
+            if canonicalKey != key {
+                feed?.listStore.removeSession(key: canonicalKey)
+            }
             closePane(key)
+            terminals.close(key)
+            paneSurfaces.evict(key)
+            if canonicalKey != key {
+                closePane(canonicalKey)
+                terminals.close(canonicalKey)
+                paneSurfaces.evict(canonicalKey)
+            }
         }
     }
 
@@ -1239,23 +1095,63 @@ final class MacWorkspace {
         restarts.finish(key, succeeded: result != nil)
     }
 
+    func isStopping(_ key: String) -> Bool {
+        let resolved = canonicalPaneKey(key)
+        return stoppingKeys.contains(key) || stoppingKeys.contains(resolved)
+    }
+
+    #if DEBUG
+    func setInspectionTransientFeedback(_ feedback: TransientFeedback?) {
+        transientFeedbackTask?.cancel()
+        transientFeedbackTask = nil
+        transientFeedback = feedback
+    }
+    #endif
+
+    private func showTransientFeedback(_ feedback: TransientFeedback, dismissAfter: Duration? = .seconds(2.2)) {
+        transientFeedbackTask?.cancel()
+        transientFeedbackTask = nil
+        transientFeedback = feedback
+        guard let dismissAfter else { return }
+        transientFeedbackTask = Task { [weak self] in
+            try? await Task.sleep(for: dismissAfter)
+            guard !Task.isCancelled else { return }
+            self?.transientFeedback = nil
+        }
+    }
+
     func stop(_ key: String) async {
-        await call(WireProtocol.mSessionStop, ["key": key, "confirm": true])
+        let resolvedKey = canonicalPaneKey(key)
+        guard !isStopping(resolvedKey) else { return }
+        stoppingKeys.insert(resolvedKey)
+        defer { stoppingKeys.remove(resolvedKey) }
+        showTransientFeedback(.stopping(resolvedKey), dismissAfter: nil)
+        let host = hostID
+        let result = await call(WireProtocol.mSessionStop, ["key": key, "confirm": true])
+        guard hostID == host else {
+            if transientFeedback == .stopping(resolvedKey) { transientFeedback = nil }
+            return
+        }
+        guard result != nil else {
+            if transientFeedback == .stopping(resolvedKey) { transientFeedback = nil }
+            return
+        }
+        await feed?.refresh(showLoading: false)
+        showTransientFeedback(.stopped(resolvedKey))
     }
 
     func exportSession(_ key: String) async {
         let resolvedKey = canonicalPaneKey(key)
         guard !ProjectShell.isShellKey(resolvedKey), !PendingPane.isPending(resolvedKey) else { return }
-        exportFeedbackTask?.cancel()
-        exportFeedback = .exporting(resolvedKey)
+        showTransientFeedback(.exporting(resolvedKey), dismissAfter: nil)
         let host = hostID
         let payload = await call(WireProtocol.mSessionExport, ["key": resolvedKey], refreshLayout: false)
         guard hostID == host, !Task.isCancelled else {
-            if exportFeedback == .exporting(resolvedKey) { exportFeedback = nil }
+            if transientFeedback == .exporting(resolvedKey) { transientFeedback = nil }
             return
         }
         guard let dict = payload as? [String: Any], let json = dict["json"] as? String else {
-            if exportFeedback == .exporting(resolvedKey) { exportFeedback = nil }
+            if transientFeedback == .exporting(resolvedKey) { transientFeedback = nil }
             if payload != nil {
                 actionError = String(localized: "error.unknown")
             }
@@ -1263,12 +1159,7 @@ final class MacWorkspace {
         }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(json, forType: .string)
-        exportFeedback = .copied(resolvedKey)
-        exportFeedbackTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(2.2))
-            guard !Task.isCancelled else { return }
-            self?.exportFeedback = nil
-        }
+        showTransientFeedback(.copied(resolvedKey))
     }
 
     func requestDelete(_ targets: [SessionSummary]) {
@@ -1283,12 +1174,23 @@ final class MacWorkspace {
     ) {
         guard let client = appModel?.client, let host = hostID, !batch.isRunning, !targets.isEmpty else { return }
         Task {
+            if action == .stop {
+                showTransientFeedback(.stoppingBatch(targets.count), dismissAfter: nil)
+            }
             let result = await batch.run(keys: targets.map(\.key), isCurrent: {
                 self.hostID == host && self.appModel?.client === client
             }) { key in
                 try await self.applySessionAction(action, key: key)
             }
             guard self.hostID == host else { return }
+            if action == .stop {
+                await feed?.refresh(showLoading: false)
+                if result.failures.isEmpty, !result.succeeded.isEmpty {
+                    showTransientFeedback(.stoppedBatch(result.succeeded.count))
+                } else if transientFeedback == .stoppingBatch(targets.count) {
+                    transientFeedback = nil
+                }
+            }
             if !result.failures.isEmpty {
                 let names = Dictionary(targets.map { ($0.key, labelForKey($0.key)) },
                                        uniquingKeysWith: { first, _ in first })

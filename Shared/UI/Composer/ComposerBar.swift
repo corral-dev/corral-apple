@@ -14,10 +14,23 @@ struct DraftImageAttachment: Identifiable, Equatable {
     }
 }
 
+struct DraftFileAttachment: Identifiable, Equatable {
+    let id: UUID
+    let name: String
+    let data: Data
+    var commandID: String? = nil
+
+    var formattedSize: String {
+        ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file)
+    }
+}
+
 struct ComposerBar: View {
     @Environment(\.interfaceScale) private var interfaceScale
+    @Environment(\.sessionTextScale) private var sessionTextScale
     @Binding var text: String
     @Binding var attachments: [DraftImageAttachment]
+    @Binding var fileAttachments: [DraftFileAttachment]
     var isBusy = false
     /// When true, focus the field once after appear (new-session path only).
     var autoFocus = false
@@ -37,30 +50,38 @@ struct ComposerBar: View {
     /// Isolated native-editing regression trigger; never exposed by production UI.
     var inspectionSubmitRequest = 0
     #endif
-    var onSend: (_ text: String, _ images: [DraftImageAttachment]) -> Void
+    var onSend: (_ text: String, _ images: [DraftImageAttachment], _ files: [DraftFileAttachment]) -> Void
 
     @FocusState private var focused: Bool
-    #if os(macOS)
-    @State private var showImageImporter = false
-    #endif
+    @State private var showFileImporter = false
     @State private var didAutoFocus = false
+    @State private var macFocusTrigger = 0
     @State private var recall = ComposerHistory()
     @State private var quickLookURL: URL?
     @State private var openingImageID: UUID?
     @State private var previewFailed = false
+    @State private var attachmentError: String?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.composerRecedes) private var recedes
 
     private static let maxAttachments = ComposerSendPolicy.maxAttachments
+    private static let maxImageBytes = 8 * 1024 * 1024
+    private static let standardRasterExtensions: Set<String> = [
+        "jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "bmp", "tif", "tiff"
+    ]
     private static let sendVisual: CGFloat = 32
     private var cardShape: RoundedRectangle {
         RoundedRectangle(cornerRadius: Radius.composer * interfaceScale, style: .continuous)
     }
 
+    private var totalAttachmentCount: Int {
+        attachments.count + fileAttachments.count
+    }
+
     private var canSend: Bool {
         ComposerSendPolicy.canSend(
             text: text,
-            attachmentCount: attachments.count,
+            attachmentCount: totalAttachmentCount,
             isBusy: isBusy
         )
     }
@@ -68,14 +89,14 @@ struct ComposerBar: View {
     private var showsStop: Bool {
         onStop != nil && ComposerSendPolicy.showsStop(
             text: text,
-            attachmentCount: attachments.count,
+            attachmentCount: totalAttachmentCount,
             isRunning: true
         )
     }
 
     private var canAttachMore: Bool {
         ComposerSendPolicy.canStartAction(isBusy: isBusy)
-            && attachments.count < Self.maxAttachments
+            && totalAttachmentCount < Self.maxAttachments
     }
 
     var body: some View {
@@ -86,13 +107,17 @@ struct ComposerBar: View {
             .interfacePadding(.horizontal, Space.base)
             .interfacePadding(.top, Space.sm)
             .interfacePadding(.bottom, Space.sm)
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: attachments.count)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: totalAttachmentCount)
             .task(id: autoFocus) {
                 guard autoFocus, !didAutoFocus else { return }
                 // Focus belongs to this mounted composer, not a delayed window task.
                 await Task.yield()
                 guard !Task.isCancelled else { return }
+                #if os(macOS)
+                macFocusTrigger &+= 1
+                #else
                 focused = true
+                #endif
                 didAutoFocus = true
             }
             // Also runs on mount, so a pane selected before its composer
@@ -101,14 +126,28 @@ struct ComposerBar: View {
                 guard focusRequest != 0 else { return }
                 await Task.yield()
                 guard !Task.isCancelled else { return }
+                #if os(macOS)
+                macFocusTrigger &+= 1
+                #else
                 focused = true
+                #endif
             }
+            #if !os(macOS)
             .onChange(of: focused) { _, isFocused in onFocusChange?(isFocused) }
+            #endif
             .quickLookPreview($quickLookURL)
             .onChange(of: quickLookURL) { oldURL, newURL in
                 if let oldURL, oldURL != newURL {
                     DraftImagePreview.remove(oldURL)
                 }
+            }
+            .fileImporter(
+                isPresented: $showFileImporter,
+                allowedContentTypes: [.item],
+                allowsMultipleSelection: true
+            ) { result in
+                guard case .success(let urls) = result else { return }
+                addFileURLs(urls)
             }
             .alert("composer.preview_failed", isPresented: $previewFailed) {
                 Button("action.ok", role: .cancel) {}
@@ -127,16 +166,27 @@ struct ComposerBar: View {
             #endif
             .task {
                 let arguments = ProcessInfo.processInfo.arguments
-                guard arguments.contains("-CorralInspectDraftImage"), attachments.isEmpty,
-                      let fixture = DraftImageInspection.attachment() else { return }
-                // Local fixture only; the production preview handler never sends.
-                attachments = [fixture]
-                text = "Draft preserved"
-                if arguments.contains("-CorralInspectDraftImageOpen") {
-                    try? await Task.sleep(for: .milliseconds(600))
-                    guard !Task.isCancelled else { return }
-                    openImagePreview(fixture)
+                let inspectImage = arguments.contains("-CorralInspectDraftImage")
+                let inspectFile = arguments.contains("-CorralInspectDraftFile")
+                guard inspectImage || inspectFile else { return }
+                if attachments.isEmpty, let fixture = DraftImageInspection.attachment() {
+                    attachments = [fixture]
+                    if arguments.contains("-CorralInspectDraftImageOpen") {
+                        try? await Task.sleep(for: .milliseconds(600))
+                        guard !Task.isCancelled else { return }
+                        openImagePreview(fixture)
+                    }
                 }
+                if inspectFile, fileAttachments.isEmpty {
+                    fileAttachments = [
+                        DraftFileAttachment(
+                            id: UUID(),
+                            name: "spec.pdf",
+                            data: Data(repeating: 0x25, count: 14_336)
+                        )
+                    ]
+                }
+                text = ProcessInfo.processInfo.environment["CORRAL_INSPECT_DRAFT_TEXT"] ?? "Draft preserved"
             }
             #endif
     }
@@ -147,19 +197,18 @@ struct ComposerBar: View {
     /// buttons. Tapping anywhere on the card focuses the field.
     private var card: some View {
         VStack(alignment: .leading, spacing: Space.sm * interfaceScale) {
-            if !attachments.isEmpty {
+            if !attachments.isEmpty || !fileAttachments.isEmpty {
                 attachmentStrip
                     .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
             }
 
+            if let attachmentError {
+                Text(verbatim: attachmentError)
+                    .interfaceFont(.caption)
+                    .foregroundStyle(Palette.danger)
+            }
+
             textField
-                .sessionFont(.bubbleBody)
-                .textFieldStyle(.plain)
-                .lineLimit(1 ... 6)
-                .focused($focused)
-                .onSubmit(sendDraft)
-                .onKeyPress(.upArrow, phases: .down) { _ in recallHistory(older: true) }
-                .onKeyPress(.downArrow, phases: .down) { _ in recallHistory(older: false) }
                 .interfaceFrame(maxWidth: .infinity, alignment: .topLeading)
                 .contentShape(Rectangle())
 
@@ -172,30 +221,23 @@ struct ComposerBar: View {
         // Another Mac pane holds the keys: this card steps back until its pane is focused.
         .opacity(recedes ? 0.5 : 1)
         .contentShape(cardShape)
-        .onTapGesture { focused = true }
+        .onTapGesture {
+            #if os(macOS)
+            macFocusTrigger &+= 1
+            #else
+            focused = true
+            #endif
+        }
         .accessibilityIdentifier("composer.surface")
-        // Images dragged in from another app attach like picked ones; on iPad
-        // this is the multitasking drag (owner request 2026-11-01).
-        .dropDestination(for: Data.self) { items, _ in
-            addImageData(items)
-            return !items.isEmpty
+        // Arbitrary files & images dragged in attach like picked ones.
+        .onDrop(of: [.fileURL, .image], isTargeted: nil) { providers in
+            addAttachments(from: providers)
+            return !providers.isEmpty
         }
         #if os(macOS)
         .focusEffectDisabled()
-        .onPasteCommand(of: [.image, .fileURL]) { providers in
-            addImages(from: providers)
-        }
-        .fileImporter(
-            isPresented: $showImageImporter,
-            allowedContentTypes: [.image],
-            allowsMultipleSelection: true
-        ) { result in
-            guard case .success(let urls) = result else { return }
-            addImageData(urls.compactMap { url in
-                let scoped = url.startAccessingSecurityScopedResource()
-                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-                return try? Data(contentsOf: url)
-            })
+        .onPasteCommand(of: [.fileURL, .image]) { providers in
+            addAttachments(from: providers)
         }
         #endif
     }
@@ -203,22 +245,31 @@ struct ComposerBar: View {
     @ViewBuilder
     private var textField: some View {
         #if os(macOS)
-        // Return sends through onSubmit (the field editor finishes any input-method
-        // composition first); Shift-Return inserts a line break at the caret.
-        // Keep selection with the native editor. A SwiftUI TextSelection binding
-        // also observes background message text views on this OS, then applies
-        // their ranges to this field when the conversation refreshes.
-        TextField("composer.placeholder", text: $text, axis: .vertical)
-            .accessibilityIdentifier("composer.input")
-            .background { MacComposerInputAnchor() }
-            .onKeyPress(.return, phases: .down) { press in
-                guard press.modifiers.contains(.shift) else { return .ignored }
-                insertLineBreak()
-                return .handled
-            }
+        MacComposerTextView(
+            text: $text,
+            placeholder: String(localized: "composer.placeholder"),
+            font: Typography.sessionUIFont(.bubbleBody, scale: sessionTextScale * interfaceScale),
+            textColor: .labelColor,
+            accessibilityLabel: String(localized: "composer.placeholder"),
+            focusTrigger: macFocusTrigger,
+            onSubmit: sendDraft,
+            onArrowHistory: { isUp in recallHistory(older: isUp) == .handled },
+            onPasteFileURLs: { urls in addFileURLs(urls) },
+            onPasteImageData: { data in addImageData([data]) },
+            onFocusChange: { isFocused in onFocusChange?(isFocused) }
+        )
+        .accessibilityIdentifier("composer.input")
+        .background { MacComposerInputAnchor() }
         #else
         TextField("composer.placeholder", text: $text, axis: .vertical)
+            .sessionFont(.bubbleBody)
+            .textFieldStyle(.plain)
+            .lineLimit(1 ... 6)
+            .focused($focused)
             .submitLabel(.send)
+            .onSubmit(sendDraft)
+            .onKeyPress(.upArrow, phases: .down) { _ in recallHistory(older: true) }
+            .onKeyPress(.downArrow, phases: .down) { _ in recallHistory(older: false) }
         #endif
     }
 
@@ -226,7 +277,7 @@ struct ComposerBar: View {
     private var attachButton: some View {
         #if os(macOS)
         Button {
-            showImageImporter = true
+            showFileImporter = true
         } label: {
             Image(systemName: "plus")
                 .interfaceFont(.title2.weight(.medium))
@@ -234,15 +285,22 @@ struct ComposerBar: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(PressableButtonStyle())
-        .help(Text("composer.attach_image"))
-        .accessibilityLabel(Text("composer.attach_image"))
+        .help(Text("composer.attach"))
+        .accessibilityLabel(Text("composer.attach"))
         #else
-        ImagePickerButton(isEnabled: canAttachMore) { base64, preview in
-            guard canAttachMore else { return }
-            attachments.append(
-                DraftImageAttachment(id: UUID(), base64: base64, preview: preview)
-            )
-        }
+        ImagePickerButton(
+            isEnabled: canAttachMore,
+            onPicked: { base64, preview in
+                guard canAttachMore else { return }
+                attachmentError = nil
+                attachments.append(
+                    DraftImageAttachment(id: UUID(), base64: base64, preview: preview)
+                )
+            },
+            onChooseFiles: {
+                showFileImporter = true
+            }
+        )
         #endif
     }
 
@@ -309,9 +367,74 @@ struct ComposerBar: View {
                 ForEach(Array(attachments.enumerated()), id: \.element.id) { index, item in
                     attachmentChip(index: index, item: item)
                 }
+                ForEach(Array(fileAttachments.enumerated()), id: \.element.id) { index, item in
+                    fileChip(index: index, item: item)
+                }
             }
         }
         .accessibilityElement(children: .contain)
+    }
+
+    private func fileChip(index: Int, item: DraftFileAttachment) -> some View {
+        ZStack(alignment: .topTrailing) {
+            Button { openFilePreview(item) } label: {
+                HStack(spacing: Space.xs * interfaceScale) {
+                    Image(systemName: draftFileIconName(for: item.name))
+                        .interfaceFont(.title3)
+                        .foregroundStyle(Palette.accent)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(verbatim: item.name)
+                            .interfaceFont(.caption.weight(.medium))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Text(verbatim: item.formattedSize)
+                            .interfaceFont(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .interfacePadding(.horizontal, Space.sm)
+                .interfaceFrame(minWidth: 110, maxWidth: 190, minHeight: 56, maxHeight: 56, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: Radius.md * interfaceScale, style: .continuous)
+                        .fill(Color(.secondarySystemFill))
+                )
+            }
+            .buttonStyle(PressableButtonStyle())
+            .accessibilityLabel(Text(verbatim: item.name))
+            .disabled(openingImageID != nil)
+
+            attachmentRemoveButton(label: "composer.remove_file") {
+                fileAttachments.removeAll { $0.id == item.id }
+            }
+        }
+        .interfacePadding(.top, 10)
+        .interfacePadding(.trailing, 10)
+    }
+
+    private func attachmentRemoveButton(label: LocalizedStringKey, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: "xmark.circle.fill")
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(.white, Color.black.opacity(0.55))
+                .interfaceFont(.body)
+                .interfaceFrame(width: TouchTarget.minimum, height: TouchTarget.minimum)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(PressableButtonStyle())
+        .offset(x: 10, y: -10)
+        .accessibilityLabel(Text(label))
+    }
+
+    private func draftFileIconName(for filename: String) -> String {
+        switch (filename as NSString).pathExtension.lowercased() {
+        case "pdf": return "doc.richtext"
+        case "zip", "tar", "gz", "7z", "rar": return "doc.zipper"
+        case "md", "markdown", "txt", "rtf", "log": return "doc.text"
+        case "json", "yaml", "yml", "toml", "xml", "swift", "py", "ts", "tsx", "js", "rs", "go":
+            return "curlybraces.square"
+        default: return "doc.fill"
+        }
     }
 
     private func attachmentChip(index: Int, item: DraftImageAttachment) -> some View {
@@ -343,19 +466,9 @@ struct ComposerBar: View {
             .accessibilityIdentifier("composer.image.\(index)")
             .disabled(openingImageID != nil)
 
-            Button {
+            attachmentRemoveButton(label: "composer.remove_image") {
                 attachments.removeAll { $0.id == item.id }
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .symbolRenderingMode(.palette)
-                    .foregroundStyle(.white, Color.black.opacity(0.55))
-                    .interfaceFont(.body)
-                    .interfaceFrame(width: TouchTarget.minimum, height: TouchTarget.minimum)
-                    .contentShape(Rectangle())
             }
-            .buttonStyle(PressableButtonStyle())
-            .offset(x: 10, y: -10)
-            .accessibilityLabel(Text("composer.remove_image"))
         }
         .interfaceFrame(width: 64, height: 64)
         .interfacePadding(.top, 10)
@@ -377,7 +490,7 @@ struct ComposerBar: View {
                 return
             }
             if let url {
-                focused = false
+                clearFocus()
                 quickLookURL = url
             } else {
                 previewFailed = true
@@ -385,13 +498,53 @@ struct ComposerBar: View {
         }
     }
 
+    private func openFilePreview(_ item: DraftFileAttachment) {
+        guard openingImageID == nil else { return }
+        openingImageID = item.id
+        Task {
+            let url = await DraftImagePreview.prepareFile(name: item.name, data: item.data)
+            guard openingImageID == item.id else {
+                if let url { DraftImagePreview.remove(url) }
+                return
+            }
+            openingImageID = nil
+            guard fileAttachments.contains(where: { $0.id == item.id }) else {
+                if let url { DraftImagePreview.remove(url) }
+                return
+            }
+            if let url {
+                clearFocus()
+                quickLookURL = url
+            } else {
+                previewFailed = true
+            }
+        }
+    }
+
+    private func requestFocus() {
+        #if os(macOS)
+        macFocusTrigger &+= 1
+        #else
+        focused = true
+        #endif
+    }
+
+    private func clearFocus() {
+        #if os(macOS)
+        NSApp.keyWindow?.makeFirstResponder(nil)
+        #else
+        focused = false
+        #endif
+    }
+
     private func sendDraft() {
         guard ComposerSendPolicy.canSend(
             text: text,
-            attachmentCount: attachments.count,
+            attachmentCount: totalAttachmentCount,
             isBusy: isBusy
         ) else { return }
         let images = attachments
+        let files = fileAttachments
         let payload = text.trimmingCharacters(in: .whitespacesAndNewlines)
         #if os(iOS)
         // Clear through the active native input transaction while retaining
@@ -400,9 +553,11 @@ struct ComposerBar: View {
         #endif
         text = ""
         attachments = []
+        fileAttachments = []
+        attachmentError = nil
         recall.reset()
-        focused = true
-        onSend(payload, images)
+        requestFocus()
+        onSend(payload, images, files)
     }
 
     /// Up / Down step through this session's prompts when the caret sits on the
@@ -468,7 +623,7 @@ struct ComposerBar: View {
         // The selected pane's composer (the one not stepping back) takes it, once.
         guard !Task.isCancelled, !recedes, !Self.didReplayInspectionKeys else { return }
         Self.didReplayInspectionKeys = true
-        focused = true
+        requestFocus()
         for step in script.split(separator: ",").map(String.init) {
             try? await Task.sleep(for: .seconds(3))
             if step.hasPrefix("draft:") {
@@ -491,26 +646,70 @@ struct ComposerBar: View {
         }
     }
     #endif
+    #endif
 
-    private func addImages(from providers: [NSItemProvider]) {
+    private func addAttachments(from providers: [NSItemProvider]) {
         for provider in providers {
-            if provider.canLoadObject(ofClass: NSImage.self) {
+            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    guard let url else { return }
+                    Task { @MainActor in addFileURLs([url]) }
+                }
+            } else if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
                 _ = provider.loadDataRepresentation(for: .image) { data, _ in
                     guard let data else { return }
                     Task { @MainActor in addImageData([data]) }
                 }
-            } else if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
-                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+            } else if provider.hasItemConformingToTypeIdentifier(UTType.item.identifier) {
+                _ = provider.loadFileRepresentation(forTypeIdentifier: UTType.item.identifier) { url, _ in
                     guard let url, let data = try? Data(contentsOf: url) else { return }
-                    Task { @MainActor in addImageData([data]) }
+                    let name = url.lastPathComponent
+                    Task { @MainActor in ingestLoadedFile(name: name, data: data, isExplicitImage: false) }
                 }
             }
         }
     }
 
-    #endif
+    private func addFileURLs(_ urls: [URL]) {
+        attachmentError = nil
+        for url in urls {
+            guard canAttachMore else { break }
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey])
+            if values?.isDirectory == true {
+                attachmentError = String(localized: "composer.folder_unsupported")
+                continue
+            }
+            if let fileSize = values?.fileSize, fileSize > ComposerSendPolicy.maxFileAttachmentBytes {
+                attachmentError = String(localized: "composer.file_too_large")
+                continue
+            }
+            guard let data = try? Data(contentsOf: url), !data.isEmpty else { continue }
+            let isImageType = Self.standardRasterExtensions.contains(url.pathExtension.lowercased())
+            ingestLoadedFile(name: url.lastPathComponent, data: data, isExplicitImage: isImageType)
+        }
+    }
+
+    private func ingestLoadedFile(name: String, data: Data, isExplicitImage: Bool) {
+        guard canAttachMore else { return }
+        if data.count > ComposerSendPolicy.maxFileAttachmentBytes {
+            attachmentError = String(localized: "composer.file_too_large")
+            return
+        }
+        if isExplicitImage, data.count <= Self.maxImageBytes,
+           let encoded = ImageAttachmentEncoder.encode(data) {
+            attachmentError = nil
+            attachments.append(DraftImageAttachment(id: UUID(), base64: encoded.base64, preview: encoded.preview))
+            return
+        }
+        attachmentError = nil
+        let cleanName = ChatFileLink.sanitizedFileName(name, fallback: "attachment")
+        fileAttachments.append(DraftFileAttachment(id: UUID(), name: cleanName, data: data))
+    }
 
     private func addImageData(_ items: [Data]) {
+        attachmentError = nil
         for data in items {
             guard canAttachMore,
                   let encoded = ImageAttachmentEncoder.encode(data) else { continue }

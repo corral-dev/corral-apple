@@ -93,20 +93,97 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
     var onManualScroll: (@MainActor @Sendable () -> Void)?
     private var readScrollMonitor: Any?
     private var frontObservers: [NSObjectProtocol] = []
+    private static let hiddenMetalReleaseDelay: Duration = .seconds(10)
     private var metalEnableAttempted = false
+    private var metalExplicitlyDisabled = false
+    private var metalReleaseTask: Task<Void, Never>?
+    private var lastLayoutGeometry: FitGeometry?
+    private var resizeFitTask: Task<Void, Never>?
+
+    private struct FitGeometry: Equatable {
+        let size: CGSize
+        let interfaceScale: CGFloat
+        let backingScale: CGFloat?
+    }
 
     /// Metal is disabled by default in SwiftTerm 1.99.1 and must be enabled
     /// after the view gains a window (`setUseMetal` throws on no device /
     /// pipeline). Failure keeps the existing CoreGraphics path, so a missing
     /// GPU never breaks the terminal. Called from `viewDidMoveToWindow`.
     private func enableMetalIfNeeded() {
-        guard !metalEnableAttempted, window != nil else { return }
+        metalReleaseTask?.cancel()
+        metalReleaseTask = nil
+        guard !metalExplicitlyDisabled, !metalEnableAttempted, presentationEnabled, window != nil else { return }
+        if terminal.isUsingMetalRenderer {
+            terminal.releaseBackingStoreIfIdle()
+            return
+        }
         metalEnableAttempted = true
         do {
             try terminal.setUseMetal(true)
+            terminal.releaseBackingStoreIfIdle()
         } catch {
             #if DEBUG
             debugTrace("metal enablement fell back to CoreGraphics: \(error)")
+            #endif
+        }
+    }
+
+    private func scheduleHiddenMetalRelease() {
+        guard !isShown, terminal.isUsingMetalRenderer else {
+            metalReleaseTask?.cancel()
+            metalReleaseTask = nil
+            return
+        }
+        guard metalReleaseTask == nil else { return }
+        metalReleaseTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: Self.hiddenMetalReleaseDelay)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            self?.metalReleaseTask = nil
+            self?.releaseMetalRendererIfHidden(retriesRemaining: 2)
+        }
+    }
+
+    /// Drops Metal drawables and glyph atlases for hidden terminals while
+    /// keeping scrollback, selection and the host stream intact.
+    func releaseMetalRendererIfHidden(retriesRemaining: Int = 0) {
+        metalReleaseTask?.cancel()
+        metalReleaseTask = nil
+        guard !isShown, terminal.isUsingMetalRenderer else { return }
+        if terminal.window?.inLiveResize == true, retriesRemaining > 0 {
+            metalReleaseTask = Task { @MainActor [weak self] in
+                do {
+                    try await Task.sleep(for: .seconds(1))
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                self?.releaseMetalRendererIfHidden(retriesRemaining: retriesRemaining - 1)
+            }
+            return
+        }
+        do {
+            try terminal.setUseMetal(false)
+            metalEnableAttempted = false
+            terminal.releaseBackingStoreIfIdle()
+        } catch {
+            if retriesRemaining > 0 {
+                metalReleaseTask = Task { @MainActor [weak self] in
+                    do {
+                        try await Task.sleep(for: .seconds(1))
+                    } catch {
+                        return
+                    }
+                    guard !Task.isCancelled else { return }
+                    self?.releaseMetalRendererIfHidden(retriesRemaining: retriesRemaining - 1)
+                }
+            }
+            #if DEBUG
+            debugTrace("metal release deferred: \(error)")
             #endif
         }
     }
@@ -188,6 +265,7 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
     /// A new stream keeps the current screen on display until its snapshot;
     /// it needs this view's fit to attach, so the fit is reported again.
     func bind(_ stream: RemoteTerminalStream) {
+        resetResizeFit()
         self.stream?.sink = nil
         self.stream = stream
         lastReportedFit = nil
@@ -279,8 +357,24 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
     var inspectionDiagnostics: SwiftTerm.TerminalView.Diagnostics { terminal.diagnostics }
     func inspectionResetDiagnostics() { terminal.resetDiagnostics() }
     func inspectionUseMetal(_ enabled: Bool) throws {
-        guard terminal.isUsingMetalRenderer != enabled else { return }
+        metalExplicitlyDisabled = !enabled
+        if enabled {
+            metalEnableAttempted = true
+        } else {
+            metalReleaseTask?.cancel()
+            metalReleaseTask = nil
+            metalEnableAttempted = false
+        }
+        guard terminal.isUsingMetalRenderer != enabled else {
+            terminal.releaseBackingStoreIfIdle()
+            return
+        }
         try terminal.setUseMetal(enabled)
+        terminal.releaseBackingStoreIfIdle()
+    }
+
+    func inspectionReleaseHiddenMetalNow() {
+        releaseMetalRendererIfHidden()
     }
     var inspectionMouseMode: String { String(describing: terminal.currentMouseMode) }
     var inspectionCellHeight: CGFloat { cell.height }
@@ -352,6 +446,9 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
     }
     var inspectionScrollPosition: Double { terminal.scrollPosition }
     var inspectionGrid: TerminalGrid? { grid }
+    var inspectionFit: TerminalGrid? { lastReportedFit }
+    private(set) var inspectionFitVotes = 0
+    private(set) var inspectionFontChanges = 0
 
     func inspectionContains(_ text: String) -> Bool {
         inspectionVisibleText.joined().contains(text)
@@ -364,18 +461,29 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
     func setPresented(_ presented: Bool) {
         guard presentationEnabled != presented else { return }
         presentationEnabled = presented
-        isHidden = !presented
         if presented {
+            // Re-enable Metal before clearing `isHidden` so `viewDidUnhide()`
+            // draws the first revealed frame through Metal cleanly.
+            enableMetalIfNeeded()
+            isHidden = false
+            if !terminal.isUsingMetalRenderer {
+                terminal.needsDisplay = true
+            }
             observeReadScrollIfNeeded()
+            needsLayout = true
             if wantsKeyboardFocus { focusTerminal() }
             // Showing a session is using it: the shared grid follows this view.
             if isInFront { stream?.claimSize() }
         } else {
+            resetResizeFit()
+            isHidden = true
             if let window, let responder = window.firstResponder as? NSView,
                responder === terminal || responder.isDescendant(of: terminal) {
                 window.makeFirstResponder(nil)
             }
             removeReadScrollMonitor()
+            terminal.releaseBackingStoreIfIdle()
+            scheduleHiddenMetalRelease()
         }
     }
 
@@ -402,6 +510,9 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
     }
 
     func unbind() {
+        resetResizeFit()
+        metalReleaseTask?.cancel()
+        metalReleaseTask = nil
         frontObservers.forEach(NotificationCenter.default.removeObserver)
         frontObservers = []
         removeReadScrollMonitor()
@@ -431,7 +542,18 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
         removeReadScrollMonitor()
         observeReadScrollIfNeeded()
         observeFront()
-        if window != nil { enableMetalIfNeeded() }
+        if window != nil {
+            if presentationEnabled {
+                enableMetalIfNeeded()
+            } else {
+                terminal.releaseBackingStoreIfIdle()
+                scheduleHiddenMetalRelease()
+            }
+        } else {
+            resetResizeFit()
+            terminal.releaseBackingStoreIfIdle()
+            scheduleHiddenMetalRelease()
+        }
         // The pinned emulator owns its native render loop and visibility pause.
         guard window != nil, wantsKeyboardFocus else { return }
         focusTerminal()
@@ -439,27 +561,66 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
 
     override func layout() {
         super.layout()
-        // Dragging the window edge or a split divider only moves the grid;
-        // fitting, the font and the host size vote wait for the drag to end.
-        if !inLiveResize {
-            let voteChanged = reportFit()
-            // A fresh vote from the front window always wins the shared pane
-            // (most-recently-used), so its snapshot is already on the way:
-            // fitting the still-stale grid now would transiently shrink the
-            // font, then the snapshot grows it back ("shrink then enlarge" on
-            // every window shrink). Crop via placeTerminal until the snapshot
-            // lands instead. A background vote never claims the grid, so it
-            // still fits whatever grid is current.
-            if !(voteChanged && isInFront) {
-                applyFittingFont(refreshing: true)
-            }
-        }
+        updateFitForLayout()
         placeTerminal()
+    }
+
+    override func viewWillStartLiveResize() {
+        super.viewWillStartLiveResize()
+        resetResizeFit()
     }
 
     override func viewDidEndLiveResize() {
         super.viewDidEndLiveResize()
+        resetResizeFit()
         needsLayout = true
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        needsLayout = true
+    }
+
+    private func updateFitForLayout() {
+        guard isShown, bounds.width > 0, bounds.height > 0, !inLiveResize else { return }
+        let geometry = FitGeometry(size: bounds.size, interfaceScale: interfaceScale,
+                                   backingScale: window?.backingScaleFactor)
+        let previous = lastLayoutGeometry
+        guard previous != geometry else { return }
+        lastLayoutGeometry = geometry
+        resizeFitTask?.cancel()
+        resizeFitTask = nil
+        // AppKit's live-resize callbacks cover the window edge, not a divider
+        // in a fixed window. Keep the native grid drawing in the new clip and
+        // coalesce geometry-driven votes and font changes at the pane boundary.
+        if grid != nil, let previous, previous.size != geometry.size {
+            resizeFitTask = Task { @MainActor [weak self] in
+                do { try await Task.sleep(for: .milliseconds(90)) }
+                catch { return }
+                guard let self, !Task.isCancelled else { return }
+                self.resizeFitTask = nil
+                guard self.isShown, !self.inLiveResize else { return }
+                self.fitTerminalToPane()
+                self.placeTerminal()
+            }
+        } else {
+            // The first real frame must vote immediately so the stream can attach.
+            fitTerminalToPane()
+        }
+    }
+
+    private func resetResizeFit() {
+        resizeFitTask?.cancel()
+        resizeFitTask = nil
+        lastLayoutGeometry = nil
+    }
+
+    private func fitTerminalToPane() {
+        let voteChanged = reportFit()
+        // The front viewer's new vote will bring a correctly sized snapshot.
+        // Fitting the old grid here would shrink then grow the font and request
+        // a redundant snapshot. A background viewer fits the current grid.
+        if !(voteChanged && isInFront) { applyFittingFont(refreshing: true) }
     }
 
     // MARK: - Geometry
@@ -502,6 +663,7 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
         guard fit != lastReportedFit else { return false }
         lastReportedFit = fit
         #if DEBUG
+        inspectionFitVotes &+= 1
         if ProcessInfo.processInfo.arguments.contains("-CorralInspectTerminalFit"), fit != lastInspectedFit {
             lastInspectedFit = fit
             debugTrace(String(format: "terminal fit pane %.0fx%.0f, vote %dx%d, row cell %.1f, front %@",
@@ -546,6 +708,9 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
         let size = fittingFontSize(for: grid)
         guard size != fontSize else { return }
         fontSize = size
+        #if DEBUG
+        inspectionFontChanges &+= 1
+        #endif
         terminal.font = TerminalAppearance.font(size: size)
         placeTerminal()
         if refreshing { stream?.refreshSnapshot() }
@@ -588,10 +753,11 @@ final class TerminalHostView: NSView, TerminalStreamSink, TerminalViewDelegate {
         // placeTerminal already re-wraps the emulator at the new grid, so the
         // reader's row is compared against the host grid it was read on.
         let hostGridChanged = self.grid.map { $0 != grid } ?? false
+        let deferFit = self.grid != nil && (inLiveResize || resizeFitTask != nil)
         self.grid = grid
-        applyFittingFont(refreshing: false)
+        if !deferFit { applyFittingFont(refreshing: false) }
         placeTerminal()
-        if !inLiveResize { reportFit() }
+        if !deferFit, !inLiveResize { reportFit() }
         terminal.preservingViewportDuringSnapshot(hostGridChanged: hostGridChanged) {
             if terminal.terminalDimensions.cols != grid.cols || terminal.terminalDimensions.rows != grid.rows {
                 terminal.resize(cols: grid.cols, rows: grid.rows)

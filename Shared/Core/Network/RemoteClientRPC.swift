@@ -47,10 +47,15 @@ import Foundation
             "compression": ["deflate"],
         ]
         let compress = method != WireProtocol.mHello && compressionEnabled
+        let requestParams = WireProtocol.applyingTerminalTheme(
+            terminalThemeProvider?(),
+            to: params,
+            method: method
+        )
         var message = WireMessage.request(
             id: requestID,
             method: method,
-            params: params,
+            params: requestParams,
             caps: caps
         )
         message[WireProtocol.clientInstanceKey] = Self.clientInstanceID
@@ -158,6 +163,7 @@ import Foundation
         hostCapabilities = caps
         supportsMediaImage = WireProtocol.supportsMediaImage(fromHelloPayload: payload)
         supportsMediaFile = WireProtocol.supportsMediaFile(fromHelloPayload: payload)
+        supportsInputFile = WireProtocol.supportsInputFile(fromHelloPayload: payload)
         let bind = WireProtocol.dataBind(fromHelloPayload: payload)
         hostOffersDataPlane = WireProtocol.shouldAttachDataPlane(dataBind: bind)
         if !hasDataPlane, WireProtocol.shouldAttachDataPlane(dataBind: bind), let bind {

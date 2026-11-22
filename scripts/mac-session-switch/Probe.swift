@@ -46,7 +46,7 @@ struct MacPaneView: View {
     var allowsClose = true
     var autoFocusComposer = false
     var retainedStore: ConversationStore? = nil
-    var retainedBodySize: CGSize = .zero
+    var retainedPaneWidth: CGFloat = 0
     var body: some View { Text(session.key) }
 }
 extension EnvironmentValues {

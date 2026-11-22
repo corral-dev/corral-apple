@@ -36,7 +36,12 @@ private struct DraftImageInspectionModifier: ViewModifier {
             NavigationStack {
                 VStack {
                     Spacer()
-                    ComposerBar(text: $draft, attachments: $attachments, onSend: { _, _ in })
+                    ComposerBar(
+                        text: $draft,
+                        attachments: $attachments,
+                        fileAttachments: .constant([]),
+                        onSend: { _, _, _ in }
+                    )
                 }
                 .navigationTitle("Attachment preview inspection")
                 .toolbar {

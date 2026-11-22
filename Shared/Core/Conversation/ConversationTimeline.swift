@@ -102,7 +102,9 @@ enum ConversationMessagePolicy {
                 // A send with only images has no body of its own: the host's
                 // pasted paths (official) or the staged payloads (echo) are it.
                 let carriesImages = !message.localImageData.isEmpty
+                    || !message.localFiles.isEmpty
                     || !HostPasteAttachment.paths(in: text).isEmpty
+                    || !HostPasteAttachment.filePaths(in: text).isEmpty
                 guard !text.isEmpty || carriesImages, !isInjectedUserPrompt(text) else { continue }
                 flushTools()
                 result.append(.message(message))
@@ -222,7 +224,9 @@ nonisolated enum ConversationMessageMerge: Sendable {
             let body = displayBody(message)
             let key = identityKey(role: role, text: body)
             if role == "user" {
-                officialUsers.append((message.seq, key, !HostPasteAttachment.paths(in: message.text).isEmpty))
+                let hasAttachments = !HostPasteAttachment.paths(in: message.text).isEmpty
+                    || !HostPasteAttachment.filePaths(in: message.text).isEmpty
+                officialUsers.append((message.seq, key, hasAttachments))
             } else if !body.isEmpty {
                 officialTextKeys.insert(key)
             }
@@ -234,7 +238,7 @@ nonisolated enum ConversationMessageMerge: Sendable {
             guard message.seq < 0 else { return true }
             let role = normalizedRole(message.role)
             let body = displayBody(message)
-            guard !body.isEmpty || message.hasLocalImages else { return true }
+            guard !body.isEmpty || message.hasLocalAttachments else { return true }
             let key = identityKey(role: role, text: body)
             guard role == "user" else { return !officialTextKeys.contains(key) }
             guard let match = officialUsers.first(where: { official in
@@ -242,8 +246,8 @@ nonisolated enum ConversationMessageMerge: Sendable {
                     && official.key == key
                     && !claimed.contains(official.seq)
                     // An attachment-only echo needs the confirmed turn to carry
-                    // the image; an empty official turn would be a different send.
-                    && (official.hasAttachments || !message.hasLocalImages)
+                    // the image/file; an empty official turn would be a different send.
+                    && (official.hasAttachments || !message.hasLocalAttachments)
             }) else { return true }
             claimed.insert(match.seq)
             return false

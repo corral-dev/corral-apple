@@ -68,9 +68,11 @@ final class ChatImageLoader {
     @MainActor private static let memory: NSCache<NSString, PlatformImage> = {
         let cache = NSCache<NSString, PlatformImage>()
         cache.totalCostLimit = 48 * 1024 * 1024
+        cache.countLimit = 96
         return cache
     }()
     private var inFlight: [String: Task<Outcome, Never>] = [:]
+    private var inFlightRaw: [String: Task<Data?, Never>] = [:]
     private var missing: Set<String> = []
     /// Bumped when an inline image arrives or definitively fails, so the
     /// bubble can replace its placeholder or drop the attachment.
@@ -135,11 +137,22 @@ final class ChatImageLoader {
         return outcome
     }
 
-    /// Full-quality copy written to a temporary file for Quick Look.
+    /// Full-quality copy written to a temporary file for Quick Look without
+    /// decoding a full-resolution bitmap into `Self.memory`.
     func fullImageFile(seq: Int, ref: String, name: String) async -> URL? {
-        guard case .image = await load(seq: seq, ref: ref, tier: .full) else { return nil }
         let key = cacheKey(seq: seq, ref: ref, tier: .full)
-        guard let data = try? Data(contentsOf: diskURL(key)) else { return nil }
+        let data: Data?
+        #if DEBUG
+        if ref.hasPrefix("corral-preview://") {
+            guard case .image = await load(seq: seq, ref: ref, tier: .full) else { return nil }
+            data = try? Data(contentsOf: diskURL(key))
+        } else {
+            data = await fetchRawBytes(seq: seq, ref: ref, tier: .full, key: key)
+        }
+        #else
+        data = await fetchRawBytes(seq: seq, ref: ref, tier: .full, key: key)
+        #endif
+        guard let data else { return nil }
         let folder = FileManager.default.temporaryDirectory
             .appendingPathComponent("corral-quicklook", isDirectory: true)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -227,6 +240,12 @@ final class ChatImageLoader {
 
     // MARK: - Private
 
+    private enum RawOutcome {
+        case data(Data)
+        case missing
+        case failed
+    }
+
     private func fetch(seq: Int, ref: String, tier: ChatImageTier, key: String) async -> Outcome {
         #if DEBUG
         if ref.hasPrefix("corral-preview://"), let localPreview {
@@ -235,6 +254,54 @@ final class ChatImageLoader {
             return .image(localPreview)
         }
         #endif
+        switch await requestImageData(seq: seq, ref: ref, tier: tier) {
+        case .missing:
+            return .missing
+        case .failed:
+            return .failed
+        case let .data(data):
+            guard let image = Self.decode(data) else {
+                failedRefs.insert("\(seq)|\(ref)")
+                revision &+= 1
+                return .failed
+            }
+            Self.memory.setObject(image, forKey: key as NSString, cost: Self.cost(of: image))
+            revision &+= 1
+            writeDisk(data, forKey: key)
+            return .image(image)
+        }
+    }
+
+    private func fetchRawBytes(seq: Int, ref: String, tier: ChatImageTier, key: String) async -> Data? {
+        if let diskData = try? Data(contentsOf: diskURL(key)), Self.hasValidImageHeader(diskData) {
+            return diskData
+        }
+        if missing.contains(key) { return nil }
+        if let running = inFlightRaw[key] { return await running.value }
+        let task = Task { () -> Data? in
+            switch await self.requestImageData(seq: seq, ref: ref, tier: tier) {
+            case .missing:
+                self.missing.insert(key)
+                return nil
+            case .failed:
+                return nil
+            case let .data(data):
+                guard Self.hasValidImageHeader(data) else {
+                    self.failedRefs.insert("\(seq)|\(ref)")
+                    self.revision &+= 1
+                    return nil
+                }
+                self.writeDisk(data, forKey: key)
+                return data
+            }
+        }
+        inFlightRaw[key] = task
+        let data = await task.value
+        inFlightRaw[key] = nil
+        return data
+    }
+
+    private func requestImageData(seq: Int, ref: String, tier: ChatImageTier) async -> RawOutcome {
         guard let client, client.supportsMediaImage else { return .failed }
         let started = Date()
         let payload: Any
@@ -257,22 +324,27 @@ final class ChatImageLoader {
         }
         guard let dict = payload as? [String: Any],
               let encoded = dict["data"] as? String,
-              let data = Data(base64Encoded: encoded),
-              let image = Self.decode(data) else {
+              let data = Data(base64Encoded: encoded) else {
             failedRefs.insert("\(seq)|\(ref)")
             revision &+= 1
             return .failed
         }
         ChatNetworkConditions.shared.record(bytes: data.count, seconds: Date().timeIntervalSince(started))
-        Self.memory.setObject(image, forKey: key as NSString, cost: Self.cost(of: image))
-        revision &+= 1
+        return .data(data)
+    }
+
+    private func writeDisk(_ data: Data, forKey key: String) {
         let url = diskURL(key)
         try? FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
         try? data.write(to: url, options: .atomic)
-        return .image(image)
+    }
+
+    private static func hasValidImageHeader(_ data: Data) -> Bool {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return false }
+        return CGImageSourceGetCount(source) > 0
     }
 
     private func cacheKey(seq: Int, ref: String, tier: ChatImageTier) -> String {

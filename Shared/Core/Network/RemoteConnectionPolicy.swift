@@ -18,6 +18,10 @@ nonisolated enum RemoteWebSocketSession: Sendable {
 
     static func makeConfiguration() -> URLSessionConfiguration {
         let config = URLSessionConfiguration.default
+        config.urlCache = nil
+        config.httpCookieStorage = nil
+        config.httpShouldSetCookies = false
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
         config.timeoutIntervalForRequest = requestTimeout
         config.timeoutIntervalForResource = resourceTimeout
         config.waitsForConnectivity = false

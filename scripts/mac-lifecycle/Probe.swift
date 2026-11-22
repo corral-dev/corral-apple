@@ -121,12 +121,16 @@ struct RuntimeEntry: Decodable { var id: String; var name: String { id }; var is
     func resolvedKey(_ key: String) -> String { aliases[key] ?? key }
     func removeSession(key: String) { sessions[key] = nil }
 }
-@MainActor final class HostSessionFeed { var listStore = SessionListStore() }
+@MainActor final class HostSessionFeed {
+    var listStore = SessionListStore()
+    func refresh(showLoading: Bool) async {}
+}
 @MainActor final class MacPaneSurfaceCache {
     var renames: [(String, String)] = []
     func reset() {}
     func evict(_ key: String) {}
     func evictDormant(visible: Set<String>) {}
+    func releaseDetachedTextViews() {}
     func rename(_ old: String, to new: String) { renames.append((old, new)) }
 }
 // Transport-only fixture: memory pressure and emulator rendering are tested elsewhere.
@@ -137,6 +141,7 @@ struct RuntimeEntry: Decodable { var id: String; var name: String { id }; var is
 @MainActor final class MacTerminalSessions {
     func reset() {}
     func close(_ key: String) {}
+    func releaseHiddenRenderers() {}
     func migrate(from oldKey: String, to newKey: String) {}
 }
 
@@ -851,6 +856,88 @@ struct LifecycleProbe {
         print("PASS first mode toggle: persisted Chat/Terminal observation and pane isolation")
     }
 
+    @MainActor static func sessionPresentationRegressions() {
+        let suite = "corral-presentation-probe-\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suite) else { fatalError("Could not create probe defaults") }
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let modes = "corral.mac.paneModes", cards = "corral.mac.promptsCardOpen"
+        defaults.set(["one:old": "terminal", "one:peer": "chat", "two:canonical": "chat", "one:bad": "unknown"],
+                     forKey: modes)
+        defaults.set(["one:old": false, "one:peer": true, "two:canonical": true], forKey: cards)
+
+        let choices = MacSessionPresentationPreferences(defaults: defaults, persists: true)
+        let workspace = MacWorkspace(sessionPresentation: choices), feed = HostSessionFeed()
+        workspace.selectHost("one")
+        feed.listStore.aliases["old"] = "canonical"
+        workspace.feed = feed
+        workspace.restorePanes(["canonical", "peer"])
+        check(workspace.mode(for: "canonical") == .terminal && workspace.promptsCardChoice(for: "canonical") == false,
+              "an alias already in the cached list lost the old choices on restore")
+        check(defaults.dictionary(forKey: modes)?["one:old"] == nil
+              && defaults.dictionary(forKey: cards)?["one:old"] == nil, "cached alias migration was not persisted")
+        check(choices.mode(for: "bad", host: "one") == nil && choices.mode(for: "peer", host: "one") == .chat,
+              "malformed choices must not erase valid siblings")
+
+        let ownCard = ModeChangeCounter(), otherCard = ModeChangeCounter(), ownMode = ModeChangeCounter()
+        withObservationTracking { _ = workspace.promptsCardChoice(for: "canonical") }
+            onChange: { ownCard.increment() }
+        withObservationTracking { _ = workspace.promptsCardChoice(for: "peer") }
+            onChange: { otherCard.increment() }
+        withObservationTracking { _ = workspace.mode(for: "canonical") }
+            onChange: { ownMode.increment() }
+        workspace.setPromptsCardOpen(true, for: "canonical")
+        check(ownCard.value == 1 && otherCard.value == 0 && ownMode.value == 0,
+              "changing one card refreshed its peer or its unchanged view mode")
+        workspace.setPromptsCardOpen(true, for: "canonical")
+        check(workspace.mode(for: "old") == .terminal && workspace.promptsCardChoice(for: "old") == true,
+              "the retired ID did not resolve to the same choices")
+        workspace.selectHost("two")
+        check(workspace.mode(for: "canonical") == .chat && workspace.promptsCardChoice(for: "canonical") == true,
+              "same session IDs on different hosts shared a preference")
+        workspace.selectHost("one")
+        workspace.feed = feed
+
+        workspace.setMode(.terminal, for: "mounted-old")
+        workspace.setPromptsCardOpen(false, for: "mounted-old")
+        workspace.restorePanes(["mounted-old"])
+        feed.listStore.aliases["mounted-old"] = "mounted-new"
+        workspace.canonicalizePaneKeys()
+        check(workspace.paneKeys == ["mounted-new"] && workspace.mode(for: "mounted-new") == .terminal
+              && workspace.promptsCardChoice(for: "mounted-new") == false,
+              "a list-driven pane rename lost its preferences")
+
+        workspace.setMode(.terminal, for: "closed-old")
+        workspace.setPromptsCardOpen(false, for: "closed-old")
+        workspace.setMode(.chat, for: "closed-new")
+        feed.listStore.aliases["closed-old"] = "closed-new"
+        workspace.sessionMigrated(from: "closed-old", to: "closed-new")
+        let reloaded = MacSessionPresentationPreferences(defaults: defaults, persists: true)
+        check(reloaded.mode(for: "closed-new", host: "one") == .chat
+              && reloaded.promptsOpen(for: "closed-new", host: "one") == false,
+              "closed-session migration overwrote a canonical choice or failed to keep the other field")
+
+        let dry = MacSessionPresentationPreferences(defaults: defaults, persists: false, limit: 2)
+        dry.setMode(.terminal, for: "inspection", host: "one")
+        dry.setPromptsOpen(true, for: "inspection", host: "one")
+        check(defaults.dictionary(forKey: modes)?["one:inspection"] == nil
+              && defaults.dictionary(forKey: cards)?["one:inspection"] == nil,
+              "an inspection wrote the person's choices")
+        check(dry.mode(for: "canonical", host: "two") == nil
+              && dry.promptsOpen(for: "canonical", host: "two") == nil
+              && dry.mode(for: "inspection", host: "one") == .terminal,
+              "bounded preferences did not evict another host first")
+
+        let bounded = MacSessionPresentationPreferences(defaults: defaults, persists: false, limit: 1)
+        bounded.setPromptsOpen(true, for: "oldest", host: "one")
+        let eviction = ModeChangeCounter()
+        withObservationTracking { _ = bounded.promptsOpen(for: "oldest", host: "one") }
+            onChange: { eviction.increment() }
+        bounded.setPromptsOpen(false, for: "latest", host: "one")
+        check(eviction.value == 1 && bounded.promptsOpen(for: "oldest", host: "one") == nil,
+              "eviction did not invalidate the previously read value")
+        print("PASS presentation choices: legacy reload, isolated fields/hosts, three promotion paths, bounded eviction and inspection")
+    }
+
     /// Settings → "New Sessions Open In" also fills the first open of a session
     /// this client did not create; explicit choices, sidebar browsing and
     /// sessions running elsewhere are not overridden.
@@ -1115,7 +1202,7 @@ struct LifecycleProbe {
         check(client.calls.contains { $0.0 == WireProtocol.mLayoutSetGroup },
               "openSplit did not sync the new split group to host")
 
-        // exportSession copies JSON and transitions exportFeedback cleanly, restoring prior pasteboard.
+        // exportSession copies JSON and transitions transientFeedback cleanly, restoring prior pasteboard.
         let previousPasteboard = NSPasteboard.general.string(forType: .string)
         defer {
             NSPasteboard.general.clearContents()
@@ -1128,26 +1215,44 @@ struct LifecycleProbe {
                 check(params["key"] as? String == s1.key, "exportSession sent wrong key")
                 return ["json": "{\"ok\":true,\"data\":{\"id\":\"codex:s1\"}}"]
             }
+            if method == WireProtocol.mSessionStop {
+                check(params["key"] as? String == s1.key && (params["confirm"] as? Bool) == true,
+                      "stop sent wrong params")
+                return ["ok": true]
+            }
             return [:]
         }
         await workspace.exportSession(s1.key)
         check(NSPasteboard.general.string(forType: .string) == "{\"ok\":true,\"data\":{\"id\":\"codex:s1\"}}",
               "exportSession did not copy share JSON to pasteboard")
-        check(workspace.exportFeedback == .copied(s1.key),
+        check(workspace.transientFeedback == .copied(s1.key),
               "exportSession did not enter .copied feedback state")
         check(workspace.actionError == nil, "successful exportSession set actionError")
 
-        // Failure resets exportFeedback and surfaces actionError.
+        // Single stop transitions transientFeedback and releases stoppingKeys cleanly.
+        await workspace.stop(s1.key)
+        check(!workspace.isStopping(s1.key), "stop left session key marked busy")
+        check(workspace.transientFeedback == .stopped(s1.key), "successful stop did not set .stopped feedback")
+        check(workspace.actionError == nil, "successful stop set actionError")
+
+        // Failure resets transientFeedback and surfaces actionError for both export and stop.
         client.handler = { method, _ in
             if method == WireProtocol.mSessionExport {
                 throw RemoteCallError(message: "export blocked")
             }
+            if method == WireProtocol.mSessionStop {
+                throw RemoteCallError(message: "stop refused")
+            }
             return [:]
         }
         await workspace.exportSession(s2.key)
-        check(workspace.exportFeedback == nil && !(workspace.actionError ?? "").isEmpty,
+        check(workspace.transientFeedback == nil && !(workspace.actionError ?? "").isEmpty,
               "failed exportSession did not surface error cleanly")
-        print("PASS session menu actions: switchModeAndOpen, openSplit, exportSession")
+        workspace.actionError = nil
+        await workspace.stop(s2.key)
+        check(!workspace.isStopping(s2.key) && workspace.transientFeedback == nil && !(workspace.actionError ?? "").isEmpty,
+              "failed stop did not clear busy state or surface actionError")
+        print("PASS session menu actions: switchModeAndOpen, openSplit, exportSession, stopFeedback")
     }
 
     @MainActor static func main() async throws {
@@ -1156,6 +1261,7 @@ struct LifecycleProbe {
         await sessionMenuActionsRegressions()
         await sessionBatchRegressions()
         modeObservationRegressions()
+        sessionPresentationRegressions()
         preferredOpenModeRegressions()
         await sidebarSplitRestorationRegressions()
         await splitProjectRegressions()

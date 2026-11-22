@@ -14,7 +14,15 @@ final class ChatFileReferenceTests: XCTestCase {
         let relLink = try XCTUnwrap(ChatFileLink.classify(relURL))
         XCTAssertEqual(relLink.displayName, "macos-apps.md")
         XCTAssertEqual(relLink.targetLine, 42)
+        XCTAssertNil(relLink.targetAnchor)
         XCTAssertTrue(relLink.isMarkdown)
+
+        let anchorFileURL = try XCTUnwrap(URL(string: "../docs/GUIDE.md#Domain_Rules"))
+        let anchorFileLink = try XCTUnwrap(ChatFileLink.classify(anchorFileURL))
+        XCTAssertEqual(anchorFileLink.displayName, "GUIDE.md")
+        XCTAssertNil(anchorFileLink.targetLine)
+        XCTAssertEqual(anchorFileLink.targetAnchor, "domain-rules")
+        XCTAssertTrue(anchorFileLink.isMarkdown)
 
         let pdfURL = try XCTUnwrap(URL(string: "file:///Users/example/report.pdf"))
         let pdfLink = try XCTUnwrap(ChatFileLink.classify(pdfURL))
@@ -124,6 +132,35 @@ final class ChatFileReferenceTests: XCTestCase {
         XCTAssertTrue(sawQuote)
         XCTAssertTrue(sawTable)
         XCTAssertTrue(sawBreak)
+    }
+
+    func testMarkdownDocumentExtractsHeadingsSourceLinesAndAnchors() throws {
+        let source = """
+        # Overview
+
+        Intro paragraph.
+
+        ## Setup Steps
+
+        Details on line 7.
+
+        ## Setup Steps
+
+        Duplicate heading.
+        """
+        let doc = MarkdownDocument.parse(source)
+        XCTAssertEqual(doc.headings.map(\.title), ["Overview", "Setup Steps", "Setup Steps"])
+        XCTAssertEqual(doc.headings.map(\.anchor), ["overview", "setup-steps", "setup-steps-1"])
+
+        let setupID = doc.blockID(forAnchor: "setup-steps")
+        let dupID = doc.blockID(forAnchor: "setup-steps-1")
+        XCTAssertNotNil(setupID)
+        XCTAssertNotNil(dupID)
+        XCTAssertNotEqual(setupID, dupID)
+
+        let line7ID = doc.blockID(forLine: 7)
+        XCTAssertNotNil(line7ID)
+        XCTAssertEqual(doc.blockLineRanges[try XCTUnwrap(line7ID)]?.contains(7), true)
     }
 
     func testWireProtocolMediaFileDefaults() {

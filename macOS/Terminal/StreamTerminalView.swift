@@ -9,6 +9,27 @@ final class StreamTerminalView: SwiftTerm.TerminalView {
     var onPaste: ((String) -> Void)?
     var contextMenuCellSize: CGSize = .zero
 
+    /// Metal owns a `CAMetalLayer` subview, while AppKit still allocates a full
+    /// Retina backing-store IOSurface whenever a subclass overrides `draw(_:)`
+    /// without opting into `wantsUpdateLayer`. Skip layer backing while Metal
+    /// renders, while hidden, or before window attachment; keep `draw(_:)` active
+    /// for visible CoreGraphics fallback.
+    override var wantsUpdateLayer: Bool {
+        isUsingMetalRenderer || isHiddenOrHasHiddenAncestor || window == nil
+    }
+
+    override func updateLayer() {
+        super.updateLayer()
+        layer?.contents = nil
+    }
+
+    /// Drops any previously created AppKit layer contents once the terminal is
+    /// backed by Metal or idle offscreen.
+    func releaseBackingStoreIfIdle() {
+        guard wantsUpdateLayer else { return }
+        layer?.contents = nil
+    }
+
     override func menu(for event: NSEvent) -> NSMenu? {
         guard isText(at: convert(event.locationInWindow, from: nil)) else {
             return paneSessionContextMenu()

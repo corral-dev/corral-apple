@@ -184,6 +184,11 @@ nonisolated enum MessageDelivery: String, Codable, Sendable, Equatable {
     case needsReview
 }
 
+nonisolated struct LocalFileAttachment: Equatable, Hashable, Sendable {
+    let name: String
+    let byteCount: Int
+}
+
 nonisolated struct RichMessage: Codable, Sendable, Identifiable, Equatable {
     let seq: Int
     let role: String
@@ -204,11 +209,14 @@ nonisolated struct RichMessage: Codable, Sendable, Identifiable, Equatable {
     /// The bubble previews them until the host's confirmed turn replaces it.
     /// Never encoded: a reopened cache has no previews, and nothing here is wire data.
     var localImageData: [Data] = []
+    /// Local-only optimistic non-image attachments staged with this pending send.
+    var localFiles: [LocalFileAttachment] = []
 
     var id: Int { seq }
 
     /// One send is one bubble: the attachments this bubble already shows itself.
     var hasLocalImages: Bool { !localImageData.isEmpty }
+    var hasLocalAttachments: Bool { !localImageData.isEmpty || !localFiles.isEmpty }
 
     /// What the conversation shows for this message. A user turn's host-pasted
     /// attachment paths (`input.image` pastes a saved path into the agent
@@ -233,7 +241,8 @@ nonisolated struct RichMessage: Codable, Sendable, Identifiable, Equatable {
         commandID: String? = nil,
         failureDetail: String? = nil,
         localAfterSeq: Int? = nil,
-        localImageData: [Data] = []
+        localImageData: [Data] = [],
+        localFiles: [LocalFileAttachment] = []
     ) {
         self.seq = seq
         self.role = role
@@ -245,6 +254,7 @@ nonisolated struct RichMessage: Codable, Sendable, Identifiable, Equatable {
         self.failureDetail = failureDetail
         self.localAfterSeq = localAfterSeq
         self.localImageData = localImageData
+        self.localFiles = localFiles
     }
 
     enum CodingKeys: String, CodingKey {

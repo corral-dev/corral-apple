@@ -6,6 +6,24 @@ next version's section. A `Release: minor` or `Release: major` line requests a
 larger version step; `Release: hold <reason>` keeps the changes unreleased until
 the named acceptance is done.
 
+## Mac 1.0.1 (194)
+
+### English
+
+- Keep the Mac and CLI update versions in sync and surface session-stop feedback.
+- Make split-view divider dragging smoother and reduce memory use by releasing hidden terminal surfaces and bounding media caches.
+- Refresh the pairing screen and session filters. Runtime filters stay readable as the sidebar narrows.
+- Improve composer wrapping, zoom and input-method behavior; support arbitrary file attachments and more consistent terminal colors.
+- Update the app icon with a bold light contour.
+
+### 简体中文
+
+- Mac 与 CLI 版本同步更新，停止会话时提供反馈。
+- 分屏分隔条拖动更顺滑；释放隐藏的终端渲染表面并限制媒体缓存大小，降低内存占用。
+- 更新配对界面和会话筛选；侧栏缩窄时，运行时筛选仍保持可读。
+- 改善输入区的换行、缩放和输入法体验，支持粘贴任意文件附件，并让终端配色更一致。
+- 更新应用图标，加入醒目的浅色轮廓。
+
 ## Mac 1.0.0 (193)
 
 ### English

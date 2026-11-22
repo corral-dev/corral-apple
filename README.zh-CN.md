@@ -42,7 +42,7 @@
 
 ### Mac
 
-通过 Homebrew 安装已签名的 Mac 客户端：
+通过 Homebrew 安装已签名的 Mac 客户端（会自动一并安装匹配的 `corral` CLI 依赖）：
 
 ```bash
 brew install --cask x0c/tap/corral-mac
@@ -63,7 +63,7 @@ brew upgrade --cask x0c/tap/corral-mac
 
 内置更新仍然可用。当前 Homebrew 能识别比安装记录更新的应用，因此登记版本较旧不代表更新失败。安装时报“already an App”表示目标位置已有应用，请根据情况使用上面的接管或更新命令。不要把 `--force` 当作常规修复：它可能用 tap 的旧版本覆盖较新的应用。配对和设置会保留。详见 [Homebrew 对应用内更新的处理](https://docs.brew.sh/FAQ#how-does-brew-upgrade-handle-apps-that-update-themselves)。
 
-下载[已签名的 Mac DMG](https://github.com/corral-dev/corral-apple/releases/latest)，把 Corral 拖进「应用程序」。之后每小时检查一次更新，后台下载，并在退出时安装。
+下载[已签名的 Mac DMG](https://github.com/corral-dev/corral-apple/releases/latest)，把 Corral 拖进「应用程序」。Mac 客户端与 CLI 保持版本号同步：非沙盒版应用在启动和内置更新后会自动安装或同步匹配版本的 Corral CLI（不会覆盖开发者源码安装）；通过 `corral update` 升级 CLI 时也会同步升级已安装的 `/Applications/Corral.app`。之后每小时检查一次更新，后台下载，并在退出时安装。
 
 如果想从源码构建，安装好 Xcode 及其命令行工具后运行：
 

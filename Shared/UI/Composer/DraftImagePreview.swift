@@ -16,6 +16,20 @@ enum DraftImagePreview {
         }.value
     }
 
+    nonisolated static func prepareFile(name: String, data: Data) async -> URL? {
+        await Task.detached(priority: .userInitiated) {
+            let clean = ChatFileLink.sanitizedFileName(name, fallback: "attachment")
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("corral-draft-\(UUID().uuidString)-\(clean)")
+            do {
+                try data.write(to: url, options: .atomic)
+                return url
+            } catch {
+                return nil
+            }
+        }.value
+    }
+
     nonisolated static func remove(_ url: URL) {
         try? FileManager.default.removeItem(at: url)
     }

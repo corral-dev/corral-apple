@@ -15,10 +15,10 @@ struct MacPaneView: View {
     let metadataStore: SessionListStore?
     var allowsClose = true
     var autoFocusComposer = false
+    private let retainedPaneWidth: CGFloat
 
     @State private var store: ConversationStore?
-    @State private var bodySize: CGSize = .zero
-    @State private var paneFrame: CGRect = .zero
+    @State private var measuredCardFit: Bool?
     @State private var terminalVisited = false
     @State private var terminalPromptRequest: TerminalPromptRequest?
     @State private var promptStatus: TerminalPromptRowStatus?
@@ -34,13 +34,13 @@ struct MacPaneView: View {
 
     init(session: SessionSummary, metadataStore: SessionListStore?, allowsClose: Bool = true,
          autoFocusComposer: Bool = false, retainedStore: ConversationStore? = nil,
-         retainedBodySize: CGSize = .zero) {
+         retainedPaneWidth: CGFloat = 0) {
         self.session = session
         self.metadataStore = metadataStore
         self.allowsClose = allowsClose
         self.autoFocusComposer = autoFocusComposer
+        self.retainedPaneWidth = retainedPaneWidth
         _store = State(initialValue: retainedStore)
-        _bodySize = State(initialValue: retainedBodySize)
     }
 
     /// Read focus from the workspace directly. A cached copy on the pane's
@@ -65,9 +65,14 @@ struct MacPaneView: View {
         store?.userPrompts ?? []
     }
 
-    /// Both presentations center in the same space beside an open prompts card.
+    private var cardBesideThreshold: CGFloat {
+        (MacPromptsCard.reserve + MacPromptsCard.minimumReadingWidth) * interfaceScale
+    }
+
+    /// Only this threshold affects the rest of the pane. The overlay reads its
+    /// own exact width and height without rebuilding the chat or terminal.
     private var cardFitsBeside: Bool {
-        bodySize.width - MacPromptsCard.reserve * interfaceScale >= MacPromptsCard.minimumReadingWidth * interfaceScale
+        measuredCardFit ?? (retainedPaneWidth >= cardBesideThreshold)
     }
 
     /// This session's own remembered card state; before the person chooses,
@@ -84,22 +89,24 @@ struct MacPaneView: View {
     @ViewBuilder
     private var promptsCard: some View {
         let prompts = prompts
-        if !prompts.isEmpty, bodySize.width > 0 {
+        if !prompts.isEmpty {
             if cardOpen {
-                MacPromptsCard(
-                    prompts: prompts,
-                    isOpen: promptsCardBinding,
-                    width: promptsCardWidth,
-                    overContent: !cardFitsBeside,
-                    onTerminal: mode == .terminal,
-                    // Over content the whole card covers about a third of the pane.
-                    maxListHeight: max(120, bodySize.height * (cardFitsBeside ? 0.7 : MacPromptsCard.overContentHeightFraction) - 56),
-                    status: mode == .terminal ? promptStatus : nil,
-                    onSelect: selectPrompt,
-                    onJumpLatest: jumpToLatest
-                )
-                .interfacePadding(.top, Space.md)
-                .interfacePadding(.trailing, Space.md)
+                let fitsBeside = cardFitsBeside
+                MacPromptsCardViewport(fitsBeside: fitsBeside) { size in
+                    MacPromptsCard(
+                        prompts: prompts,
+                        isOpen: promptsCardBinding,
+                        width: size.width,
+                        overContent: !fitsBeside,
+                        onTerminal: mode == .terminal,
+                        maxListHeight: size.height,
+                        status: mode == .terminal ? promptStatus : nil,
+                        onSelect: selectPrompt,
+                        onJumpLatest: jumpToLatest
+                    )
+                    .interfacePadding(.top, Space.md)
+                    .interfacePadding(.trailing, Space.md)
+                }
             } else {
                 promptsCollapsedButton(count: prompts.count)
                     .interfacePadding(.top, Space.md)
@@ -171,17 +178,6 @@ struct MacPaneView: View {
         workspace.scrollToLatest(in: session.key)
     }
 
-    /// Beside the conversation the card has its full width; over content it
-    /// leaves a strip of the narrow pane visible (design: Prompts card rule 3).
-    private var promptsCardWidth: CGFloat {
-        let full = MacPromptsCard.width * interfaceScale
-        let fitting = bodySize.width - Space.md * 2 * interfaceScale
-        guard !cardFitsBeside else { return min(full, fitting) }
-        let partial = max(MacPromptsCard.overContentMinimumWidth * interfaceScale,
-                          bodySize.width * MacPromptsCard.overContentWidthFraction)
-        return min(full, partial, fitting)
-    }
-
     private var promptsCardBinding: Binding<Bool> {
         Binding(
             get: { cardOpen },
@@ -190,6 +186,8 @@ struct MacPaneView: View {
     }
 
     var body: some View {
+        let threshold = cardBesideThreshold
+        let usesNativeMount = lifetime != nil
         VStack(spacing: 0) {
             content
                 // Beside the conversation the card takes the trailing margin and
@@ -204,9 +202,8 @@ struct MacPaneView: View {
                 // terminal keeps its emulator black, chat keeps grouped gray.
                 .background(mode == .terminal ? Color(nsColor: TerminalAppearance.background) : Color(.systemGroupedBackground))
                 .overlay(alignment: .topTrailing) { promptsCard }
-                .onGeometryChange(for: CGSize.self) { $0.size } action: {
-                    bodySize = $0
-                    workspace.paneSurfaces.existingEntry(for: session.key)?.bodySize = $0
+                .onGeometryChange(for: Bool.self) { $0.size.width >= threshold } action: { fits in
+                    measuredCardFit = fits
                 }
             MacPaneHeader(
                 session: session,
@@ -215,13 +212,12 @@ struct MacPaneView: View {
                 cardReserve: reservesCardMargin ? MacPromptsCard.reserve : 0
             )
         }
-        .onGeometryChange(for: CGRect.self) { proxy in
-            proxy.frame(in: .global)
+        .onGeometryChange(for: CGRect?.self) { proxy in
+            // A retained host has its own global coordinates; its AppKit
+            // mount already publishes the pane frame in window coordinates.
+            usesNativeMount ? nil : proxy.frame(in: .global)
         } action: { frame in
-            paneFrame = frame
-            // A retained hosting view has its own global coordinate space;
-            // its native mount publishes the window-relative frame.
-            if lifetime == nil { workspace.paneFrames[session.key] = frame }
+            if let frame { workspace.paneFrames[session.key] = frame }
         }
         .onAppear { prepareStore() }
         .expiringPromptStatus($promptStatus)
@@ -249,8 +245,9 @@ struct MacPaneView: View {
         .background {
             MacPaneConnection(sessionKey: session.key, lifetime: lifetime, store: store,
                               prepareStore: { prepareStore() }, resetStore: { store = nil }) {
-                workspace.paneFrames[session.key] =
-                    workspace.paneSurfaces.existingEntry(for: session.key)?.lastFrame ?? paneFrame
+                if let frame = workspace.paneSurfaces.existingEntry(for: session.key)?.lastFrame {
+                    workspace.paneFrames[session.key] = frame
+                }
                 metadataStore?.markReadLocally(key: session.key)
             }
         }
@@ -417,6 +414,7 @@ struct MacPaneHeader: View {
     /// (two 24pt icon slots plus the gap), inside the readable column so a
     /// long title never runs under them.
     static let hoverSlotWidth: CGFloat = TouchTarget.iconVisual * 2 + Space.xs
+    static let titlePointSize: CGFloat = 17
 
     var body: some View {
         HStack(spacing: 0) {
@@ -485,7 +483,7 @@ struct MacPaneHeader: View {
             focusPane()
         } label: {
             Text(verbatim: SessionPresentation.displayTitle(for: session))
-                .interfaceFont(.system(size: 15, weight: isFocused ? .semibold : .medium))
+                .interfaceFont(.system(size: Self.titlePointSize, weight: isFocused ? .semibold : .medium))
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .foregroundStyle(titleColor)
@@ -503,7 +501,7 @@ struct MacPaneHeader: View {
         let project = SessionPresentation.projectName(from: session)
         if !project.isEmpty {
             Text(verbatim: project)
-                .interfaceFont(.system(size: 15, weight: .regular))
+                .interfaceFont(.system(size: Self.titlePointSize, weight: .regular))
                 .foregroundStyle(Color.secondary)
                 .lineLimit(1)
                 .truncationMode(.tail)

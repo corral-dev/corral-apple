@@ -1,4 +1,5 @@
 import AppKit
+import Metal
 import SwiftTerm
 
 /// Offscreen native events exercise selection without moving the user's pointer.
@@ -54,6 +55,7 @@ struct TerminalSelectionProbe {
         require(!view.selectionActive, "snapshot reset discards old selection")
         verifyPromptNavigation()
         verifyResyncViewport()
+        verifyBackingStorePolicy()
         let arguments = Array(CommandLine.arguments.dropFirst())
         if let index = arguments.firstIndex(of: "--prompt-snapshot"), arguments.indices.contains(index + 1) {
             verifyPromptSnapshot(arguments[index + 1])
@@ -216,6 +218,34 @@ struct TerminalSelectionProbe {
         require(reader.scrollPosition < 1 && reader.visibleRowsText(0..<1).first == top,
                 "ordinary output keeps a reader's text in place at full scrollback")
         print("PASS history erase returns readers to live output")
+    }
+
+    @MainActor
+    private static func verifyBackingStorePolicy() {
+        let detached = StreamTerminalView(frame: NSRect(x: 0, y: 0, width: 400, height: 240))
+        require(detached.wantsUpdateLayer, "detached terminal skips AppKit backing store")
+        detached.releaseBackingStoreIfIdle()
+        require(detached.layer?.contents == nil, "detached terminal has no backing contents")
+
+        let view = makeView()
+        require(!view.isUsingMetalRenderer && !view.isHiddenOrHasHiddenAncestor, "fixture starts visible CG")
+        require(!view.wantsUpdateLayer, "visible CoreGraphics fallback keeps draw(_:) path")
+        view.displayIfNeeded()
+        view.isHidden = true
+        require(view.wantsUpdateLayer, "hidden terminal switches to wantsUpdateLayer")
+        view.releaseBackingStoreIfIdle()
+        require(view.layer?.contents == nil, "hidden terminal drops layer backing contents")
+        view.isHidden = false
+        require(!view.wantsUpdateLayer, "re-shown CG terminal restores draw(_:) path")
+
+        if MTLCreateSystemDefaultDevice() != nil, (try? view.setUseMetal(true)) != nil {
+            require(view.isUsingMetalRenderer && view.wantsUpdateLayer, "Metal terminal opts into wantsUpdateLayer")
+            view.releaseBackingStoreIfIdle()
+            require(view.layer?.contents == nil, "Metal terminal drops redundant AppKit layer contents")
+            try? view.setUseMetal(false)
+            require(!view.wantsUpdateLayer, "reverting to visible CG disables wantsUpdateLayer")
+        }
+        print("PASS StreamTerminalView wantsUpdateLayer and idle backing-store release")
     }
 
     @MainActor

@@ -194,16 +194,12 @@ struct MessageBubbleView: View, Equatable {
     private var displayText: String? { message.chatBodyText }
 
     private var fileLinkHandler: ((URL) -> (() -> Void)?)? {
-        #if os(iOS)
         guard message.seq > 0, let fileLoader else { return nil }
         let seq = message.seq
         return { url in
             guard let link = ChatFileLink.classify(url) else { return nil }
             return { fileLoader.open(seq: seq, link: link) }
         }
-        #else
-        return nil
-        #endif
     }
 
     /// Bare path mentions keep the tile row; explicit Markdown images are inline
@@ -213,11 +209,18 @@ struct MessageBubbleView: View, Equatable {
         return ChatImageReferenceCache.references(in: text).filter { $0.kind == .mention }
     }
 
+    private var pastedHostFilePaths: [String] {
+        guard message.role.lowercased() == "user" else { return [] }
+        return HostPasteAttachment.filePaths(in: message.text)
+    }
+
     @ViewBuilder
     private var messageBubble: some View {
         let body = displayText ?? ""
         let mentions = mentionImages
-        if !body.isEmpty || !mentions.isEmpty || message.hasLocalImages {
+        let hostFiles = pastedHostFilePaths
+        let showsFiles = !message.localFiles.isEmpty || !hostFiles.isEmpty
+        if !body.isEmpty || !mentions.isEmpty || message.hasLocalImages || showsFiles {
             VStack(alignment: isUser ? .trailing : .leading, spacing: Space.sm * interfaceScale) {
                 if !body.isEmpty {
                     SelectableAttributedText(
@@ -245,6 +248,15 @@ struct MessageBubbleView: View, Equatable {
                     // The host has not confirmed this send yet: show the staged
                     // payloads so the bubble already looks like what was sent.
                     LocalEchoImagesView(payloads: message.localImageData, isUser: isUser)
+                }
+                if showsFiles {
+                    MessageFileAttachmentsView(
+                        seq: message.seq,
+                        localFiles: message.localFiles,
+                        hostFilePaths: hostFiles,
+                        isUser: isUser,
+                        userForeground: userForeground
+                    )
                 }
                 if !mentions.isEmpty {
                     MessageImagesView(

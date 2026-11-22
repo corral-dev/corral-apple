@@ -4,7 +4,7 @@ import Foundation
 /// emulators: background, foreground and the 16 ANSI colours tuned for that
 /// background (sRGB, 0–255). Agent TUIs and shells pick their own palette from
 /// the background the host reports.
-struct TerminalColorScheme: Sendable {
+nonisolated struct TerminalColorScheme: Sendable {
     typealias RGB = (red: UInt8, green: UInt8, blue: UInt8)
 
     let background: RGB
@@ -13,23 +13,23 @@ struct TerminalColorScheme: Sendable {
 
     static let dark = TerminalColorScheme(
         background: (20, 23, 31),
-        foreground: (224, 227, 232),
+        foreground: (232, 235, 240),
         ansi: [
-            (31, 31, 36), (232, 92, 92), (115, 204, 115), (230, 199, 102),
-            (102, 153, 242), (199, 128, 230), (102, 204, 217), (217, 219, 224),
-            (115, 120, 133), (255, 122, 122), (140, 235, 140), (255, 224, 128),
-            (140, 184, 255), (230, 158, 255), (140, 235, 242), (250, 250, 252),
+            (32, 37, 48), (242, 82, 82), (62, 214, 114), (245, 200, 66),
+            (74, 148, 255), (212, 116, 255), (46, 212, 224), (206, 212, 222),
+            (114, 122, 138), (255, 117, 117), (104, 240, 152), (255, 222, 107),
+            (122, 179, 255), (232, 158, 255), (107, 238, 247), (255, 255, 255),
         ]
     )
 
     static let light = TerminalColorScheme(
         background: (255, 255, 255),
-        foreground: (31, 36, 41),
+        foreground: (24, 28, 34),
         ansi: [
-            (36, 41, 47), (207, 34, 46), (17, 99, 41), (125, 78, 0),
-            (9, 105, 218), (130, 80, 223), (27, 124, 131), (110, 119, 129),
-            (87, 96, 106), (164, 14, 38), (26, 127, 55), (99, 60, 1),
-            (33, 139, 255), (164, 117, 249), (49, 146, 170), (140, 149, 159),
+            (31, 36, 44), (209, 47, 47), (22, 138, 62), (178, 114, 0),
+            (26, 102, 224), (158, 66, 212), (10, 132, 148), (207, 214, 223),
+            (110, 119, 133), (235, 68, 68), (30, 168, 79), (209, 138, 0),
+            (48, 128, 250), (184, 88, 238), (16, 158, 176), (242, 244, 248),
         ]
     )
 

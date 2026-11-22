@@ -30,9 +30,7 @@ struct MacRootView: View {
     /// manual hide that would never reopen.
     @SceneStorage("corral.mac.sidebarHidden") private var sidebarHidden = false
     @SceneStorage("corral.mac.sidebarAutoCollapsed") private var sidebarAutoCollapsed = false
-    @State private var windowContentWidth: CGFloat = 0
-    @State private var lastAutomationWidth: CGFloat?
-    @State private var measuredSidebarWidth: CGFloat = 0
+    @State private var sidebarFitGeometry = SidebarFitGeometry()
     /// The host runs project shells and this pairing may use them (terminal panes).
     @State private var shellSupported = false
     @State private var restoringHostID: String?
@@ -48,12 +46,29 @@ struct MacRootView: View {
                 splitView
             }
         }
+        .overlay(alignment: .bottom) {
+            if let feedback = workspace.transientFeedback {
+                transientCapsule(
+                    isBusy: feedback.isBusy,
+                    title: transientFeedbackText(for: feedback),
+                    canCancel: false
+                )
+            } else if let banner = cliSync.banner {
+                transientCapsule(
+                    isBusy: banner.isBusy,
+                    title: Text(verbatim: banner.message),
+                    canCancel: banner.canCancel
+                )
+            }
+        }
+        .animation(.easeInOut(duration: 0.18), value: workspace.transientFeedback)
+        .animation(.easeInOut(duration: 0.18), value: cliSync.banner)
         .environment(workspace)
         .onChange(of: interfaceScale, initial: true) { _, scale in workspace.interfaceScale = scale }
         .sheet(isPresented: $showPairing) {
             MacPairingView(isSheet: true)
                 .modifier(MacZoomContent())
-                .interfaceFrame(width: 520, height: 640)
+                .interfaceFrame(width: 480)
         }
         .onOpenURL { url in
             Task { await pair(url: url) }
@@ -118,6 +133,10 @@ struct MacRootView: View {
                 }
             }
             if arguments.contains("-CorralInspectPairing") { showPairing = true }
+            if arguments.contains("-CorralInspectStopFeedback") {
+                let done = arguments.contains("-CorralInspectStopFeedbackDone")
+                workspace.setInspectionTransientFeedback(done ? .stopped("inspect") : .stopping("inspect"))
+            }
             Task {
                 await MacSearchNavigationInspection.runIfRequested(workspace: workspace, model: appModel,
                     presentSearch: {
@@ -159,8 +178,8 @@ struct MacRootView: View {
                 )
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
                     guard width > 0 else { return }
-                    let firstMeasurement = measuredSidebarWidth == 0
-                    measuredSidebarWidth = width
+                    let firstMeasurement = sidebarFitGeometry.sidebarWidth == 0
+                    sidebarFitGeometry.sidebarWidth = width
                     // The first real width is more accurate than the ideal
                     // fallback; re-apply the fit rule once it is known.
                     if firstMeasurement { reevaluateSidebarFit() }
@@ -189,7 +208,7 @@ struct MacRootView: View {
             Task { await workspace.navigateHistory(by: step) }
         })
         .background(MacWindowWidthReader { width in
-            windowContentWidth = width
+            sidebarFitGeometry.windowWidth = width
             updateSidebarAutomation(width: width)
         })
         .onChange(of: paneCount) { _, _ in reevaluateSidebarFit() }
@@ -308,32 +327,11 @@ struct MacRootView: View {
         }
     }
 
+    @State private var cliSync = MacCLISync.shared
+
     @ViewBuilder
     private var detail: some View {
         detailContent
-            .overlay(alignment: .bottom) {
-                if let feedback = workspace.exportFeedback {
-                    HStack(spacing: 6) {
-                        if case .exporting = feedback {
-                            ProgressView().controlSize(.small)
-                        } else {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(.secondary)
-                        }
-                        Text(exportFeedbackTitle(for: feedback))
-                            .interfaceFont(.system(size: 12, weight: .medium))
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 7)
-                    .background(.regularMaterial, in: Capsule())
-                    .overlay(Capsule().strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5))
-                    .shadow(color: Color.black.opacity(0.12), radius: 8, y: 2)
-                    .padding(.bottom, 16)
-                    .allowsHitTesting(false)
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
-                }
-            }
-            .animation(.easeInOut(duration: 0.18), value: workspace.exportFeedback)
             .confirmationDialog(
                 deleteTitle,
                 isPresented: Binding(
@@ -387,10 +385,41 @@ struct MacRootView: View {
         return workspace.mode(for: key)
     }
 
-    private func exportFeedbackTitle(for feedback: MacWorkspace.ExportFeedback) -> LocalizedStringKey {
+    @ViewBuilder
+    private func transientCapsule(isBusy: Bool, title: Text, canCancel: Bool) -> some View {
+        HStack(spacing: 6) {
+            if isBusy {
+                ProgressView().controlSize(.small)
+            } else {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            title
+                .interfaceFont(.system(size: 12, weight: .medium))
+            if canCancel {
+                Button("action.cancel") { cliSync.cancel() }
+                    .buttonStyle(.borderless)
+                    .interfaceFont(.system(size: 12, weight: .medium))
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(.regularMaterial, in: Capsule())
+        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5))
+        .shadow(color: Color.black.opacity(0.12), radius: 8, y: 2)
+        .padding(.bottom, 16)
+        .allowsHitTesting(canCancel)
+        .transition(.opacity.combined(with: .move(edge: .bottom)))
+    }
+
+    private func transientFeedbackText(for feedback: MacWorkspace.TransientFeedback) -> Text {
         switch feedback {
-        case .exporting: "mac.session.exporting"
-        case .copied: "mac.session.exported"
+        case .exporting: Text("mac.session.exporting")
+        case .copied: Text("mac.session.exported")
+        case .stopping: Text("sessions.status.stopping")
+        case .stopped: Text("sessions.status.stopped")
+        case .stoppingBatch(let count): Text("mac.sessions.stopping \(count)")
+        case .stoppedBatch(let count): Text("mac.sessions.stopped \(count)")
         }
     }
 
@@ -414,13 +443,19 @@ struct MacRootView: View {
 
     // MARK: - Sidebar fit (owner decision 2026-10-24)
 
+    // Geometry feeds the fit decision; it does not drive the view tree. Only
+    // changes to the stored visibility flags should update the native columns.
+    private final class SidebarFitGeometry {
+        var windowWidth: CGFloat = 0
+        var sidebarWidth: CGFloat = 0
+        var previousAutomationWidth: CGFloat?
+    }
+
     private var sidebarIsCollapsed: Bool { sidebarHidden || sidebarAutoCollapsed }
 
-    /// The mounted sidebar width, or its ideal width before the first
-    /// measurement and while it is collapsed.
     private var sidebarFitWidth: CGFloat {
-        measuredSidebarWidth > 0
-            ? measuredSidebarWidth
+        sidebarFitGeometry.sidebarWidth > 0
+            ? sidebarFitGeometry.sidebarWidth
             : MacSidebarSizing.fallbackSidebarWidth * interfaceScale
     }
 
@@ -449,8 +484,8 @@ struct MacRootView: View {
     }
 
     private func updateSidebarAutomation(width: CGFloat) {
-        let previous = lastAutomationWidth
-        lastAutomationWidth = width
+        let previous = sidebarFitGeometry.previousAutomationWidth
+        sidebarFitGeometry.previousAutomationWidth = width
         let collapsed = MacSidebarSizing.nextAutoCollapse(
             currentlyCollapsed: sidebarAutoCollapsed,
             manuallyHidden: sidebarHidden,
@@ -469,19 +504,20 @@ struct MacRootView: View {
     /// Pane count and interface scale move the thresholds without a width
     /// change; a manually hidden sidebar still keeps its choice.
     private func reevaluateSidebarFit() {
-        guard windowContentWidth > 0 else { return }
+        let width = sidebarFitGeometry.windowWidth
+        guard width > 0 else { return }
         let collapsed = MacSidebarSizing.fitAfterLayoutChange(
             currentlyCollapsed: sidebarAutoCollapsed,
             manuallyHidden: sidebarHidden,
-            width: windowContentWidth,
+            width: width,
             collapseAt: sidebarCollapseWidth,
             expandAt: sidebarExpandWidth
         )
-        lastAutomationWidth = windowContentWidth
+        sidebarFitGeometry.previousAutomationWidth = width
         guard collapsed != sidebarAutoCollapsed else { return }
         sidebarAutoCollapsed = collapsed
         #if DEBUG
-        debugTrace("sidebar fit after layout width=\(Int(windowContentWidth)) collapse=\(Int(sidebarCollapseWidth)) expand=\(Int(sidebarExpandWidth)) auto=\(collapsed) manualHidden=\(sidebarHidden)")
+        debugTrace("sidebar fit after layout width=\(Int(width)) collapse=\(Int(sidebarCollapseWidth)) expand=\(Int(sidebarExpandWidth)) auto=\(collapsed) manualHidden=\(sidebarHidden)")
         #endif
     }
 
@@ -861,6 +897,10 @@ enum MacInspection {
     static func apply(feed: HostSessionFeed, workspace: MacWorkspace) {
         let arguments = ProcessInfo.processInfo.arguments
         let sessions = feed.listStore.windowSessions
+        if arguments.contains("-CorralInspectSidebarResize"), arguments.contains("-CorralInspectConversation") {
+            Task { await mountResizeFixture(feed: feed, workspace: workspace, arguments: arguments) }
+            return
+        }
         if arguments.contains("-CorralInspectPreferredOpen") {
             // The native sidebar selects its first row when the list arrives, so
             // this open waits for that and starts from an empty workspace: the
@@ -881,13 +921,26 @@ enum MacInspection {
                 .split(separator: ",").map(String.init)
             let keys = requested.isEmpty ? Array(sessions.prefix(1).map(\.key)) : requested
             guard let first = keys.first else { return }
-            workspace.open(first, sessions: sessions)
-            for key in keys.dropFirst() {
-                workspace.addPane(key, project: feed.listStore.session(for: key)?.cwd ?? "")
+            if arguments.contains("-CorralInspectTerminal"),
+               arguments.contains("-CorralInspectTerminalFirst"), keys.count > 1, let live = keys.last {
+                // A hosted (live) session only opens through the click path; a
+                // fresh split slot accepts listed history. Inspect a chat pane
+                // beside a running agent terminal in that order.
+                workspace.open(live, sessions: sessions)
+                for key in keys.dropLast() {
+                    workspace.addPane(key, project: feed.listStore.session(for: key)?.cwd ?? "")
+                }
+            } else {
+                workspace.open(first, sessions: sessions)
+                for key in keys.dropFirst() {
+                    workspace.addPane(key, project: feed.listStore.session(for: key)?.cwd ?? "")
+                }
             }
             if arguments.contains("-CorralInspectTerminal") {
                 // The last pane switches to the terminal view; the others stay chat.
                 if let last = keys.last { workspace.setMode(.terminal, for: last) }
+            } else if arguments.contains("-CorralInspectChat") {
+                for key in keys { workspace.setMode(.chat, for: key) }
             }
             workspace.focus(first)
             if arguments.contains("-CorralInspectAddPaneSession"),
@@ -909,6 +962,30 @@ enum MacInspection {
             for key in workspace.paneKeys { workspace.setPromptsCardOpen(false, for: key) }
         }
         Task { await MacPaneHeaderInspection.run(workspace: workspace) }
+    }
+
+    /// Fixed native-divider workloads wait for host metadata so the same-
+    /// project rule sees real projects, not empty placeholders during pairing.
+    /// Restore only local panes; do not create or focus a shared host group.
+    private static func mountResizeFixture(feed: HostSessionFeed, workspace: MacWorkspace,
+                                           arguments: [String]) async {
+        let keys = (ProcessInfo.processInfo.environment["CORRAL_INSPECTION_SESSION_KEY"] ?? "")
+            .split(separator: ",").map(String.init)
+        guard !keys.isEmpty else { return }
+        for _ in 0..<120 {
+            guard !Task.isCancelled, workspace.feed === feed else { return }
+            if keys.allSatisfy({ feed.listStore.session(for: $0) != nil }) {
+                workspace.restorePanes(keys)
+                for key in keys {
+                    let terminal = arguments.contains("-CorralInspectTerminal") && key == keys.last
+                    workspace.setMode(terminal ? .terminal : .chat, for: key)
+                    if arguments.contains("-CorralInspectPromptsOpen") { workspace.setPromptsCardOpen(true, for: key) }
+                    if arguments.contains("-CorralInspectPromptsClosed") { workspace.setPromptsCardOpen(false, for: key) }
+                }
+                return
+            }
+            do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
+        }
     }
 }
 #endif

@@ -19,42 +19,53 @@ struct MacSidebarFilters: View {
     @Environment(\.controlActiveState) private var activeState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Space.sm * interfaceScale) {
-            MacFilterChoices {
-                MacQuickFilterButton(selected: quickFilter != .all, sidebar: true) {
-                    Text(LocalizedStringKey(quickFilter.titleKey))
-                    Text(verbatim: quickFilter.count(sessions: sessions).formatted()).monospacedDigit().opacity(0.75)
-                } action: { advanceQuickFilter() }
-                .fixedSize()
-                .accessibilityLabel(Text(LocalizedStringKey(quickFilter.titleKey)))
-                .accessibilityValue(Text(verbatim: quickFilter.count(sessions: sessions).formatted()))
-                .accessibilityIdentifier("corral.filter.attention")
-                Divider().interfaceFrame(width: 1, height: 16)
-                ForEach(SessionRuntimeFilter.ordered.filter { $0 != .all }, id: \.self) { runtime in
-                    MacQuickFilterButton(selected: runtimes.contains(runtime), sidebar: true, labelWidth: 20) {
-                        if let logo = Palette.runtimeLogoName(runtime.rawValue) {
-                            Image(logo)
-                                .resizable()
-                                .renderingMode(.original)
-                                .scaledToFit()
-                                .interfaceFrame(width: 18, height: 18)
-                                // All assistant logos ship as monochrome light/dark
-                                // pairs; the flipped scheme picks the contrasting
-                                // variant on the accent fill. No per-assistant cases.
-                                .environment(\.colorScheme, logoScheme(selected: runtimes.contains(runtime)))
+        let activeRuntimes = SessionRuntimeFilter.ordered.filter { $0 != .all }
+        VStack(alignment: .leading, spacing: 6 * interfaceScale) {
+            MacFilterScrollView { viewportWidth in
+                AdaptiveFilterRowLayout(
+                    viewportWidth: viewportWidth,
+                    dividerIndex: 1,
+                    dividerGap: 2.5 * interfaceScale,
+                    itemGap: 2.5 * interfaceScale,
+                    minItemWidth: 23 * interfaceScale,
+                    maxItemWidth: 42 * interfaceScale
+                ) {
+                    MacQuickFilterButton(selected: quickFilter != .all, sidebar: true) {
+                        Text(LocalizedStringKey(quickFilter.titleKey))
+                        Text(verbatim: quickFilter.count(sessions: sessions).formatted()).monospacedDigit().opacity(0.75)
+                    } action: { advanceQuickFilter() }
+                    .fixedSize()
+                    .accessibilityLabel(Text(LocalizedStringKey(quickFilter.titleKey)))
+                    .accessibilityValue(Text(verbatim: quickFilter.count(sessions: sessions).formatted()))
+                    .accessibilityIdentifier("corral.filter.attention")
+                    // HStack gives SwiftUI Divider its vertical-hairline orientation inside a custom Layout.
+                    HStack(spacing: 0) { Divider() }.interfaceFrame(width: 1, height: 16)
+                    ForEach(activeRuntimes, id: \.self) { runtime in
+                        MacQuickFilterButton(selected: runtimes.contains(runtime), sidebar: true, flexibleWidth: true, labelWidth: 18) {
+                            if let logo = Palette.runtimeLogoName(runtime.rawValue) {
+                                Image(logo)
+                                    .resizable()
+                                    .renderingMode(.original)
+                                    .scaledToFit()
+                                    .interfaceFrame(width: 17, height: 17)
+                                    // All assistant logos ship as monochrome light/dark
+                                    // pairs; the flipped scheme picks the contrasting
+                                    // variant on the accent fill. No per-assistant cases.
+                                    .environment(\.colorScheme, logoScheme(selected: runtimes.contains(runtime)))
+                            }
+                        } action: {
+                            SessionListFiltering.toggle(runtime, all: .all, in: &runtimes)
                         }
-                    } action: {
-                        SessionListFiltering.toggle(runtime, all: .all, in: &runtimes)
+                        .accessibilityLabel(Text(verbatim: Palette.runtimeDisplayName(runtime.rawValue)))
+                        .help(Text(verbatim: Palette.runtimeDisplayName(runtime.rawValue)))
+                        .accessibilityIdentifier("corral.filter.runtime." + runtime.rawValue)
                     }
-                    .accessibilityLabel(Text(verbatim: Palette.runtimeDisplayName(runtime.rawValue)))
-                    .help(Text(verbatim: Palette.runtimeDisplayName(runtime.rawValue)))
-                    .accessibilityIdentifier("corral.filter.runtime." + runtime.rawValue)
                 }
             }
             .accessibilityLabel(Text("sessions.filter.runtime"))
 
-            HStack(spacing: 6 * interfaceScale) {
-                MacFilterChoices {
+            HStack(spacing: Space.xs * interfaceScale) {
+                MacFilterChoices(spacing: Space.xs * interfaceScale) {
                     ForEach(projectRowOptions, id: \.path) { option in projectButton(option) }
                 }
                 MacQuickFilterButton(selected: !projects.isEmpty, sidebar: true) {
@@ -193,8 +204,10 @@ struct MacQuickFilterButton<Content: View>: View {
     @Environment(\.controlActiveState) private var activeState
     @Environment(\.interfaceScale) private var interfaceScale
     @State private var labelContentWidth: CGFloat = 0
+    @State private var usesCapsuleShape = false
     let selected: Bool
     var sidebar = false
+    var flexibleWidth = false
     var labelWidth: CGFloat? = nil
     @ViewBuilder let content: () -> Content
     let action: () -> Void
@@ -209,17 +222,31 @@ struct MacQuickFilterButton<Content: View>: View {
                 button.buttonStyle(.bordered)
             }
         }
-        .buttonBorderShape(.capsule)
+        // Native AppKit `.borderedProminent .capsule` enforces a 27-pt floor; switch
+        // smoothly to `.circle` below 27 pt so narrow sidebars stay unclipped.
+        .buttonBorderShape(flexibleWidth && !usesCapsuleShape ? .circle : .capsule)
         .controlSize(.small)
         .tint(Palette.accent)
         // A borderless native button has less intrinsic padding. Reserve the
         // bordered button's footprint so a selection never shifts its peers.
-        .frame(width: sidebar && labelContentWidth > 0 ? labelContentWidth + 20 * interfaceScale : nil)
-        .interfaceFrame(height: sidebar ? MacSidebarMetrics.sidebarFilterHeight : MacSidebarMetrics.filterHeight)
+        .frame(width: flexibleWidth ? nil : reservedSidebarWidth)
+        .frame(maxWidth: flexibleWidth ? .infinity : nil)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+            if flexibleWidth { usesCapsuleShape = width >= 26.8 * interfaceScale }
+        }
+        .frame(minHeight: (sidebar ? MacSidebarMetrics.sidebarFilterHeight : MacSidebarMetrics.filterHeight) * interfaceScale)
         .accessibilityAddTraits(selected ? .isSelected : [])
         #if DEBUG
         .environment(\.controlActiveState, InspectionLaunchOptions.forcesKeyWindowControls ? .key : activeState)
         #endif
+    }
+
+    private var reservedSidebarWidth: CGFloat? {
+        guard sidebar else { return nil }
+        let contentWidth = labelWidth.map { $0 * interfaceScale } ?? labelContentWidth
+        guard contentWidth > 0 else { return nil }
+        // `.controlSize(.small)` capsule bezel adds ~20 pt independent of interfaceScale.
+        return contentWidth + 20
     }
 
     /// On the accent fill the on-accent colour; on the muted inactive fill primary.
@@ -233,32 +260,37 @@ struct MacQuickFilterButton<Content: View>: View {
 
     private var button: some View {
         Button(action: action) {
-            HStack(spacing: Space.xs) { content() }
-                .frame(width: labelWidth.map { $0 * interfaceScale })
+            HStack(spacing: flexibleWidth ? 0 : (sidebar ? 3 : Space.xs)) { content() }
+                .frame(
+                    minWidth: flexibleWidth ? nil : labelWidth.map { $0 * interfaceScale },
+                    maxWidth: flexibleWidth ? .infinity : nil
+                )
                 .interfaceFont(sidebar
                     ? .system(size: 13, weight: selected ? .semibold : .medium)
                     : .callout.weight(selected ? .semibold : .medium))
                 .foregroundStyle(labelColor)
                 .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
+                .fixedSize(horizontal: !flexibleWidth, vertical: false)
+                .contentShape(Rectangle())
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
-                    if sidebar { labelContentWidth = width }
+                    if sidebar && labelWidth == nil && !flexibleWidth { labelContentWidth = width }
                 }
         }
     }
 }
 
-/// Keep choices on one line and reveal overflow without a second picker step.
-struct MacFilterChoices<Content: View>: View {
+/// Edge-faded horizontal scroller exposing the live viewport width so adaptive
+/// rows can distribute extra space rather than stranding trailing margin.
+private struct MacFilterScrollView<Content: View>: View {
     @Namespace private var coordinateSpace
     @State private var contentFrame: CGRect = .zero
     @State private var viewportWidth: CGFloat = 0
-    @ViewBuilder let content: () -> Content
+    @ViewBuilder let content: (CGFloat) -> Content
 
     var body: some View {
         let space = coordinateSpace
         return ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) { content() }
+            content(viewportWidth)
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(space)) } action: {
                     contentFrame = $0
                 }
@@ -275,6 +307,23 @@ struct MacFilterChoices<Content: View>: View {
             }
         }
         .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// Keep choices on one line and reveal overflow without a second picker step.
+struct MacFilterChoices<Content: View>: View {
+    let spacing: CGFloat
+    @ViewBuilder let content: () -> Content
+
+    init(spacing: CGFloat = 6, @ViewBuilder content: @escaping () -> Content) {
+        self.spacing = spacing
+        self.content = content
+    }
+
+    var body: some View {
+        MacFilterScrollView { _ in
+            HStack(spacing: spacing) { content() }
+        }
     }
 }
 

@@ -28,7 +28,7 @@ import AppKit
         for _ in 0..<80 {
             if keys.allSatisfy({ key in
                 guard let root = workspace.paneSurfaces.existingEntry(for: key)?.view else { return false }
-                return root.window != nil && MacComposerInputAnchor.field(in: root) != nil
+                return root.window != nil && MacComposerInputAnchor.focusableInput(in: root) != nil
                     && descendants(root).contains { view in
                         guard let text = view as? NSTextView else { return false }
                         return !text.isEditable && text.isSelectable && !text.visibleRect.isEmpty && !text.string.isEmpty
@@ -39,7 +39,7 @@ import AppKit
         for (index, key) in keys.enumerated() {
             guard let root = workspace.paneSurfaces.existingEntry(for: key)?.view,
                   let window = root.window,
-                  let field = MacComposerInputAnchor.field(in: root),
+                  MacComposerInputAnchor.focusableInput(in: root) != nil,
                   let observer = descendants(window.contentView).compactMap({ $0 as? MacPaneInteraction.EventView })
                     .first(where: { $0.inputRoot?() === root }) else {
                 checks["pane\(index + 1)Mounted"] = false
@@ -60,7 +60,7 @@ import AppKit
                 checks["pane\(index + 1)-\(region)Activation"] = workspace.focusedKey == key
             }
             try? await Task.sleep(for: .milliseconds(300))
-            let saved = field.stringValue
+            let saved = MacComposerInputAnchor.currentText(in: root) ?? ""
             let text = descendants(root).compactMap { $0 as? NSTextView }
                 .first { !$0.isEditable && $0.isSelectable && !$0.visibleRect.isEmpty && !$0.string.isEmpty }
             guard let text else { checks["pane\(index + 1)Selection"] = false; continue }
@@ -73,13 +73,14 @@ import AppKit
                 NSApp.sendEvent(event)
             }
             try? await Task.sleep(for: .milliseconds(300))
-            checks["pane\(index + 1)SelectionToTyping"] = field.stringValue != saved && field.stringValue.contains("x")
+            let afterTyping = MacComposerInputAnchor.currentText(in: root) ?? ""
+            checks["pane\(index + 1)SelectionToTyping"] = afterTyping != saved && afterTyping.contains("x")
             checks["pane\(index + 1)ComposerResponder"] = (window.firstResponder as? NSTextView)?.isEditable == true
             if let editor = window.firstResponder as? NSTextView, editor.isEditable {
                 editor.insertText(saved, replacementRange: NSRange(location: 0, length: (editor.string as NSString).length))
             }
             text.setSelectedRange(range)
-            checks["pane\(index + 1)DraftRestored"] = field.stringValue == saved
+            checks["pane\(index + 1)DraftRestored"] = MacComposerInputAnchor.currentText(in: root) == saved
         }
         write(["checks": checks, "keys": keys, "focused": workspace.focusedKey ?? "",
                "windowID": windowID, "holding": true])

@@ -54,6 +54,7 @@ struct CorralMacApp: App {
             MacRootView()
                 .modifier(MacZoomScope(zoom: zoom))
                 .onAppear { MacNotifications.shared.configure(model: appModel) }
+                .task { MacCLISync.shared.syncOnLaunch() }
                 .environment(appModel)
                 .environment(commands)
                 .tint(Palette.accent)

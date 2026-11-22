@@ -259,8 +259,9 @@ struct MacConversationTable: NSViewRepresentable {
         private var heights = MacConversationRowHeights()
         private var cells: [RowCell] = []
         private let measurer = NSHostingController(rootView: AnyView(EmptyView()))
-        /// Width the current row heights were measured for.
+        /// Effective content width the current row heights were measured for.
         private var measuredWidth: CGFloat = 0
+        private static let rowHorizontalPadding = Space.base
         private var needsRemeasure = false
         /// Offscreen rows still measured at an older width, drained in bounded
         /// batches once a resize stops. Measuring every row on every width step
@@ -271,8 +272,7 @@ struct MacConversationTable: NSViewRepresentable {
         private var reflowTask: Task<Void, Never>?
         /// Bumped on every width change so a running sweep abandons its work.
         private var reflowGeneration = 0
-        /// Rows re-measured before, beside and after the viewport on one width change.
-        private static let reflowMarginRows = 6
+        private var measuringViewport = false
         /// Rows per deferred batch; each costs one hosting measurement (~1.2 ms).
         private static let reflowBatchRows = 6
 
@@ -365,6 +365,10 @@ struct MacConversationTable: NSViewRepresentable {
             NotificationCenter.default.removeObserver(self, name: NSTextView.didChangeSelectionNotification,
                                                       object: nil)
             scroll?.contentView.postsBoundsChangedNotifications = false
+            measurer.rootView = AnyView(EmptyView())
+            rows.removeAll()
+            indexByID.removeAll()
+            rowContent = nil
             table?.coordinator = nil
             scroll?.coordinator = nil
         }
@@ -467,10 +471,17 @@ struct MacConversationTable: NSViewRepresentable {
             return rowWidth > 1
         }
 
-        /// The single column spans the clip view; rows are measured and laid
-        /// out at exactly this width.
+        /// The single native column spans the clip view, even when its row
+        /// content is centered in a narrower readable column.
         private var rowWidth: CGFloat {
             table?.tableColumns.first?.width ?? 0
+        }
+
+        private var measurementWidth: CGFloat { measurementWidth(for: rowWidth) }
+
+        private func measurementWidth(for columnWidth: CGFloat) -> CGFloat {
+            guard let readableWidth = ChatLayout.readableWidth else { return columnWidth }
+            return min(columnWidth, readableWidth * environment.interfaceScale + 2 * Self.rowHorizontalPadding)
         }
 
         func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
@@ -478,7 +489,7 @@ struct MacConversationTable: NSViewRepresentable {
         func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
             guard rows.indices.contains(row) else { return 1 }
             let item = rows[row]
-            let width = rowWidth
+            let width = measurementWidth
             #if DEBUG
             MacConversationTableCounters.heightQueries &+= 1
             #endif
@@ -518,20 +529,27 @@ struct MacConversationTable: NSViewRepresentable {
         }
 
         func tableWillLayout() {
-            guard let table, canMeasure, let scroll else { return }
+            guard let table, canMeasure, let scroll, !measuringViewport else { return }
             defer { scheduleHistoryCheck() }
             if abs(table.frame.width - scroll.contentView.bounds.width) > 0.25 {
                 table.sizeLastColumnToFit()
             }
-            let width = rowWidth
-            guard needsRemeasure || abs(width - measuredWidth) > 0.25 else { return }
-            // The first pass and short conversations keep the exact, fully
-            // measured table: opening a conversation must never show rows at
-            // estimated heights (mac-chat-blank-until-scroll).
+            let width = measurementWidth
+            guard needsRemeasure || abs(width - measuredWidth) > 0.25 else {
+                // Scrolling before the settle sweep can expose previously
+                // offscreen rows. Bring them current before native tiling.
+                if !reflowBacklog.isEmpty {
+                    let stale = IndexSet(visibleRowIndexes().filter { needsHeight(at: $0, width: width) })
+                    measureViewport(stale)
+                }
+                return
+            }
+            // Opening a conversation must never use estimated heights. Once
+            // mounted, only rows that can be seen need measuring on each step.
             let firstPass = measuredWidth <= 1
             needsRemeasure = false
             measuredWidth = width
-            guard !firstPass, rows.count > 24 else {
+            guard !firstPass else {
                 reflowBacklog.removeAll()
                 reflowGeneration &+= 1
                 reflowTask?.cancel()
@@ -561,49 +579,63 @@ struct MacConversationTable: NSViewRepresentable {
         /// A text-scale change reuses this path: widths are unchanged but the
         /// full height keys are stale, so the same viewport-then-sweep
         /// scheduling applies.
-        /// - Returns: the synchronously re-measured row range, or nil when
-        ///   there was no realized viewport and the exact full pass ran instead.
+        /// - Returns: whether there was a visible range to reflow.
         @discardableResult
-        private func reflowViewportFirst() -> Range<Int>? {
-            guard let table, !rows.isEmpty else { return nil }
+        private func reflowViewportFirst() -> Bool {
+            guard table != nil, !rows.isEmpty else { return false }
             reflowGeneration &+= 1
             reflowTask?.cancel()
             reflowTask = nil
-            let anchor = followsLatest ? nil : currentAnchor()
-            let range = table.rows(in: table.visibleRect)
-            guard range.location != NSNotFound, range.length > 0 else {
+            let visible = visibleRowIndexes()
+            guard !visible.isEmpty else {
                 // No realized viewport (hidden or mid-rebuild pane): fall back to
                 // the exact pass rather than leaving rows at a stale width.
                 reflowBacklog.removeAll()
                 measureAllRows()
-                return nil
+                return false
             }
-            let low = max(0, range.location - Self.reflowMarginRows)
-            let high = min(rows.count, max(low + range.length, NSMaxRange(range) + Self.reflowMarginRows))
-            withoutAnimation {
-                table.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: low..<high))
-            }
-            restore(anchor)
-            reflowBacklog = (0..<rows.count).reversed().compactMap { index -> String? in
-                guard index >= high || index < low else { return nil }
-                let row = rows[index]
-                // Staleness is the whole height key, not just the width: a
-                // text-scale change keeps every width but invalidates every
-                // height, and a row left out of the backlog would keep the old
-                // scale forever. Only real layout is correct (wrapping is
-                // nonlinear in scale), so stale rows re-measure in the sweep.
-                guard let content = contentKey(for: row, isFirst: index == 0) else { return row.id }
-                let expected = HeightKey(content: content, width: measuredWidth)
-                return heights.measured[row.id]?.key == expected ? nil : row.id
+            let measured = measureViewport(visible)
+            reflowBacklog = rows.indices.reversed().compactMap { index in
+                needsHeight(at: index, width: measuredWidth) ? rows[index].id : nil
             }
             #if DEBUG
             MacConversationTableCounters.reflows &+= 1
-            MacConversationTableCounters.reflowLow = low
-            MacConversationTableCounters.reflowHigh = high
+            MacConversationTableCounters.reflowLow = measured.first ?? 0
+            MacConversationTableCounters.reflowHigh = (measured.last ?? -1) + 1
             MacConversationTableCounters.deferredRemeasures &+= reflowBacklog.count
             #endif
             scheduleReflowSweep()
-            return low..<high
+            return true
+        }
+
+        private func needsHeight(at index: Int, width: CGFloat) -> Bool {
+            let row = rows[index]
+            guard let cached = heights.measured[row.id] else { return true }
+            // A width mismatch already settles staleness, and the backlog scan
+            // over every row must not build a full content key per row per step.
+            if abs(cached.key.width - width) > 0.25 { return true }
+            guard let content = contentKey(for: row, isFirst: index == 0) else { return true }
+            // Staleness includes style and content; zoom can leave the width unchanged.
+            return cached.key != HeightKey(content: content, width: width)
+        }
+
+        @discardableResult
+        private func measureViewport(_ indexes: IndexSet) -> IndexSet {
+            guard let table, !indexes.isEmpty else { return [] }
+            measuringViewport = true
+            defer { measuringViewport = false }
+            let anchor = followsLatest ? nil : currentAnchor()
+            var visible = indexes
+            var measured = IndexSet()
+            while !visible.isEmpty {
+                withoutAnimation { table.noteHeightOfRows(withIndexesChanged: visible) }
+                restore(anchor)
+                measured.formUnion(visible)
+                // Widening can reveal more rows after heights shrink. Measure
+                // them too, without taxing every step for offscreen neighbors.
+                visible = visibleRowIndexes().subtracting(measured)
+            }
+            return measured
         }
 
         /// Pure style/text-scale change over unchanged row ids: rewrap the
@@ -613,7 +645,11 @@ struct MacConversationTable: NSViewRepresentable {
         /// the viewport range are already exact, which leaves only the few
         /// realized rows outside it to be measured here.
         private func reflowRenderChange() {
-            guard let table, reflowViewportFirst() != nil else { return }
+            guard let table else { return }
+            // Interface zoom moves the readable cap even if the native column
+            // stays the same width. Use that new width for the deferred sweep.
+            if canMeasure, measuredWidth > 1 { measuredWidth = measurementWidth }
+            guard reflowViewportFirst() else { return }
             var realized = IndexSet()
             table.enumerateAvailableRowViews { _, row in realized.insert(row) }
             guard !realized.isEmpty else { return }
@@ -642,7 +678,7 @@ struct MacConversationTable: NSViewRepresentable {
                 return
             }
             while !reflowBacklog.isEmpty, generation == reflowGeneration {
-                guard abs(rowWidth - measuredWidth) <= 0.25 else {
+                guard abs(measurementWidth - measuredWidth) <= 0.25 else {
                     // The reader changed the width again; that pass owns the rewrite.
                     reflowBacklog.removeAll()
                     return
@@ -653,7 +689,8 @@ struct MacConversationTable: NSViewRepresentable {
                 let count = min(Self.reflowBatchRows, reflowBacklog.count)
                 let chunk = reflowBacklog.suffix(count)
                 reflowBacklog.removeLast(count)
-                let indexes = IndexSet(chunk.compactMap { indexByID[$0] })
+                let indexes = IndexSet(chunk.compactMap { indexByID[$0] }
+                    .filter { needsHeight(at: $0, width: measuredWidth) })
                 guard !indexes.isEmpty else { continue }
                 // The table owns its row-height cache, so it must be the one to
                 // invalidate: handing it these indexes makes it re-ask this
@@ -677,7 +714,7 @@ struct MacConversationTable: NSViewRepresentable {
             // Reports from a cell still showing older content are not news.
             guard table != nil, abs(width - rowWidth) <= 0.5,
                   let index = indexByID[id], let measured = heights.measured[id],
-                  measured.key.content == content, abs(measured.key.width - width) <= 0.5,
+                  measured.key.content == content, abs(measured.key.width - measurementWidth(for: width)) <= 0.5,
                   abs(measured.height - ceil(height)) > 0.5 else { return }
             heights.measured[id]?.height = ceil(height)
             #if DEBUG
@@ -756,7 +793,7 @@ struct MacConversationTable: NSViewRepresentable {
                 .chatReadableColumn()
                 // The lazy stack's spacing and content margins, now per row.
                 .interfacePadding(.top, isFirst ? 0 : Space.xs)
-                .padding(.horizontal, Space.base)
+                .padding(.horizontal, Self.rowHorizontalPadding)
                 .environment(\.macRowMeasurement, measuring)
             guard !measuring else {
                 return AnyView(content.modifier(InheritedEnvironment(environment: environment)))
@@ -943,7 +980,8 @@ struct MacConversationTable: NSViewRepresentable {
             Self.w1CloseBatch()
             #endif
             publishInspection()
-            guard !adjustingPosition else { return }
+            guard !adjustingPosition, !measuringViewport else { return }
+            if !reflowBacklog.isEmpty { table?.needsLayout = true }
             if isReaderScrolling {
                 updateFollowFromViewport()
                 acknowledgeRead(force: false)
@@ -1181,10 +1219,13 @@ struct MacConversationScroller: View {
         )
         .ignoresSafeArea(.container, edges: .vertical)
         .onGeometryChange(for: EdgeInsets.self) { $0.safeAreaInsets } action: { insets = $0 }
-        .overlay(alignment: .bottomTrailing) {
+        .overlay(alignment: .bottom) {
             if !followsLatest {
-                ChatJumpToLatestButton { latestBump += 1 }
-                    .padding(.bottom, insets.bottom)
+                HStack {
+                    Spacer(minLength: 0)
+                    ChatJumpToLatestButton { latestBump += 1 }
+                }
+                .chatReadableColumn()
             }
         }
     }

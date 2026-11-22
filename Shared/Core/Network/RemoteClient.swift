@@ -72,6 +72,8 @@ final class RemoteClient: NSObject {
     var supportsMediaImage = false
     /// Host can download files linked by messages (`media.file`).
     var supportsMediaFile = false
+    /// Host can save and paste arbitrary pasted files (`input.file`).
+    var supportsInputFile = false
 
     /// 距最近一次任一平面成功收包（含 ping 的 pong）的秒数；尚未收包则为 nil。
     var lastReceiveAge: TimeInterval? {
@@ -134,6 +136,9 @@ final class RemoteClient: NSObject {
 
     let addressDiscovery: @Sendable (String) async -> [String]
     let devicePrivateKey: Data
+    /// Supplies the client's current terminal colours for `hello` and
+    /// session/shell launch RPCs so newly hosted panes know light/dark at start.
+    var terminalThemeProvider: (@MainActor () -> TerminalTheme)?
     /// Identifies this app process to the host (see `WireProtocol.clientInstanceKey`).
     nonisolated static let clientInstanceID = UUID().uuidString
 
@@ -487,6 +492,7 @@ final class RemoteClient: NSObject {
         hostCapabilities = .empty
         supportsMediaImage = false
         supportsMediaFile = false
+        supportsInputFile = false
         state = .disconnected
         diagnose(.disconnected)
     }

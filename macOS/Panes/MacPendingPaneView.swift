@@ -22,7 +22,7 @@ struct MacPendingPaneView: View {
             Spacer(minLength: 0)
             HStack(spacing: 0) {
                 Text(verbatim: pending.title)
-                    .interfaceFont(.system(size: 15, weight: isFocused ? .semibold : .medium))
+                    .interfaceFont(.system(size: MacPaneHeader.titlePointSize, weight: isFocused ? .semibold : .medium))
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .foregroundStyle(isFocused ? Color.primary : Color.secondary)

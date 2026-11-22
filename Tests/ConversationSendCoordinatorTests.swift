@@ -482,6 +482,78 @@ final class ConversationSendCoordinatorTests: XCTestCase {
         XCTAssertEqual(display.haptics.map(\.haptic), [.committed, .warning])
         XCTAssertTrue(store.submittedAnswers.isEmpty)
     }
+
+    func testFileHostUnsupportedRestoresDraftWithoutStagingBubble() {
+        store.supportsInputFile = false
+        let file = StagedSendFile(id: UUID(), name: "spec.pdf", data: Data("%PDF".utf8), commandID: nil)
+        let plan = coordinator.beginComposerSend(
+            store: store,
+            display: display,
+            text: "review",
+            images: [],
+            files: [file],
+            isBusy: false,
+            isHostReady: true
+        )
+        XCTAssertNil(plan)
+        XCTAssertTrue(store.messages.isEmpty)
+        XCTAssertEqual(display.composerDraft, "review")
+        XCTAssertEqual(display.restoredFileBatches.first, [file])
+        XCTAssertEqual(display.errors.count, 1)
+    }
+
+    func testPartialFileFailureRestoresOnlyUnsentFileSuffix() async throws {
+        store.supportsCommandReceipts = true
+        store.supportsInputFile = true
+        store.sendFileErrors = [nil, URLError(.timedOut)]
+        let f1 = StagedSendFile(id: UUID(), name: "a.txt", data: Data("one".utf8), commandID: nil)
+        let f2 = StagedSendFile(id: UUID(), name: "b.txt", data: Data("two".utf8), commandID: nil)
+        let f3 = StagedSendFile(id: UUID(), name: "c.txt", data: Data("three".utf8), commandID: nil)
+
+        guard let plan = coordinator.beginComposerSend(
+            store: store,
+            display: display,
+            text: "files caption",
+            images: [],
+            files: [f1, f2, f3],
+            isBusy: false,
+            isHostReady: true
+        ) else { return XCTFail("begin must succeed") }
+
+        XCTAssertEqual(store.messages.first?.localFiles.map(\.name), ["a.txt", "b.txt", "c.txt"])
+        await coordinator.runComposerSend(plan, store: store, display: display)
+
+        let restored = try XCTUnwrap(display.restoredFileBatches.first)
+        XCTAssertEqual(restored.map(\.name), ["b.txt", "c.txt"])
+        XCTAssertEqual(restored.map(\.commandID), [plan.files[1].commandID, plan.files[2].commandID])
+        XCTAssertEqual(store.sentFiles.count, 2)
+        XCTAssertTrue(store.sentTexts.isEmpty)
+        XCTAssertEqual(display.composerDraft, "files caption")
+    }
+
+    func testMixedImagesFilesAndTextSendInOrder() async {
+        store.supportsCommandReceipts = true
+        store.supportsInputFile = true
+        let img = StagedSendImage(id: UUID(), base64: "QQ==", commandID: nil)
+        let file = StagedSendFile(id: UUID(), name: "notes.md", data: Data("# ok".utf8), commandID: nil)
+
+        guard let plan = coordinator.beginComposerSend(
+            store: store,
+            display: display,
+            text: "check both",
+            images: [img],
+            files: [file],
+            isBusy: false,
+            isHostReady: true
+        ) else { return XCTFail("begin must succeed") }
+
+        await coordinator.runComposerSend(plan, store: store, display: display)
+
+        XCTAssertEqual(store.orderedEvents, ["image:QQ==", "file:notes.md", "text:check both"])
+        XCTAssertTrue(display.restoredImageBatches.isEmpty)
+        XCTAssertTrue(display.restoredFileBatches.isEmpty)
+        XCTAssertEqual(display.clearedErrorCount, 1)
+    }
 }
 
 // MARK: - Fakes
@@ -490,6 +562,7 @@ final class ConversationSendCoordinatorTests: XCTestCase {
 @MainActor
 final class FakeSendStore: ConversationSendStore {
     var supportsCommandReceipts = false
+    var supportsInputFile = true
     var messages: [RichMessage] = []
     var prompts: [SessionPrompt] = []
     var questionSubmissionState: NativeQuestionSubmissionState?
@@ -499,9 +572,11 @@ final class FakeSendStore: ConversationSendStore {
     var appliedStatuses: [(commandID: String, status: String, detail: String?)] = []
     var sentTexts: [(text: String, commandID: String?)] = []
     var sentImages: [(base64: String, commandID: String?)] = []
+    var sentFiles: [(filename: String, data: Data, commandID: String?)] = []
     var orderedEvents: [String] = []
     var sendTextError: Error?
     var sendImageErrors: [Error?] = []
+    var sendFileErrors: [Error?] = []
     var questionError: Error?
     var submittedAnswers: [[NativeQuestionAnswer]] = []
 
@@ -529,12 +604,19 @@ final class FakeSendStore: ConversationSendStore {
         messages.first(where: { $0.seq == seq })?.delivery
     }
 
-    func enqueueLocalUser(_ text: String, commandID: String?, reusingSeq: Int?, images: [Data]) -> Int {
+    func enqueueLocalUser(
+        _ text: String,
+        commandID: String?,
+        reusingSeq: Int?,
+        images: [Data],
+        files: [LocalFileAttachment] = []
+    ) -> Int {
         if let reusingSeq, let index = messages.firstIndex(where: { $0.seq == reusingSeq && $0.delivery == .failed }) {
             messages[index].delivery = .pending
             messages[index].commandID = commandID
             messages[index].failureDetail = nil
             if !images.isEmpty { messages[index].localImageData = images }
+            if !files.isEmpty { messages[index].localFiles = files }
             return reusingSeq
         }
         let seq = nextLocalSeq
@@ -542,7 +624,7 @@ final class FakeSendStore: ConversationSendStore {
         messages.append(
             RichMessage(
                 seq: seq, role: "user", text: text, delivery: .pending,
-                commandID: commandID, localImageData: images
+                commandID: commandID, localImageData: images, localFiles: files
             )
         )
         return seq
@@ -599,6 +681,15 @@ final class FakeSendStore: ConversationSendStore {
         }
     }
 
+    func sendFile(filename: String, data: Data, commandID: String?, ownCommandIDs: [String]) async throws {
+        sentFiles.append((filename, data, commandID))
+        orderedEvents.append("file:\(filename)")
+        if !sendFileErrors.isEmpty {
+            let error = sendFileErrors.removeFirst()
+            if let error { throw error }
+        }
+    }
+
     func submitQuestion(requestID: String, answers: [NativeQuestionAnswer]) async {
         guard prompts.contains(where: { $0.requestID == requestID }) else {
             questionSubmissionState = .init(requestID: requestID, status: .stale(nil))
@@ -630,13 +721,15 @@ final class FakeSendDisplay: ConversationSendDisplay {
     var haptics: [(haptic: ConversationSendHaptic, operationID: UUID?)] = []
     var operationCount = 0
     var restoredImageBatches: [[StagedSendImage]] = []
+    var restoredFileBatches: [[StagedSendFile]] = []
     var questionPendingCount = 0
 
     var isIdle: Bool {
         sendingStates.isEmpty && haptics.isEmpty && errors.isEmpty
             && scrollCount == 0 && clearedErrorCount == 0
-            && restoredImageBatches.isEmpty && persistedDrafts.isEmpty
-            && clearedPersistedCount == 0 && questionPendingCount == 0
+            && restoredImageBatches.isEmpty && restoredFileBatches.isEmpty
+            && persistedDrafts.isEmpty && clearedPersistedCount == 0
+            && questionPendingCount == 0
     }
 
     func setSending(_ sending: Bool) { sendingStates.append(sending) }
@@ -655,5 +748,6 @@ final class FakeSendDisplay: ConversationSendDisplay {
         return UUID()
     }
     func restoreImages(_ images: [StagedSendImage]) { restoredImageBatches.append(images) }
+    func restoreFiles(_ files: [StagedSendFile]) { restoredFileBatches.append(files) }
     func showQuestionPending() { questionPendingCount += 1 }
 }

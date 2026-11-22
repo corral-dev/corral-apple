@@ -24,7 +24,7 @@ struct TerminalGrid: Equatable, Sendable {
 }
 
 /// The emulator's background and foreground as `#rrggbb`.
-struct TerminalTheme: Equatable, Sendable {
+nonisolated struct TerminalTheme: Equatable, Sendable {
     let background: String
     let foreground: String
 }

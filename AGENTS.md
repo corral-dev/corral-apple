@@ -114,10 +114,6 @@ Official Mac and iPhone releases run through the terminal repository's [release 
 | `NotificationService/` | Push decryption rewriting title/body |
 | `Tests/` | Crypto / pairing / frame-protocol unit tests |
 
-## Mac debug process ownership
-
-Before launching a newly built Corral Mac app for debugging or acceptance, terminate every existing Corral GUI app process, including installed Release and all DerivedData Debug copies. Match the Corral app executable path; do not terminate the CLI, remote host service or assistant sessions. Wait for the old app processes to exit before launching exactly one newest build. Verify the surviving PID, executable path, version/build and source commit before inspecting its window; stop and correct any mismatch. Coordinate the restart so concurrent tasks never launch competing app copies. At delivery, close Debug copies and leave only the latest installed Release running.
-
 ## Acceptance checklist (physical device; simulator never required)
 
 - [ ] Unsigned generic-device build passes (compilation proof without any signing identity)

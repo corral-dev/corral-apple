@@ -39,7 +39,7 @@ struct SessionDetailView: View {
         externalScrollToLatestRequest: Int = 0,
         onDidCreateSession: ((SessionSummary) -> Void)? = nil,
         onPin: (() -> Void)? = nil,
-        onStop: (() -> Void)? = nil,
+        onStop: (() async throws -> Void)? = nil,
         onDelete: ((SessionSummary) -> Void)? = nil
     ) {
         self.injectedStore = injectedStore
@@ -78,7 +78,7 @@ struct SessionDetailView: View {
     /// 复制/接力成功后的新会话：列表页负责落盘并推进，详情页只上报。
     var onDidCreateSession: ((SessionSummary) -> Void)? = nil
     var onPin: (() -> Void)? = nil
-    var onStop: (() -> Void)? = nil
+    var onStop: (() async throws -> Void)? = nil
     var onDelete: ((SessionSummary) -> Void)? = nil
     @State private var pane: SessionDetailMode = .chat
     @State private var transientNotice: TransientNotice?
@@ -87,12 +87,23 @@ struct SessionDetailView: View {
     private enum TransientNotice: Equatable {
         case exporting
         case exported
+        case stopping
+        case stopped
         case copiedPath
+
+        var isBusy: Bool {
+            switch self {
+            case .exporting, .stopping: true
+            case .exported, .stopped, .copiedPath: false
+            }
+        }
 
         var titleKey: LocalizedStringKey {
             switch self {
             case .exporting: "mac.session.exporting"
             case .exported: "mac.session.exported"
+            case .stopping: "sessions.status.stopping"
+            case .stopped: "sessions.status.stopped"
             case .copiedPath: "session.workspace.copied"
             }
         }
@@ -103,6 +114,7 @@ struct SessionDetailView: View {
     @State private var visitedTerminal = false
     @State private var draft = ""
     @State private var draftAttachments: [DraftImageAttachment] = []
+    @State private var draftFiles: [DraftFileAttachment] = []
     @State private var isSending = false
     @State private var isActionBusy = false
     @State private var isInterrupting = false
@@ -208,7 +220,7 @@ struct SessionDetailView: View {
             if ProcessInfo.processInfo.arguments.contains("-CorralInspectForkSend"),
                ProcessInfo.processInfo.environment["CORRAL_INSPECTION_SESSION_KEY"] == sessionKey {
                 draft = "Reply exactly FORK_SYNC_OK."
-                submitDraft(draft, [])
+                submitDraft(draft, [], [])
             }
 #endif
             if ProcessInfo.processInfo.arguments.contains("-CorralInspectLoadEarlier"),
@@ -297,7 +309,7 @@ struct SessionDetailView: View {
             onCopy: { Task { await copySession() } },
             onHandoff: { target in Task { await handoffSession(to: target) } },
             onExport: { Task { await exportSession() } },
-            onStop: onStop,
+            onStop: onStop != nil ? { Task { await stopSession() } } : nil,
             onCopyPath: showCopiedPathNotice,
             onDelete: onDelete != nil ? { onDelete?(session) } : nil,
             onOpenTerminal: openTerminalAction,
@@ -478,7 +490,7 @@ struct SessionDetailView: View {
             .overlay(alignment: .bottom) {
                 if let transientNotice {
                     HStack(spacing: 6) {
-                        if transientNotice == .exporting {
+                        if transientNotice.isBusy {
                             ProgressView().controlSize(.small)
                         } else {
                             Image(systemName: "checkmark.circle.fill")
@@ -542,21 +554,28 @@ struct SessionDetailView: View {
                 MarkdownFileViewer(
                     presentation: presentation,
                     hostID: draftHostID,
+                    loader: fileLoader,
                     onRetry: { fileLoader?.retryMarkdown() },
                     onDismiss: { fileLoader?.dismissMarkdown() },
-                    onSystemPreview: { url in fileLoader?.quickLookURL = url }
+                    onSystemPreview: { url in fileLoader?.viewerQuickLookURL = url }
                 )
                 .environment(\.sessionTextScale, appModel.sessionTextSize.scale)
             }
             .overlay {
-                if let download = fileLoader?.nonMarkdownDownload, download.error == nil {
+                if let loader = fileLoader,
+                   !loader.isMarkdownReaderActive,
+                   let download = loader.nonMarkdownDownload,
+                   download.error == nil {
                     fileDownloadOverlay(download)
                 }
             }
             .alert(
                 "chat.file.unavailable.title",
                 isPresented: Binding(
-                    get: { fileLoader?.nonMarkdownDownload?.error != nil },
+                    get: {
+                        guard let loader = fileLoader, !loader.isMarkdownReaderActive else { return false }
+                        return loader.nonMarkdownDownload?.error != nil
+                    },
                     set: { if !$0 { fileLoader?.dismissNonMarkdown() } }
                 )
             ) {
@@ -708,6 +727,7 @@ struct SessionDetailView: View {
             ComposerBar(
                 text: $draft,
                 attachments: $draftAttachments,
+                fileAttachments: $draftFiles,
                 isBusy: isSending || isActionBusy || restartPhase == .restarting,
                 autoFocus: autoFocusComposer,
                 focusRequest: composerFocusRequest,
@@ -773,7 +793,7 @@ struct SessionDetailView: View {
             retryFailedMessage(failed)
         } else if (action == "send" || action == "rejectRetry"), let text = environment["CORRAL_INSPECTION_TEXT"], !text.isEmpty {
             draft = text
-            submitDraft(text, [])
+            submitDraft(text, [], [])
         } else if action == "interrupt" {
             await inspectInterrupt(text: environment["CORRAL_INSPECTION_TEXT"], environment: environment)
         } else { return }
@@ -867,7 +887,7 @@ struct SessionDetailView: View {
     private func inspectInterrupt(text: String?, environment: [String: String]) async {
         if let text, !text.isEmpty {
             draft = text
-            submitDraft(text, [])
+            submitDraft(text, [], [])
         }
         for _ in 0..<300 {
             guard !Task.isCancelled else { return }
@@ -992,6 +1012,24 @@ struct SessionDetailView: View {
         showTransientNotice(.copiedPath)
     }
 
+    private func stopSession() async {
+        guard !isActionBusy, let onStop else { return }
+        let operationID = hapticScope.beginOperation()
+        transientNoticeTask?.cancel()
+        transientNotice = .stopping
+        isActionBusy = true
+        defer { isActionBusy = false }
+        do {
+            try await onStop()
+            HapticFeedback.shared.emit(.committed, operationID: operationID, scope: hapticScope)
+            showTransientNotice(.stopped)
+        } catch {
+            if transientNotice == .stopping { transientNotice = nil }
+            HapticFeedback.shared.failure(error, operationID: operationID, scope: hapticScope)
+            showComposerError(SessionActionsMenu.failureMessage(for: error), feedback: nil)
+        }
+    }
+
     private func showTransientNotice(_ notice: TransientNotice) {
         transientNoticeTask?.cancel()
         transientNotice = notice
@@ -1007,12 +1045,12 @@ struct SessionDetailView: View {
     /// wiring: these wrappers only build the display bridge and run the plan.
     private let sendCoordinator = ConversationSendCoordinator()
 
-    private func submitDraft(_ text: String, _ images: [DraftImageAttachment]) {
-        sendComposerDraft(text: text, images: images)
+    private func submitDraft(_ text: String, _ images: [DraftImageAttachment], _ files: [DraftFileAttachment] = []) {
+        sendComposerDraft(text: text, images: images, files: files)
     }
 
     private func submitText(_ text: String) {
-        sendComposerDraft(text: text, images: [])
+        sendComposerDraft(text: text, images: [], files: [])
     }
 
     private func submitQuestion(_ requestID: String, answers: [NativeQuestionAnswer]) {
@@ -1022,7 +1060,7 @@ struct SessionDetailView: View {
             blockedQuestionRequestID = nil
         }
         let store: (any ConversationSendStore)? = conversationStore
-        let display = DetailSendDisplay(view: self, hapticScope: hapticScope, sentImages: [])
+        let display = DetailSendDisplay(view: self, hapticScope: hapticScope, sentImages: [], sentFiles: [])
         guard let plan = sendCoordinator.beginQuestionSubmit(
             requestID: requestID,
             answers: answers,
@@ -1036,18 +1074,22 @@ struct SessionDetailView: View {
         }
     }
 
-    /// Stage-aware send: images first (already cleared from the composer), then optional text.
-    private func sendComposerDraft(text: String, images: [DraftImageAttachment]) {
-        let staged = images.map {
+    /// Stage-aware send: images & files first (already cleared from composer), then optional text.
+    private func sendComposerDraft(text: String, images: [DraftImageAttachment], files: [DraftFileAttachment] = []) {
+        let stagedImages = images.map {
             StagedSendImage(id: $0.id, base64: $0.base64, commandID: $0.commandID)
         }
+        let stagedFiles = files.map {
+            StagedSendFile(id: $0.id, name: $0.name, data: $0.data, commandID: $0.commandID)
+        }
         let store: (any ConversationSendStore)? = conversationStore
-        let display = DetailSendDisplay(view: self, hapticScope: hapticScope, sentImages: images)
+        let display = DetailSendDisplay(view: self, hapticScope: hapticScope, sentImages: images, sentFiles: files)
         guard let plan = sendCoordinator.beginComposerSend(
             store: store,
             display: display,
             text: text,
-            images: staged,
+            images: stagedImages,
+            files: stagedFiles,
             isBusy: isSending || isActionBusy,
             isHostReady: isHostReady
         ) else { return }
@@ -1059,6 +1101,11 @@ struct SessionDetailView: View {
     private func restoreAttachments(from images: [DraftImageAttachment]) {
         let restoringIDs = Set(images.map(\.id))
         draftAttachments = images + draftAttachments.filter { !restoringIDs.contains($0.id) }
+    }
+
+    private func restoreFileAttachments(from files: [DraftFileAttachment]) {
+        let restoringIDs = Set(files.map(\.id))
+        draftFiles = files + draftFiles.filter { !restoringIDs.contains($0.id) }
     }
 
     /// Shared send path. `reuseCommandID` keeps the same durable id on needsReview retry.
@@ -1111,11 +1158,18 @@ struct SessionDetailView: View {
         var view: SessionDetailView
         let hapticScope: HapticScope
         let sentImages: [DraftImageAttachment]
+        let sentFiles: [DraftFileAttachment]
 
-        init(view: SessionDetailView, hapticScope: HapticScope, sentImages: [DraftImageAttachment]) {
+        init(
+            view: SessionDetailView,
+            hapticScope: HapticScope,
+            sentImages: [DraftImageAttachment],
+            sentFiles: [DraftFileAttachment] = []
+        ) {
             self.view = view
             self.hapticScope = hapticScope
             self.sentImages = sentImages
+            self.sentFiles = sentFiles
         }
 
         var composerDraft: String {
@@ -1164,6 +1218,17 @@ struct SessionDetailView: View {
             view.restoreAttachments(from: images.compactMap { staged in
                 guard let preview = previews[staged.id] else { return nil }
                 var attachment = DraftImageAttachment(id: staged.id, base64: staged.base64, preview: preview)
+                attachment.commandID = staged.commandID
+                return attachment
+            })
+        }
+
+        func restoreFiles(_ files: [StagedSendFile]) {
+            let existingIDs = Dictionary(uniqueKeysWithValues: sentFiles.map { ($0.id, $0) })
+            view.restoreFileAttachments(from: files.map { staged in
+                var attachment = existingIDs[staged.id] ?? DraftFileAttachment(
+                    id: staged.id, name: staged.name, data: staged.data
+                )
                 attachment.commandID = staged.commandID
                 return attachment
             })

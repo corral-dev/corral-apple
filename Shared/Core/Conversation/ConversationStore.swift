@@ -206,6 +206,10 @@ final class ConversationStore {
         client?.supportsCommandReceipts == true
     }
 
+    var supportsInputFile: Bool {
+        client?.supportsInputFile == true
+    }
+
     var supportsToolDetail: Bool {
         client?.supportsToolDetail == true
     }
@@ -239,7 +243,7 @@ final class ConversationStore {
         restored.removeAll { message in
             message.isLocal
                 && ConversationMessageMerge.normalizedRole(message.role) == "user"
-                && !message.hasLocalImages
+                && !message.hasLocalAttachments
                 && ConversationMessageMerge.normalizedText(message.text) == "[image]"
         }
         // Re-apply the echo invariant the snapshot was written under: a
@@ -287,7 +291,8 @@ final class ConversationStore {
         _ text: String,
         commandID: String? = nil,
         reusingSeq: Int? = nil,
-        images: [Data] = []
+        images: [Data] = [],
+        files: [LocalFileAttachment] = []
     ) -> Int {
         if let reusingSeq, let index = messages.firstIndex(where: {
             $0.seq == reusingSeq && $0.isLocal && $0.delivery == .failed
@@ -301,12 +306,16 @@ final class ConversationStore {
             if !images.isEmpty {
                 messages[index].localImageData = images
             }
+            if !files.isEmpty {
+                messages[index].localFiles = files
+            }
             return messages[index].seq
         }
         let trimmed = ConversationMessageMerge.normalizedText(text)
         if let index = messages.lastIndex(where: { message in
             guard message.isLocal, message.role.lowercased() == "user" else { return false }
             guard message.localImageData.count == images.count else { return false }
+            guard message.localFiles == files else { return false }
             if let commandID, !commandID.isEmpty {
                 return message.commandID == commandID
                     || (message.delivery == .failed
@@ -336,7 +345,8 @@ final class ConversationStore {
                 timestamp: Date().timeIntervalSince1970,
                 commandID: commandID,
                 localAfterSeq: newestOfficialSeq,
-                localImageData: images
+                localImageData: images,
+                localFiles: files
             )
         )
         return seq
@@ -654,14 +664,78 @@ final class ConversationStore {
         guard let client else {
             throw RemoteClient.ConnectionError.notConnected
         }
+        let effectiveCommandID = commandID.flatMap { $0.isEmpty ? nil : $0 } ?? UUID().uuidString
         let params: [String: Any] = [
             "key": sessionKey,
             "data": base64,
-            "command_id": commandID.flatMap { $0.isEmpty ? nil : $0 } ?? UUID().uuidString,
+            "command_id": effectiveCommandID,
         ]
         let payload = try await client.call(WireProtocol.mInputImage, params: params)
-        if let commandID = params["command_id"] as? String,
-           let receipt = CommandStatusResponse.receipt(from: payload),
+        try settleInputReceipt(payload: payload, commandID: effectiveCommandID)
+    }
+
+    func sendFile(
+        filename: String,
+        data: Data,
+        commandID: String? = nil,
+        ownCommandIDs: [String] = []
+    ) async throws {
+        var own = ownCommandIDs
+        if let commandID { own.append(commandID) }
+        try await inOutboundOrder(ownCommandIDs: own) { [weak self] in
+            try await self?.deliverFile(filename: filename, data: data, commandID: commandID)
+        }
+    }
+
+    private func deliverFile(filename: String, data: Data, commandID: String?) async throws {
+        guard let client else {
+            throw RemoteClient.ConnectionError.notConnected
+        }
+        guard client.supportsInputFile else {
+            throw CommandDeliveryError.rejected(String(localized: "composer.file_host_unsupported"))
+        }
+        guard !data.isEmpty, data.count <= ComposerSendPolicy.maxFileAttachmentBytes else {
+            throw CommandDeliveryError.rejected(String(localized: "composer.file_too_large"))
+        }
+        let effectiveCommandID = commandID.flatMap { $0.isEmpty ? nil : $0 } ?? UUID().uuidString
+        let chunkSize = ComposerSendPolicy.fileChunkRawBytes
+        let chunkCount = max(1, (data.count + chunkSize - 1) / chunkSize)
+        if chunkCount == 1 {
+            let params: [String: Any] = [
+                "key": sessionKey,
+                "filename": filename,
+                "data": data.base64EncodedString(),
+                "command_id": effectiveCommandID,
+            ]
+            let payload = try await client.call(WireProtocol.mInputFile, params: params)
+            try settleInputReceipt(payload: payload, commandID: effectiveCommandID)
+            return
+        }
+
+        let uploadID = UUID().uuidString
+        var lastPayload: Any = [:]
+        for index in 0..<chunkCount {
+            let start = index * chunkSize
+            let end = min(data.count, start + chunkSize)
+            let chunk = data[start..<end]
+            var params: [String: Any] = [
+                "key": sessionKey,
+                "filename": filename,
+                "data": chunk.base64EncodedString(),
+                "upload_id": uploadID,
+                "chunk_index": index,
+                "chunk_count": chunkCount,
+            ]
+            if index == chunkCount - 1 {
+                params["command_id"] = effectiveCommandID
+            }
+            lastPayload = try await client.call(WireProtocol.mInputFile, params: params)
+        }
+        try settleInputReceipt(payload: lastPayload, commandID: effectiveCommandID)
+    }
+
+    private func settleInputReceipt(payload: Any, commandID: String) throws {
+        if let receipt = CommandStatusResponse.receipt(from: payload),
            let status = receipt.status {
             applyCommandStatus(commandID: commandID, status: status, failureDetail: receipt.detail)
             switch PendingCommandStore.delivery(fromHostStatus: status) {
@@ -671,7 +745,7 @@ final class ConversationStore {
                 throw CommandDeliveryError.unconfirmed(receipt.detail ?? String(localized: "chat.delivery.unknown"))
             default: break
             }
-        } else if !supportsCommandReceipts, let commandID = params["command_id"] as? String {
+        } else if !supportsCommandReceipts {
             // Legacy hosts never return a receipt: a successful RPC is delivery.
             // Settle here so the bubble does not stay pending forever.
             applyCommandStatus(commandID: commandID, status: "delivered", failureDetail: nil)

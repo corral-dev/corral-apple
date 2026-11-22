@@ -14,13 +14,14 @@ final class MacUpdater {
     private(set) var automaticallyDownloadsUpdates = true
     private(set) var allowsAutomaticUpdates = true
 
+    @ObservationIgnored private let delegateBridge = MacUpdaterDelegateBridge()
     @ObservationIgnored private let controller: SPUStandardUpdaterController
     @ObservationIgnored private var observations: [NSKeyValueObservation] = []
 
     private init() {
         // Same standard controller used by the existing MacKit/JotBox integration.
         controller = SPUStandardUpdaterController(
-            startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil
+            startingUpdater: true, updaterDelegate: delegateBridge, userDriverDelegate: nil
         )
         for keyPath in [\SPUUpdater.canCheckForUpdates,
                         \SPUUpdater.automaticallyChecksForUpdates,
@@ -54,6 +55,14 @@ final class MacUpdater {
         automaticallyChecksForUpdates = updater.automaticallyChecksForUpdates
         automaticallyDownloadsUpdates = updater.automaticallyDownloadsUpdates
         allowsAutomaticUpdates = updater.allowsAutomaticUpdates
+    }
+}
+
+@MainActor
+private final class MacUpdaterDelegateBridge: NSObject, SPUUpdaterDelegate {
+    func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: (any Error)?) {
+        guard error == nil, updateCheck == .updates else { return }
+        MacCLISync.shared.syncAfterSparkleCycle()
     }
 }
 #endif

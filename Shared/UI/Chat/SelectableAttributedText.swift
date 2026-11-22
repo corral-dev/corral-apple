@@ -187,6 +187,7 @@ private struct SelectableTextView: UIViewRepresentable {
         let view = EdgeFadeTextView(usingTextLayoutManager: false)
         view.delegate = context.coordinator
         view.backgroundColor = .clear
+        view.isOpaque = false
         view.isEditable = false
         view.isSelectable = true
         view.isScrollEnabled = false
@@ -306,6 +307,7 @@ private struct SelectableTextView: UIViewRepresentable {
     ) -> CGSize {
         let sizer = UITextView(usingTextLayoutManager: false)
         sizer.backgroundColor = .clear
+        sizer.isOpaque = false
         sizer.isEditable = false
         sizer.isSelectable = false
         sizer.isScrollEnabled = false

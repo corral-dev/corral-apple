@@ -128,10 +128,10 @@ struct MacPaneInteraction: NSViewRepresentable {
         private func focusComposer(in window: NSWindow) {
             guard let root = inputRoot?(), root.window === window,
                   !root.isHiddenOrHasHiddenAncestor,
-                  let field = MacComposerInputAnchor.field(in: root), field.acceptsFirstResponder else { return }
+                  let input = MacComposerInputAnchor.focusableInput(in: root), input.acceptsFirstResponder else { return }
             // Return the untouched event to AppKit after switching responder:
-            // SwiftUI's native field handles IME, paste, caret and submission.
-            window.makeFirstResponder(field)
+            // our TextKit 1 composer view handles IME, paste, caret and submission.
+            window.makeFirstResponder(input)
         }
 
     }

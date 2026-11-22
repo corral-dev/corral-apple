@@ -7,7 +7,9 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCES = [
-    "Shared/UI/Composer/ComposerBar.swift", "Shared/UI/Composer/ImageAttachmentEncoder.swift",
+    "Shared/UI/Composer/ComposerBar.swift", "Shared/UI/Composer/MacComposerTextView.swift",
+    "Shared/UI/Composer/ImageAttachmentEncoder.swift",
+    "Shared/Core/Conversation/ChatFileReference.swift",
     "Shared/UI/Composer/DraftImagePreview.swift", "Shared/UI/Composer/DraftImageInspection.swift", "Shared/UI/Design/Space.swift",
     "Shared/UI/Design/InterfaceScale.swift", "Shared/UI/Design/SessionTextSize.swift",
     "Shared/UI/Design/Typography.swift", "Shared/UI/Design/PressableButtonStyle.swift",

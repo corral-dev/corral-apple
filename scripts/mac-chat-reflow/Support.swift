@@ -12,9 +12,12 @@ struct RichMessage: Equatable {
     var delivery: MessageDelivery = .sent
     var failureDetail: String? = nil
     var localImageData: [Data] = []
+    var localFiles: [LocalFileAttachment] = []
     var hasLocalImages: Bool { !localImageData.isEmpty }
     var chatBodyText: String? { text }
 }
+struct LocalFileAttachment: Equatable {}
+
 /// Quiet subset of the production delivery states: only failed/needsReview
 /// render extra feedback under the bubble, which fixtures never exercise.
 enum MessageDelivery: Equatable {

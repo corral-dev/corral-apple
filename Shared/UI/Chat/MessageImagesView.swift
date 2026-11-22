@@ -259,3 +259,106 @@ struct LocalEchoImagesView: View {
         return CGSize(width: (width * scale).rounded(), height: (height * scale).rounded())
     }
 }
+
+/// Compact chips for non-image files attached to a user turn (either optimistic
+/// local echoes or confirmed host-pasted paths echoed back from history).
+struct MessageFileAttachmentsView: View {
+    @Environment(\.interfaceScale) private var interfaceScale
+    @Environment(\.chatFileLoader) private var fileLoader
+    let seq: Int
+    let localFiles: [LocalFileAttachment]
+    let hostFilePaths: [String]
+    let isUser: Bool
+    let userForeground: Color
+
+    private struct ChipItem: Identifiable {
+        let id: String
+        let name: String
+        let subtitle: String?
+        let hostPath: String?
+    }
+
+    private var items: [ChipItem] {
+        if !hostFilePaths.isEmpty {
+            return hostFilePaths.enumerated().map { index, path in
+                ChipItem(
+                    id: "host-\(index)-\(path)",
+                    name: HostPasteAttachment.displayName(forPastedFilePath: path),
+                    subtitle: nil,
+                    hostPath: path
+                )
+            }
+        }
+        return localFiles.enumerated().map { index, file in
+            ChipItem(
+                id: "local-\(index)-\(file.name)",
+                name: file.name,
+                subtitle: ByteCountFormatter.string(fromByteCount: Int64(file.byteCount), countStyle: .file),
+                hostPath: nil
+            )
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: isUser ? .trailing : .leading, spacing: Space.xs * interfaceScale) {
+            ForEach(items) { item in
+                chip(for: item)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func chip(for item: ChipItem) -> some View {
+        let pill = HStack(spacing: Space.xs * interfaceScale) {
+            Image(systemName: fileIconName(for: item.name))
+                .interfaceFont(.callout.weight(.medium))
+                .foregroundStyle(isUser ? userForeground : Palette.accent)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(verbatim: item.name)
+                    .interfaceFont(.callout.weight(.medium))
+                    .foregroundStyle(isUser ? userForeground : Color.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if let subtitle = item.subtitle {
+                    Text(verbatim: subtitle)
+                        .interfaceFont(.caption2)
+                        .foregroundStyle(isUser ? userForeground.opacity(0.75) : Color.secondary)
+                }
+            }
+        }
+        .interfacePadding(.horizontal, Space.sm)
+        .interfacePadding(.vertical, Space.xs)
+        .background(
+            RoundedRectangle(cornerRadius: Radius.md * interfaceScale, style: .continuous)
+                .fill(isUser ? userForeground.opacity(0.14) : Color(.tertiarySystemFill))
+        )
+
+        if let hostPath = item.hostPath, seq > 0, let fileLoader {
+            Button {
+                let link = ChatFileLink(
+                    ref: hostPath,
+                    displayName: item.name,
+                    targetLine: nil,
+                    isMarkdown: ChatFileLink.isMarkdown(name: item.name)
+                )
+                fileLoader.open(seq: seq, link: link)
+            } label: {
+                pill
+            }
+            .buttonStyle(.plain)
+        } else {
+            pill
+        }
+    }
+
+    private func fileIconName(for filename: String) -> String {
+        switch (filename as NSString).pathExtension.lowercased() {
+        case "pdf": return "doc.richtext"
+        case "zip", "tar", "gz", "7z", "rar": return "doc.zipper"
+        case "md", "markdown", "txt", "rtf", "log": return "doc.text"
+        case "json", "yaml", "yml", "toml", "xml", "swift", "py", "ts", "tsx", "js", "rs", "go":
+            return "curlybraces.square"
+        default: return "doc.fill"
+        }
+    }
+}

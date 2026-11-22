@@ -2,11 +2,26 @@ import Foundation
 
 /// Classifies clickable links in chat messages so host-local paths download
 /// via `media.file` while external URLs stay on the system handler.
-nonisolated struct ChatFileLink: Equatable, Sendable {
+nonisolated struct ChatFileLink: Equatable, Hashable, Sendable {
     let ref: String
     let displayName: String
     let targetLine: Int?
+    let targetAnchor: String?
     let isMarkdown: Bool
+
+    init(
+        ref: String,
+        displayName: String,
+        targetLine: Int?,
+        targetAnchor: String? = nil,
+        isMarkdown: Bool
+    ) {
+        self.ref = ref
+        self.displayName = displayName
+        self.targetLine = targetLine
+        self.targetAnchor = targetAnchor
+        self.isMarkdown = isMarkdown
+    }
 
     static let markdownExtensions: Set<String> = ["md", "markdown", "mdx"]
 
@@ -21,10 +36,12 @@ nonisolated struct ChatFileLink: Equatable, Sendable {
             let path = url.path
             guard !path.isEmpty else { return nil }
             let name = sanitizedFileName((path as NSString).lastPathComponent)
+            let line = parseTargetLine(from: raw)
             return ChatFileLink(
                 ref: raw,
                 displayName: name,
-                targetLine: parseTargetLine(from: raw),
+                targetLine: line,
+                targetAnchor: line == nil ? normalizedFragment(from: url) : nil,
                 isMarkdown: isMarkdown(name: name)
             )
         }
@@ -38,12 +55,38 @@ nonisolated struct ChatFileLink: Equatable, Sendable {
         let cleanPath = stripLocationSuffix(from: url.path)
         let last = (cleanPath as NSString).lastPathComponent
         let name = sanitizedFileName(last)
+        let line = parseTargetLine(from: raw)
         return ChatFileLink(
             ref: raw,
             displayName: name,
-            targetLine: parseTargetLine(from: raw),
+            targetLine: line,
+            targetAnchor: line == nil ? normalizedFragment(from: url) : nil,
             isMarkdown: isMarkdown(name: name)
         )
+    }
+
+    /// Normalizes a heading into a GitHub/CommonMark-compatible anchor slug.
+    static func markdownAnchorSlug(_ heading: String) -> String {
+        let lowered = heading.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        var slug = ""
+        for scalar in lowered.unicodeScalars {
+            if CharacterSet.alphanumerics.contains(scalar) {
+                slug.unicodeScalars.append(scalar)
+            } else if scalar == " " || scalar == "-" || scalar == "_" {
+                slug.append("-")
+            }
+        }
+        return slug.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+    }
+
+    private static func normalizedFragment(from url: URL) -> String? {
+        guard let fragment = url.fragment?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !fragment.isEmpty else {
+            return nil
+        }
+        let decoded = fragment.removingPercentEncoding ?? fragment
+        let slug = markdownAnchorSlug(decoded)
+        return slug.isEmpty ? decoded.lowercased() : slug
     }
 
     static func isMarkdown(name: String, mime: String? = nil) -> Bool {

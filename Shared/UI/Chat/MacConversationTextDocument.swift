@@ -146,7 +146,7 @@ final class MacSingleTextEngine {
             height: ceil(height)
         )
         sizes[width] = result
-        if widths.count > 64 {
+        if widths.count > 12 {
             sizes.removeValue(forKey: widths.removeFirst())
         }
         return result
@@ -552,6 +552,21 @@ final class MacConversationTextDocument: NSObject, @MainActor NSTextViewDelegate
             isSyncingSelection = false
         }
         return view
+    }
+
+    /// Releases offscreen native text views no longer mounted in any row mount,
+    /// keeping their TextKit engines, active selection and mounted views intact.
+    func releaseDetachedViews() {
+        for block in blocks {
+            guard let view = block.view, view.superview == nil else { continue }
+            Self.retireTextView(view)
+            block.view = nil
+            if block.engine.container.textView === view {
+                block.engine.container.textView = nil
+            }
+            view.delegate = nil
+            view.document = nil
+        }
     }
 
     var hasSelection: Bool {

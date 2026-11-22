@@ -187,4 +187,31 @@ final class ConversationEchoAttachmentTests: XCTestCase {
         let userSeqs = store.visibleMessages.filter { $0.role == "user" }.map(\.seq)
         XCTAssertEqual(userSeqs, [9])
     }
+
+    func testFilePastePathsStripCleanlyAndKeepFileOnlyTurnsVisible() {
+        let pastedFile = "/Users/example/project/.corral-pastes/paste-ab12cd34-设计方案.md"
+        let multiDot = "/Users/example/project/.corral-pastes/paste-xy99zz11-archive.tar.gz"
+        XCTAssertEqual(HostPasteAttachment.filePaths(in: pastedFile + "帮我看看"), [pastedFile])
+        XCTAssertEqual(HostPasteAttachment.filePaths(in: multiDot + " please check"), [multiDot])
+        XCTAssertEqual(HostPasteAttachment.displayName(forPastedFilePath: multiDot), "archive.tar.gz")
+        XCTAssertEqual(HostPasteAttachment.body(multiDot + " please check"), "please check")
+        XCTAssertEqual(HostPasteAttachment.displayName(forPastedFilePath: pastedFile), "设计方案.md")
+        XCTAssertEqual(HostPasteAttachment.body(pastedFile + "帮我看看"), "帮我看看")
+        XCTAssertTrue(HostPasteAttachment.isAttachmentOnly(pastedFile))
+        XCTAssertFalse(HostPasteAttachment.isAttachmentOnly(pastedFile + " 帮我看看"))
+
+        let officialFileOnly = RichMessage(seq: 11, role: "user", text: pastedFile)
+        let echoFileOnly = RichMessage(
+            seq: -1,
+            role: "user",
+            text: "",
+            delivery: .pending,
+            localFiles: [LocalFileAttachment(name: "spec.pdf", byteCount: 1024)]
+        )
+        let rows = ConversationMessagePolicy.timelineItems(from: [officialFileOnly, echoFileOnly])
+        XCTAssertEqual(rows.compactMap { row -> Int? in
+            if case let .message(msg) = row { return msg.seq }
+            return nil
+        }, [-1, 11])
+    }
 }

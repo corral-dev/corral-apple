@@ -58,6 +58,7 @@ enum ClientMemoryPressure {
     /// Drop only rebuildable caches; never user-visible history or state.
     static func purge() {
         ChatImageLoader.purgeMemory()
+        ChatDiagramRenderer.shared.purgeMemory()
         ChatMarkdown.purgeCache()
         ChatImageReferenceCache.purge()
         SessionPresentation.purgePreviewCache()

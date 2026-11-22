@@ -87,38 +87,76 @@ import SwiftUI
         return result
     }
 
-    /// `-CorralInspectPairingStates` renders the real pairing view in each
-    /// this-Mac state, light and dark, offscreen to /tmp/corral-pairing-*.png.
+    /// `-CorralInspectPairingStates` renders the real pairing view across
+    /// full-window and sheet states, light and dark, offscreen to
+    /// /tmp/corral-pairing-*.png.
     static func renderStates(appModel: AppModel) {
         let corral = URL(fileURLWithPath: "/opt/homebrew/bin/corral")
-        let states: [(String, MacLocalHostSetup.State)] = [
+        let fullWindowStates: [(String, MacLocalHostSetup.State)] = [
             ("ready", .ready(corral: corral)), ("install", .needsInstall(brew: corral)),
             ("homebrew", .needsHomebrew), ("installing", .running(.installing)),
             ("failed", .failed("Error: No available formula with the name \"x0c/tap/corral\".")),
             ("hidden", .hidden),
         ]
-        for (name, state) in states {
+        for (name, state) in fullWindowStates {
             for dark in [false, true] {
                 let view = MacPairingView(localSetup: MacLocalHostSetup(inspectionState: state))
                     .modifier(MacZoomContent())
+                    .tint(Palette.accent)
+                    .environment(\.controlActiveState, .key)
                     .environment(appModel)
-                let host = NSHostingView(rootView: view)
-                host.sizingOptions = []
-                host.frame = NSRect(x: 0, y: 0, width: 520, height: 640)
-                let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
-                window.isReleasedWhenClosed = false
-                window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
-                window.contentView = host
-                RunLoop.main.run(until: Date().addingTimeInterval(0.4))
-                host.layoutSubtreeIfNeeded()
-                if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
-                    host.cacheDisplay(in: host.bounds, to: rep)
-                    let url = URL(fileURLWithPath: "/tmp/corral-pairing-\(name)-\(dark ? "dark" : "light").png")
-                    try? rep.representation(using: .png, properties: [:])?.write(to: url)
-                }
-                window.close()
+                render(view, width: 760, height: 520, dark: dark, name: name)
             }
         }
+        let sheetStates: [(String, MacLocalHostSetup.State, String, String?)] = [
+            ("sheet-ready", .ready(corral: corral), "", nil),
+            ("sheet-hidden", .hidden, "", nil),
+            ("sheet-filled", .ready(corral: corral), "corral://pair?h=abc123&k=demo", nil),
+            ("sheet-error", .ready(corral: corral), "corral://pair?h=bad", String(localized: "pairing.error.unrecognized")),
+        ]
+        for (name, state, link, error) in sheetStates {
+            for dark in [false, true] {
+                let view = MacPairingView(
+                    isSheet: true,
+                    localSetup: MacLocalHostSetup(inspectionState: state),
+                    inspectionLink: link,
+                    inspectionError: error
+                )
+                .modifier(MacZoomContent())
+                .tint(Palette.accent)
+                .environment(\.controlActiveState, .key)
+                .frame(width: 480)
+                .environment(appModel)
+                render(view, width: 480, height: nil, dark: dark, name: name)
+            }
+        }
+    }
+
+    private static func render<V: View>(_ view: V, width: CGFloat, height: CGFloat?, dark: Bool, name: String) {
+        let host = NSHostingView(rootView: view)
+        host.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        if let height {
+            host.sizingOptions = []
+            host.frame = NSRect(x: 0, y: 0, width: width, height: height)
+        } else {
+            host.sizingOptions = [.preferredContentSize]
+            host.frame = NSRect(x: 0, y: 0, width: width, height: 400)
+            host.layoutSubtreeIfNeeded()
+            let fitted = host.fittingSize
+            host.frame = NSRect(x: 0, y: 0, width: width, height: max(fitted.height, 200))
+        }
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        window.contentView = host
+        RunLoop.main.run(until: Date().addingTimeInterval(0.35))
+        host.layoutSubtreeIfNeeded()
+        if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+            host.cacheDisplay(in: host.bounds, to: rep)
+            let url = URL(fileURLWithPath: "/tmp/corral-pairing-\(name)-\(dark ? "dark" : "light").png")
+            try? rep.representation(using: .png, properties: [:])?.write(to: url)
+        }
+        window.close()
     }
 
     private static func describe(_ state: MacLocalHostSetup.State) -> String {
@@ -127,6 +165,7 @@ import SwiftUI
         case .hidden: "hidden"
         case .ready(let corral): "ready \(corral.path)"
         case .needsInstall(let brew): "needsInstall \(brew.path)"
+        case .needsScriptInstall: "needsScriptInstall"
         case .needsHomebrew: "needsHomebrew"
         case .running(let step): "running \(step)"
         case .failed(let message): "failed \(message)"

@@ -42,7 +42,7 @@ The **Mac app** is a signed download. The **iPhone app** is a source beta: build
 
 ### Mac
 
-Install the signed Mac app with Homebrew:
+Install the signed Mac app with Homebrew (which also installs the matching `corral` CLI formula dependency):
 
 ```bash
 brew install --cask x0c/tap/corral-mac
@@ -63,7 +63,7 @@ brew upgrade --cask x0c/tap/corral-mac
 
 The built-in updater remains available. Current Homebrew can recognize an app newer than its installation record, so an older recorded version alone does not mean an update failed. An “already an App” install error means the destination is occupied; use the appropriate adoption or update command above. Do not use `--force` as a routine fix: it can replace a newer app with an older tap version. Pairing and settings are preserved. [How Homebrew handles self-updating apps](https://docs.brew.sh/FAQ#how-does-brew-upgrade-handle-apps-that-update-themselves).
 
-Download the [signed Mac DMG](https://github.com/corral-dev/corral-apple/releases/latest) and drag Corral to Applications. It checks for updates hourly, downloads them in the background and installs them when you quit.
+Download the [signed Mac DMG](https://github.com/corral-dev/corral-apple/releases/latest) and drag Corral to Applications. The Mac app and CLI share synchronized version numbers: on launch and in-app Sparkle updates, the non-sandboxed app automatically installs or updates the matching Corral CLI (leaving developer source checkouts untouched), and updating via `corral update` keeps `/Applications/Corral.app` synchronized. The built-in updater checks hourly, downloads in the background and installs when you quit.
 
 To build from source instead, with Xcode and its command-line tools installed:
 

@@ -20,6 +20,7 @@ final class MacLocalHostSetup {
         case hidden
         case ready(corral: URL)
         case needsInstall(brew: URL)
+        case needsScriptInstall
         case needsHomebrew
         case running(Step)
         case failed(String)
@@ -60,6 +61,9 @@ final class MacLocalHostSetup {
         } else if let brew = MacHostCommand.locateHomebrew() {
             guard generation == current else { return }
             state = .needsInstall(brew: brew)
+        } else if await MacHostCommand.hasScriptInstallPrerequisites() {
+            guard generation == current else { return }
+            state = .needsScriptInstall
         } else {
             guard generation == current else { return }
             state = .needsHomebrew
@@ -77,6 +81,19 @@ final class MacLocalHostSetup {
         state = .running(.installing)
         start(onPaired: onPaired) { [weak self] in
             try await MacHostCommand.installCorral(brew: brew)
+            try Task.checkCancellation()
+            guard let corral = await MacHostCommand.locateCorral() else {
+                throw MacHostCommand.Failure.message(String(localized: "mac.pairing.corral_missing_after_install"))
+            }
+            try await self?.pair(corral: corral, appModel: appModel)
+        }
+    }
+
+    func installWithScript(appModel: AppModel, onPaired: @escaping @MainActor () -> Void) {
+        state = .running(.installing)
+        start(onPaired: onPaired) { [weak self] in
+            let target = MacHostCommand.appMarketingVersion
+            try await MacHostCommand.installCorralWithScript(version: target)
             try Task.checkCancellation()
             guard let corral = await MacHostCommand.locateCorral() else {
                 throw MacHostCommand.Failure.message(String(localized: "mac.pairing.corral_missing_after_install"))
@@ -158,21 +175,26 @@ nonisolated enum MacHostCommand {
 
     private static let homebrewPrefixes = ["/opt/homebrew", "/usr/local"]
 
+    static var appMarketingVersion: String {
+        let raw = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0.0"
+        return CLIVersionSyncPolicy.normalizedVersion(raw)
+    }
+
     static func locateHomebrew() -> URL? {
         homebrewPrefixes.map { URL(fileURLWithPath: $0).appending(path: "bin/brew") }
             .first { FileManager.default.isExecutableFile(atPath: $0.path) }
     }
 
-    /// Known install locations first (instant `stat`); the interactive
-    /// login-shell lookup only runs when nothing is found there. A shell with
-    /// nvm/pyenv can take 3–5 s, and the user's Terminal `corral` still wins
-    /// whenever the known paths come up empty.
+    /// Resolves known install locations first; when multiple copies coexist
+    /// (for example `~/.local/bin/corral` alongside Homebrew), asks the
+    /// interactive login shell so developer checkouts keep precedence.
     static func locateCorral() async -> URL? {
         let home = FileManager.default.homeDirectoryForCurrentUser
-        let known = homebrewPrefixes.map { URL(fileURLWithPath: $0).appending(path: "bin/corral") }
-            + [home.appending(path: ".local/bin/corral")]
-        if let found = known.first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) {
-            return found
+        let known = [home.appending(path: ".local/bin/corral")]
+            + homebrewPrefixes.map { URL(fileURLWithPath: $0).appending(path: "bin/corral") }
+        let hits = known.filter { FileManager.default.isExecutableFile(atPath: $0.path) }
+        if hits.count == 1 {
+            return hits[0]
         }
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         if let output = try? await run(URL(fileURLWithPath: shell), ["-ilc", "command -v corral"], timeout: 5),
@@ -182,7 +204,143 @@ nonisolated enum MacHostCommand {
            path.hasPrefix("/"), FileManager.default.isExecutableFile(atPath: path) {
             return URL(fileURLWithPath: path)
         }
-        return nil
+        return hits.first
+    }
+
+    static func inspectCorral(corral: URL) async -> (snapshot: CLIStatusSnapshot?, supportsVersionFlag: Bool) {
+        if let output = try? await run(corral, ["update", "--status", "--json"], timeout: 10),
+           output.status == 0,
+           let snapshot = CLIVersionSyncPolicy.parseCLIStatusJSON(output.stdout) {
+            return (snapshot, true)
+        }
+        guard let output = try? await run(corral, ["--version"], timeout: 10),
+              output.status == 0 else {
+            return (nil, false)
+        }
+        let combined = String(data: output.stdout + output.stderr, encoding: .utf8) ?? ""
+        guard let version = CLIVersionSyncPolicy.parsePlainVersionOutput(combined) else {
+            return (nil, false)
+        }
+        let resolved = corral.resolvingSymlinksInPath().path
+        let channel: CLIChannel?
+        if resolved.contains("/Cellar/") || resolved.contains("/homebrew/") || resolved.contains("/linuxbrew/") {
+            channel = .brew
+        } else if resolved.contains("pipx/venvs") {
+            channel = .pipx
+        } else {
+            channel = nil
+        }
+        return (CLIStatusSnapshot(version: version, channel: channel, editableLike: false), false)
+    }
+
+    static func hasScriptInstallPrerequisites() async -> Bool {
+        let envURL = URL(fileURLWithPath: "/usr/bin/env")
+        guard let whichCurl = try? await run(envURL, ["which", "curl"], timeout: 5), whichCurl.status == 0,
+              let whichTmux = try? await run(envURL, ["which", "tmux"], timeout: 5), whichTmux.status == 0,
+              let pyCheck = try? await run(
+                envURL,
+                ["python3", "-c", "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)"],
+                timeout: 5
+              ) else {
+            return false
+        }
+        return pyCheck.status == 0
+    }
+
+    static func installCorral(brew: URL) async throws {
+        let output = try await run(
+            brew,
+            ["install", "x0c/tap/corral"],
+            timeout: nil,
+            extraEnv: ["CORRAL_UPDATE_NO_MAC": "1"],
+            unsetEnv: ["HOMEBREW_NO_AUTO_UPDATE"]
+        )
+        guard output.status == 0 else {
+            throw Failure.message(lastLine(output.stderr) ?? lastLine(output.stdout) ?? String(localized: "error.unknown"))
+        }
+    }
+
+    static func installCorralWithScript(version: String) async throws {
+        let target = CLIVersionSyncPolicy.normalizedVersion(version)
+        let script = """
+        curl -fsSL "https://raw.githubusercontent.com/corral-dev/corral/v$1/install.sh" | bash
+        """
+        let output = try await run(
+            URL(fileURLWithPath: "/bin/bash"),
+            ["-c", script, "--", target],
+            timeout: 600,
+            extraEnv: ["CORRAL_VERSION": "v\(target)", "CORRAL_UPDATE_NO_MAC": "1"]
+        )
+        guard output.status == 0 else {
+            throw Failure.message(lastLine(output.stderr) ?? lastLine(output.stdout) ?? String(localized: "error.unknown"))
+        }
+    }
+
+    static func upgradeCorral(
+        corral: URL,
+        targetVersion: String,
+        channel: CLIChannel?,
+        viaVersionFlag: Bool
+    ) async throws {
+        let target = CLIVersionSyncPolicy.normalizedVersion(targetVersion)
+        if viaVersionFlag {
+            let output = try await run(
+                corral,
+                ["update", "--version", target, "--no-mac", "--json"],
+                timeout: 300,
+                extraEnv: ["CORRAL_UPDATE_NO_MAC": "1"],
+                unsetEnv: ["HOMEBREW_NO_AUTO_UPDATE"]
+            )
+            if output.status == 0 {
+                return
+            }
+            if let obj = try? JSONSerialization.jsonObject(with: output.stdout) as? [String: Any],
+               let msg = obj["message"] as? String, !msg.isEmpty {
+                throw Failure.message(msg)
+            }
+            throw Failure.message(lastLine(output.stderr) ?? lastLine(output.stdout) ?? String(localized: "error.unknown"))
+        }
+        if channel == .brew, let brew = locateHomebrew() {
+            _ = try? await run(
+                brew, ["update"], timeout: 120,
+                extraEnv: ["CORRAL_UPDATE_NO_MAC": "1"],
+                unsetEnv: ["HOMEBREW_NO_AUTO_UPDATE"]
+            )
+            let upgrade = try await run(
+                brew, ["upgrade", "x0c/tap/corral"], timeout: 600,
+                extraEnv: ["CORRAL_UPDATE_NO_MAC": "1"],
+                unsetEnv: ["HOMEBREW_NO_AUTO_UPDATE"]
+            )
+            guard upgrade.status == 0 else {
+                throw Failure.message(lastLine(upgrade.stderr) ?? lastLine(upgrade.stdout) ?? String(localized: "error.unknown"))
+            }
+            return
+        }
+        let fallback = try await run(
+            corral, ["update"], timeout: 300,
+            extraEnv: ["CORRAL_UPDATE_NO_MAC": "1"],
+            unsetEnv: ["HOMEBREW_NO_AUTO_UPDATE"]
+        )
+        guard fallback.status == 0 else {
+            throw Failure.message(lastLine(fallback.stderr) ?? lastLine(fallback.stdout) ?? String(localized: "error.unknown"))
+        }
+    }
+
+    static func restartLocalRemoteIfOutdated(corral: URL, targetVersion: String) async {
+        guard let output = try? await run(corral, ["remote", "status", "--json"], timeout: 10),
+              output.status == 0,
+              let data = try? envelopeData(output.stdout) else {
+            return
+        }
+        let running = (data["running"] as? Bool) == true
+        let wanted = (data["wanted"] as? Bool) == true
+        guard running, wanted else { return }
+        let hostVersion = data["version"] as? String
+        let outdated = hostVersion.flatMap {
+            CLIVersionSyncPolicy.compareVersions($0, targetVersion) == .orderedAscending
+        } ?? true
+        guard outdated else { return }
+        _ = try? await run(corral, ["remote", "on", "--force", "--json"], timeout: 30)
     }
 
     /// This machine's host ID when its remote service has one; nil otherwise.
@@ -215,13 +373,6 @@ nonisolated enum MacHostCommand {
         return url
     }
 
-    static func installCorral(brew: URL) async throws {
-        let output = try await run(brew, ["install", "x0c/tap/corral"], timeout: nil)
-        guard output.status == 0 else {
-            throw Failure.message(lastLine(output.stderr) ?? lastLine(output.stdout) ?? String(localized: "error.unknown"))
-        }
-    }
-
     /// The `data` object of the CLI's JSON envelope, or its error message.
     private static func envelopeData(_ stdout: Data, fallback: Data = Data()) throws -> [String: Any] {
         guard let object = try? JSONSerialization.jsonObject(with: stdout) as? [String: Any] else {
@@ -246,15 +397,27 @@ nonisolated enum MacHostCommand {
     /// Pipes are drained with non-blocking `availableData` polling instead of
     /// `readDataToEndOfFile`: a child that inherits the pipes (Homebrew build
     /// steps do) would otherwise hold EOF open forever after the parent exits.
-    static func run(_ executable: URL, _ arguments: [String], timeout: TimeInterval?) async throws -> Output {
+    static func run(
+        _ executable: URL,
+        _ arguments: [String],
+        timeout: TimeInterval?,
+        extraEnv: [String: String] = [:],
+        unsetEnv: [String] = []
+    ) async throws -> Output {
         let process = Process()
         process.executableURL = executable
         process.arguments = arguments
         var environment = ProcessInfo.processInfo.environment
+        for key in unsetEnv {
+            environment.removeValue(forKey: key)
+        }
         let searchPath = homebrewPrefixes.flatMap { ["\($0)/bin", "\($0)/sbin"] }
             + [FileManager.default.homeDirectoryForCurrentUser.appending(path: ".local/bin").path,
                "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
         environment["PATH"] = searchPath.joined(separator: ":")
+        for (key, value) in extraEnv {
+            environment[key] = value
+        }
         process.environment = environment
         process.standardInput = FileHandle.nullDevice
         let stdout = Pipe(), stderr = Pipe()
