@@ -33,7 +33,7 @@ struct HostSettingsView: View {
                     SessionTextSizeSettingsView()
                 } label: {
                     LabeledContent("settings.session_text_size") {
-                        Text(appModel.sessionTextSize.title)
+                        chatTextSizeSummary
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -176,12 +176,24 @@ struct HostSettingsView: View {
         appModel.refreshHosts()
         loadCustomName()
     }
+
+    @ViewBuilder
+    private var chatTextSizeSummary: some View {
+        if let preset = SessionTextSize.matching(scale: CGFloat(appModel.mobileChatZoomScale)) {
+            Text(preset.title)
+        } else {
+            Text(verbatim: "\(Int((appModel.mobileChatZoomScale * 100).rounded()))%")
+                .monospacedDigit()
+        }
+    }
 }
 
 struct SessionTextSizeSettingsView: View {
     @Environment(AppModel.self) private var appModel
     @Environment(\.interfaceScale) private var interfaceScale
     @Environment(\.colorScheme) private var colorScheme
+
+    private var activeScale: CGFloat { CGFloat(appModel.mobileChatZoomScale) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -194,7 +206,7 @@ struct SessionTextSizeSettingsView: View {
                             text: String(localized: "settings.session_text_size.preview.user")
                         ),
                         interfaceScale: interfaceScale,
-                        sessionTextScale: appModel.sessionTextSize.scale,
+                        sessionTextScale: activeScale,
                         colorScheme: colorScheme
                     )
                     MessageBubbleView(
@@ -204,7 +216,7 @@ struct SessionTextSizeSettingsView: View {
                             text: String(localized: "settings.session_text_size.preview.assistant")
                         ),
                         interfaceScale: interfaceScale,
-                        sessionTextScale: appModel.sessionTextSize.scale,
+                        sessionTextScale: activeScale,
                         colorScheme: colorScheme
                     )
                 }
@@ -214,7 +226,7 @@ struct SessionTextSizeSettingsView: View {
             .background(Color(.systemGroupedBackground))
 
             VStack(spacing: Space.sm) {
-                Text(appModel.sessionTextSize.title)
+                scaleLabel
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.secondary)
 
@@ -225,14 +237,14 @@ struct SessionTextSizeSettingsView: View {
                         .accessibilityHidden(true)
                     Slider(
                         value: Binding(
-                            get: { appModel.sessionTextSize.sliderIndex },
+                            get: { SessionTextSize.nearest(to: activeScale).sliderIndex },
                             set: { appModel.sessionTextSize = SessionTextSize.from(sliderIndex: $0) }
                         ),
                         in: 0 ... Double(SessionTextSize.allCases.count - 1),
                         step: 1
                     )
                     .accessibilityLabel(Text("settings.session_text_size"))
-                    .accessibilityValue(Text(appModel.sessionTextSize.title))
+                    .accessibilityValue(accessibilityScaleValue)
                     Text("A")
                         .font(.title2.weight(.bold))
                         .foregroundStyle(.secondary)
@@ -243,10 +255,27 @@ struct SessionTextSizeSettingsView: View {
             .padding(.vertical, Space.md)
             .background(.bar)
         }
-        .environment(\.sessionTextScale, appModel.sessionTextSize.scale)
+        .environment(\.sessionTextScale, activeScale)
         .navigationTitle("settings.session_text_size")
         .navigationBarTitleDisplayMode(.inline)
         .background(Color(.systemGroupedBackground))
+    }
+
+    @ViewBuilder
+    private var scaleLabel: some View {
+        if let preset = SessionTextSize.matching(scale: activeScale) {
+            Text(preset.title)
+        } else {
+            Text(verbatim: "\(Int((activeScale * 100).rounded()))%")
+                .monospacedDigit()
+        }
+    }
+
+    private var accessibilityScaleValue: Text {
+        if let preset = SessionTextSize.matching(scale: activeScale) {
+            return Text(preset.title)
+        }
+        return Text(verbatim: "\(Int((activeScale * 100).rounded()))%")
     }
 }
 #endif

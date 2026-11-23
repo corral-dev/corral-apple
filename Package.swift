@@ -100,6 +100,8 @@ let package = Package(
                 "ComposerHistoryTests.swift",
                 "ConnectionFailureTextTests.swift",
                 "CLIVersionSyncPolicyTests.swift",
+                "SessionDetailModeStoreTests.swift",
+                "MobileZoomPreferencesTests.swift",
                 "TerminalColorSchemeTests.swift",
                 "TerminalInputPassiveTests.swift",
             ],

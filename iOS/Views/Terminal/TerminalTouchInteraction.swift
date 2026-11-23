@@ -7,6 +7,8 @@ import UIKit
 final class TerminalTouchInteraction: NSObject, UIGestureRecognizerDelegate {
     private weak var terminal: ShellTerminalHost?
     private let wheelPan = UIPanGestureRecognizer()
+    let pinch = UIPinchGestureRecognizer()
+    private var isPinching = false
     private var remainingTranslation: CGFloat = 0
     private var previousTranslation: CGFloat = 0
     private var wheelPoint = CGPoint.zero
@@ -23,6 +25,9 @@ final class TerminalTouchInteraction: NSObject, UIGestureRecognizerDelegate {
         wheelPan.addTarget(self, action: #selector(scroll(_:)))
         wheelPan.delegate = self
         terminal.addGestureRecognizer(wheelPan)
+        pinch.addTarget(self, action: #selector(handlePinch(_:)))
+        pinch.delegate = self
+        terminal.addGestureRecognizer(pinch)
         // Do not replace UIScrollView's delegate or its inertia. This gesture
         // fails immediately for local history or an existing selection.
         terminal.panGestureRecognizer.require(toFail: wheelPan)
@@ -37,6 +42,8 @@ final class TerminalTouchInteraction: NSObject, UIGestureRecognizerDelegate {
     }
 
     func reset() {
+        isPinching = false
+        terminal?.cancelPinchZoomIfNeeded()
         cancelScrolling()
         terminal?.selectNone()
     }
@@ -56,14 +63,59 @@ final class TerminalTouchInteraction: NSObject, UIGestureRecognizerDelegate {
     }
 
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        guard gestureRecognizer === wheelPan, forwardsWheel, let terminal else { return false }
+        if gestureRecognizer === pinch {
+            return terminal?.canPinchZoom == true
+        }
+        guard gestureRecognizer === wheelPan, !isPinching, forwardsWheel, let terminal else { return false }
         let velocity = wheelPan.velocity(in: terminal)
         return abs(velocity.y) > abs(velocity.x)
+    }
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        guard let terminal else { return false }
+        if gestureRecognizer === pinch {
+            return otherGestureRecognizer === terminal.panGestureRecognizer
+        }
+        if otherGestureRecognizer === pinch {
+            return gestureRecognizer === terminal.panGestureRecognizer
+        }
+        return false
     }
 
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
         cancelScrolling()
         return true
+    }
+
+    @objc func handlePinch(_ gesture: UIPinchGestureRecognizer) {
+        guard let terminal else { return }
+        switch gesture.state {
+        case .began:
+            guard terminal.canPinchZoom else { return }
+            cancelScrolling()
+            if terminal.panGestureRecognizer.state == .began || terminal.panGestureRecognizer.state == .changed {
+                terminal.panGestureRecognizer.isEnabled = false
+                terminal.panGestureRecognizer.isEnabled = true
+            }
+            isPinching = true
+            terminal.beginPinchZoom()
+        case .changed:
+            guard isPinching else { return }
+            terminal.updatePinchZoom(scale: gesture.scale)
+        case .ended:
+            guard isPinching else { return }
+            isPinching = false
+            terminal.endPinchZoom(scale: gesture.scale, cancelled: false)
+        case .cancelled, .failed:
+            guard isPinching else { return }
+            isPinching = false
+            terminal.endPinchZoom(scale: gesture.scale, cancelled: true)
+        default:
+            break
+        }
     }
 
     @objc private func cancelMomentumOnTouch(_ gesture: UIGestureRecognizer) {

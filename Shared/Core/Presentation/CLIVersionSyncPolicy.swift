@@ -140,3 +140,128 @@ public nonisolated enum CLIVersionSyncPolicy {
         }
     }
 }
+
+public nonisolated enum HostShellPathPolicy {
+    public static let sentinelBegin = "__CORRAL_PATH_BEGIN__"
+    public static let sentinelEnd = "__CORRAL_PATH_END__"
+    public static let minimalBasePath = "/usr/bin:/bin:/usr/sbin:/sbin"
+
+    public static func probeCommand(forShell shellPath: String) -> String {
+        if URL(fileURLWithPath: shellPath).lastPathComponent == "fish" {
+            return "printf '\(sentinelBegin)%s\(sentinelEnd)' (string join : $PATH)"
+        }
+        return "printf '\(sentinelBegin)%s\(sentinelEnd)' \"$PATH\""
+    }
+
+    public static func extractSentinelPath(from data: Data) -> String? {
+        let output = String(decoding: data, as: UTF8.self)
+        guard let beginRange = output.range(of: sentinelBegin, options: .backwards),
+              let endRange = output.range(
+                  of: sentinelEnd,
+                  range: beginRange.upperBound..<output.endIndex
+              ) else {
+            return nil
+        }
+        let extracted = output[beginRange.upperBound..<endRange.lowerBound]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return extracted.isEmpty ? nil : extracted
+    }
+
+    public static func splitPath(_ raw: String?) -> [String] {
+        guard let raw, !raw.isEmpty else { return [] }
+        return raw.split(separator: ":")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    public static func mergePaths(_ groups: [[String]]) -> String {
+        var merged: [String] = []
+        var seen = Set<String>()
+        for group in groups {
+            for raw in group {
+                let entry = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !entry.isEmpty, seen.insert(entry).inserted else { continue }
+                merged.append(entry)
+            }
+        }
+        return merged.joined(separator: ":")
+    }
+
+    public static func commonToolBinDirectories(
+        home: URL,
+        fileManager: FileManager = .default
+    ) -> [String] {
+        var found: [String] = []
+        func isDir(_ url: URL) -> Bool {
+            var isDirectory: ObjCBool = false
+            return fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory) && isDirectory.boolValue
+        }
+        func addIfDir(_ url: URL) {
+            if isDir(url) { found.append(url.path) }
+        }
+        func semverKey(_ name: String) -> [Int] {
+            name.split { !$0.isNumber }.compactMap { Int($0) }
+        }
+        func addMatchingBins(parent: URL, prefix: String) {
+            guard let items = try? fileManager.contentsOfDirectory(
+                at: parent,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            ) else { return }
+            let filtered = items.filter {
+                prefix.isEmpty || $0.lastPathComponent.hasPrefix(prefix)
+            }.sorted { lhs, rhs in
+                let la = semverKey(lhs.lastPathComponent)
+                let rb = semverKey(rhs.lastPathComponent)
+                for idx in 0..<max(la.count, rb.count) {
+                    let av = idx < la.count ? la[idx] : 0
+                    let bv = idx < rb.count ? rb[idx] : 0
+                    if av != bv { return av > bv }
+                }
+                return lhs.lastPathComponent > rhs.lastPathComponent
+            }
+            for item in filtered {
+                addIfDir(item.appending(path: "bin"))
+            }
+        }
+
+        addIfDir(home.appending(path: ".local/share/nodejs/current/bin"))
+        addMatchingBins(parent: home.appending(path: ".local/share/nodejs"), prefix: "current")
+        addMatchingBins(parent: home.appending(path: ".nvm/versions/node"), prefix: "")
+
+        let optionalRelativeDirs = [
+            ".volta/bin",
+            ".fnm/aliases/default/bin",
+            "Library/Application Support/fnm/aliases/default/bin",
+            ".local/share/fnm/aliases/default/bin",
+            ".local/share/mise/shims",
+            ".asdf/shims",
+            ".nodenv/shims",
+            ".npm-global/bin",
+            "Library/pnpm",
+            ".local/share/pnpm",
+            ".bun/bin",
+            ".claude/local/bin",
+            ".claude/local",
+            ".opencode/bin",
+            ".antigravity/antigravity/bin",
+            ".cargo/bin",
+        ]
+        for rel in optionalRelativeDirs {
+            addIfDir(home.appending(path: rel))
+        }
+
+        found.append(contentsOf: [
+            home.appending(path: ".local/bin").path,
+            "/opt/homebrew/bin",
+            "/opt/homebrew/sbin",
+            "/usr/local/bin",
+            "/usr/local/sbin",
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin",
+        ])
+        return found
+    }
+}

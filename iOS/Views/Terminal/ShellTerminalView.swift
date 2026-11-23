@@ -12,18 +12,27 @@ struct ShellTerminalView: UIViewRepresentable {
     var allowsInput = true
     var isAgent = false
     var usesIdentityBackground = false
+    var fontSize: CGFloat = ShellTerminalHost.fontSize
+    var onFontSizeChange: ((Double) -> Void)? = nil
+    var onBackgroundColorChange: ((TerminalRGB) -> Void)? = nil
 
     func makeUIView(context: Context) -> ShellTerminalHost {
-        let view = ShellTerminalHost(frame: .zero)
+        let view = ShellTerminalHost(frame: .zero, fontSize: fontSize)
         view.configure(presented: isPresented, allowsInput: allowsInput, isAgent: isAgent,
-                       usesIdentityBackground: usesIdentityBackground)
+                       usesIdentityBackground: usesIdentityBackground,
+                       fontSize: fontSize,
+                       onFontSizeChange: onFontSizeChange,
+                       onBackgroundColorChange: onBackgroundColorChange)
         view.bind(stream)
         return view
     }
 
     func updateUIView(_ view: ShellTerminalHost, context: Context) {
         view.configure(presented: isPresented, allowsInput: allowsInput, isAgent: isAgent,
-                       usesIdentityBackground: usesIdentityBackground)
+                       usesIdentityBackground: usesIdentityBackground,
+                       fontSize: fontSize,
+                       onFontSizeChange: onFontSizeChange,
+                       onBackgroundColorChange: onBackgroundColorChange)
         if view.stream !== stream { view.bind(stream) }
     }
 
@@ -36,21 +45,113 @@ struct ShellTerminalView: UIViewRepresentable {
     }
 }
 
+/// Adopts a long-lived `ShellTerminalHost` owned by `MobileTerminalSessions` into
+/// this detail's UIKit hierarchy so Back navigation and session switches keep the
+/// emulator and host stream intact instead of reconnecting.
+struct RetainedShellTerminalView: UIViewRepresentable {
+    let host: ShellTerminalHost
+    var isPresented = true
+    var sceneActive = true
+    var allowsInput = true
+    var isAgent = true
+    var usesIdentityBackground = false
+    var fontSize: CGFloat = ShellTerminalHost.fontSize
+    var onFontSizeChange: ((Double) -> Void)? = nil
+    var onBackgroundColorChange: ((TerminalRGB) -> Void)? = nil
+
+    func makeUIView(context: Context) -> ShellTerminalSlot {
+        let slot = ShellTerminalSlot()
+        update(slot)
+        return slot
+    }
+
+    func updateUIView(_ slot: ShellTerminalSlot, context: Context) {
+        update(slot)
+    }
+
+    private func update(_ slot: ShellTerminalSlot) {
+        if host.superview !== slot {
+            guard isPresented else { return }
+            slot.adopt(host)
+        }
+        host.configure(
+            presented: isPresented,
+            sceneActive: sceneActive,
+            allowsInput: allowsInput,
+            isAgent: isAgent,
+            usesIdentityBackground: usesIdentityBackground,
+            fontSize: fontSize,
+            onFontSizeChange: onFontSizeChange,
+            onBackgroundColorChange: onBackgroundColorChange
+        )
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: ShellTerminalSlot, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? 390, height: proposal.height ?? 400)
+    }
+
+    static func dismantleUIView(_ slot: ShellTerminalSlot, coordinator: ()) {
+        slot.release()
+    }
+}
+
+/// UIKit container slot lending a frame to a retained `ShellTerminalHost`.
+final class ShellTerminalSlot: UIView {
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        for case let host as ShellTerminalHost in subviews where host.frame != bounds {
+            host.frame = bounds
+        }
+    }
+
+    func adopt(_ host: ShellTerminalHost) {
+        host.removeFromSuperview()
+        host.frame = bounds
+        host.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        addSubview(host)
+        host.setNeedsLayout()
+    }
+
+    func release() {
+        for case let host as ShellTerminalHost in subviews {
+            host.setPresented(false)
+            host.removeFromSuperview()
+        }
+    }
+}
+
 final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, TerminalViewDelegate {
-    static let fontSize: CGFloat = 11
+    static let fontSize: CGFloat = CGFloat(MobileZoomPreferences.terminalDefaultFontSize)
 
     private(set) weak var stream: RemoteTerminalStream?
+    private(set) var currentFontSize: CGFloat
     private var feedingHost = false
     private var presented = true
+    private var sceneActive = true
     private var allowsInput = true
     private var isAgent = false
     private var usesIdentityBackground = false
     private var scheme = TerminalColorScheme.dark
     private var touchInteraction: TerminalTouchInteraction?
     private var wheelBytes: [UInt8]?
+    private var isPinching = false
+    private var pinchStartFontSize: CGFloat?
+    private var pendingFontHostReconcile = false
+    private var onFontSizeChange: ((Double) -> Void)?
+    private var onBackgroundColorChange: ((TerminalRGB) -> Void)?
+    private var lastReportedBackground: TerminalRGB?
+    private var backgroundSamplePending = false
 
-    override init(frame: CGRect) {
-        super.init(frame: frame, font: UIFont.monospacedSystemFont(ofSize: Self.fontSize, weight: .regular))
+    var hasScreen: Bool { hostGrid != nil }
+    var isShown: Bool { window != nil && presented && !isHidden }
+    var isInFront: Bool { presented && sceneActive }
+    var canPinchZoom: Bool { presented && !isHidden }
+    var currentBackgroundRGB: TerminalRGB? { lastReportedBackground }
+
+    init(frame: CGRect, fontSize: CGFloat) {
+        let clamped = CGFloat(MobileZoomPreferences.clampTerminalFontSize(Double(fontSize)))
+        self.currentFontSize = clamped
+        super.init(frame: frame, font: UIFont.monospacedSystemFont(ofSize: clamped, weight: .regular))
         terminalDelegate = self
         changeScrollback(10_000)
         touchInteraction = TerminalTouchInteraction(terminal: self)
@@ -60,6 +161,10 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
         }
     }
 
+    override convenience init(frame: CGRect) {
+        self.init(frame: frame, fontSize: Self.fontSize)
+    }
+
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
@@ -67,9 +172,14 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
         self.stream?.sink = nil
         self.stream = stream
         stream.sink = self
+        stream.isInFront = { [weak self] in self?.isInFront ?? false }
         stream.updateTheme(scheme.theme)
         lastReportedFit = nil
+        if !hasScreen {
+            lastReportedBackground = nil
+        }
         scheduleFit()
+        scheduleSurfaceBackgroundSample(immediate: true)
     }
 
     func terminalRevealPrompt(_ query: String) -> Bool { revealPrompt(query) }
@@ -80,29 +190,129 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
     func unbind() {
         touchInteraction?.reset()
         cancelPendingFit()
+        cancelPendingSurfaceBackgroundSample()
         lastReportedFit = nil
+        lastReportedBackground = nil
+        isPinching = false
+        pinchStartFontSize = nil
+        pendingFontHostReconcile = false
+        onFontSizeChange = nil
+        onBackgroundColorChange = nil
+        stream?.isInFront = { false }
         stream?.sink = nil
         stream = nil
     }
 
-    func configure(presented: Bool, allowsInput: Bool, isAgent: Bool,
-                   usesIdentityBackground: Bool = false) {
+    func setPresented(_ presented: Bool) {
+        self.presented = presented
+        isHidden = !presented
+        accessibilityElementsHidden = !presented
+        if !presented {
+            _ = resignFirstResponder()
+            touchInteraction?.reset()
+            cancelPendingFit()
+            cancelPendingSurfaceBackgroundSample()
+        }
+    }
+
+    func configure(presented: Bool, sceneActive: Bool = true, allowsInput: Bool, isAgent: Bool,
+                   usesIdentityBackground: Bool = false,
+                   fontSize: CGFloat = ShellTerminalHost.fontSize,
+                   onFontSizeChange: ((Double) -> Void)? = nil,
+                   onBackgroundColorChange: ((TerminalRGB) -> Void)? = nil) {
+        self.onFontSizeChange = onFontSizeChange
+        self.onBackgroundColorChange = onBackgroundColorChange
         if self.usesIdentityBackground != usesIdentityBackground {
             self.usesIdentityBackground = usesIdentityBackground
             applyScheme()
         }
+        let wasInFront = isInFront
         let revealed = !self.presented && presented
-        self.presented = presented
+        self.sceneActive = sceneActive
         self.allowsInput = allowsInput
         self.isAgent = isAgent
-        isHidden = !presented
-        accessibilityElementsHidden = !presented
-        if !presented || !allowsInput { _ = resignFirstResponder() }
-        if !presented {
-            touchInteraction?.reset()
-            cancelPendingFit()
+        setPresented(presented)
+        if !allowsInput { _ = resignFirstResponder() }
+
+        let targetFontSize = CGFloat(MobileZoomPreferences.clampTerminalFontSize(Double(fontSize)))
+        var didChangeFont = false
+        if !isPinching, presented, abs(targetFontSize - currentFontSize) >= 0.25 {
+            currentFontSize = targetFontSize
+            self.font = UIFont.monospacedSystemFont(ofSize: targetFontSize, weight: .regular)
+            didChangeFont = true
+            if bounds.width > 0, bounds.height > 0 {
+                reconcileHostAfterFontChange()
+            } else {
+                pendingFontHostReconcile = true
+            }
         }
-        if revealed { scheduleFit() }
+
+        if revealed {
+            setNeedsDisplay()
+            if hasScreen && stream?.phase == .live && isInFront {
+                stream?.claimSize()
+            }
+            if !didChangeFont || pendingFontHostReconcile {
+                scheduleFit()
+            }
+            if let cachedBg = lastReportedBackground {
+                onBackgroundColorChange?(cachedBg)
+            }
+            scheduleSurfaceBackgroundSample(immediate: true)
+        } else if !wasInFront && isInFront && hasScreen && stream?.phase == .live {
+            stream?.claimSize()
+        } else if presented && lastReportedBackground == nil {
+            scheduleSurfaceBackgroundSample(immediate: true)
+        }
+    }
+
+    func beginPinchZoom() {
+        guard canPinchZoom else { return }
+        isPinching = true
+        pinchStartFontSize = currentFontSize
+        cancelPendingFit()
+    }
+
+    func updatePinchZoom(scale: CGFloat) {
+        guard isPinching, let start = pinchStartFontSize else { return }
+        let next = CGFloat(MobileZoomPreferences.scaledTerminalFontSize(
+            from: Double(start),
+            magnification: Double(scale)
+        ))
+        guard next != currentFontSize else { return }
+        currentFontSize = next
+        self.font = UIFont.monospacedSystemFont(ofSize: next, weight: .regular)
+        scheduleSurfaceBackgroundSample(immediate: false)
+    }
+
+    func endPinchZoom(scale: CGFloat, cancelled: Bool) {
+        guard isPinching, let start = pinchStartFontSize else { return }
+        if !cancelled {
+            let final = CGFloat(MobileZoomPreferences.scaledTerminalFontSize(
+                from: Double(start),
+                magnification: Double(scale)
+            ))
+            if final != currentFontSize {
+                currentFontSize = final
+                self.font = UIFont.monospacedSystemFont(ofSize: final, weight: .regular)
+            }
+        }
+        isPinching = false
+        pinchStartFontSize = nil
+        let changed = currentFontSize != start
+        if !cancelled || changed {
+            onFontSizeChange?(Double(currentFontSize))
+        }
+        if changed {
+            reconcileHostAfterFontChange()
+        } else {
+            scheduleFit()
+        }
+    }
+
+    func cancelPinchZoomIfNeeded() {
+        guard isPinching else { return }
+        endPinchZoom(scale: 1, cancelled: true)
     }
 
     override var canBecomeFirstResponder: Bool { presented && allowsInput && super.canBecomeFirstResponder }
@@ -125,6 +335,10 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
         if window != nil, !isAgent {
             DispatchQueue.main.async { [weak self] in _ = self?.becomeFirstResponder() }
         }
+        if window != nil, presented {
+            setNeedsDisplay()
+            scheduleFit()
+        }
     }
 
     private func applyScheme() {
@@ -137,6 +351,76 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
         installColors(next.ansi.map { SwiftTerm.Color(red8: UInt16($0.red), green8: UInt16($0.green), blue8: UInt16($0.blue)) })
         keyboardAppearance = traitCollection.userInterfaceStyle == .dark ? .dark : .light
         if changed { stream?.updateTheme(next.theme) }
+        scheduleSurfaceBackgroundSample(immediate: true)
+    }
+
+    private func scheduleSurfaceBackgroundSample(immediate: Bool) {
+        guard presented else { return }
+        if immediate {
+            cancelPendingSurfaceBackgroundSample()
+            DispatchQueue.main.async { [weak self] in
+                self?.sampleSurfaceBackground()
+            }
+            return
+        }
+        guard !backgroundSamplePending else { return }
+        backgroundSamplePending = true
+        perform(#selector(sampleSurfaceBackground), with: nil, afterDelay: 0.18)
+    }
+
+    private func cancelPendingSurfaceBackgroundSample() {
+        NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(sampleSurfaceBackground), object: nil)
+        backgroundSamplePending = false
+    }
+
+    @objc private func sampleSurfaceBackground() {
+        backgroundSamplePending = false
+        guard presented else { return }
+        let resolved: TerminalRGB
+        if let snapshot = terminalContentSnapshot(region: .viewport) {
+            let defaultBg = snapshot.backgroundColor.map {
+                TerminalRGB(red16: $0.red, green16: $0.green, blue16: $0.blue)
+            } ?? scheme.backgroundRGB
+            let defaultFg = snapshot.foregroundColor.map {
+                TerminalRGB(red16: $0.red, green16: $0.green, blue16: $0.blue)
+            } ?? scheme.foregroundRGB
+            let palette = snapshot.palette.map {
+                TerminalRGB(red16: $0.red, green16: $0.green, blue16: $0.blue)
+            }
+            let rows = snapshot.rows.map { row in
+                row.cells.map { cell in
+                    TerminalSurfaceBackgroundResolver.CellSample(
+                        width: cell.width,
+                        foreground: Self.cellColor(cell.attribute.fg),
+                        background: Self.cellColor(cell.attribute.bg),
+                        isInverse: cell.attribute.style.contains(.inverse)
+                    )
+                }
+            }
+            resolved = TerminalSurfaceBackgroundResolver.resolve(
+                rows: rows,
+                columns: snapshot.dimensions.cols,
+                defaultBackground: defaultBg,
+                defaultForeground: defaultFg,
+                palette: palette
+            )
+        } else {
+            resolved = scheme.backgroundRGB
+        }
+        guard resolved != lastReportedBackground else { return }
+        lastReportedBackground = resolved
+        onBackgroundColorChange?(resolved)
+    }
+
+    private static func cellColor(_ color: Attribute.Color) -> TerminalSurfaceBackgroundResolver.CellColor {
+        switch color {
+        case .defaultColor, .defaultInvertedColor:
+            .defaultColor
+        case .ansi256(let code):
+            .ansi256(code)
+        case .trueColor(let red, let green, let blue):
+            .trueColor(TerminalRGB(red: red, green: green, blue: blue))
+        }
     }
 
     private static func color(_ rgb: TerminalColorScheme.RGB) -> UIColor {
@@ -154,28 +438,58 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
     /// 150 ms resize settle.
     private var lastReportedFit: TerminalGrid?
     private func scheduleFit() {
-        guard presented, !feedingHost, bounds.width > 0, bounds.height > 0 else { return }
+        guard presented, !feedingHost, !isPinching, bounds.width > 0, bounds.height > 0 else { return }
         NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(deliverFit), object: nil)
-        perform(#selector(deliverFit), with: nil, afterDelay: 0.15)
+        // Schedule across `.common` modes so navigation/scroll tracking never starves cold-open fit delivery.
+        perform(#selector(deliverFit), with: nil, afterDelay: 0.15, inModes: [.common])
     }
 
     private func cancelPendingFit() {
         NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(deliverFit), object: nil)
     }
 
-    @objc private func deliverFit() {
-        guard presented, !feedingHost, bounds.width > 0, bounds.height > 0 else { return }
+    private func computeFit() -> TerminalGrid? {
+        guard bounds.width > 0, bounds.height > 0 else { return nil }
         let emulator = terminalDimensions
         let optimal = getOptimalFrameSize()
         let cellWidth = optimal.width / CGFloat(max(1, emulator.cols))
         let cellHeight = optimal.height / CGFloat(max(1, emulator.rows))
-        guard cellWidth > 0, cellHeight > 0 else { return }
+        guard cellWidth > 0, cellHeight > 0 else { return nil }
         // Fit derives from the local viewport, never a received desktop grid.
-        let fit = TerminalGrid(
+        return TerminalGrid(
             cols: max(isAgent ? 40 : 20, Int(bounds.width / cellWidth)),
             rows: max(isAgent ? 10 : 5, Int(bounds.height / cellHeight))
         )
-        guard fit != lastReportedFit else { return }
+    }
+
+    /// Reconciles the host after SwiftTerm's `font` setter runs `resetFont()` ->
+    /// `softReset()`, either voting the new grid or requesting a fresh snapshot
+    /// when the grid stayed unchanged (e.g., at the column floor or read-only).
+    private func reconcileHostAfterFontChange() {
+        guard presented, !feedingHost else { return }
+        cancelPendingFit()
+        scheduleSurfaceBackgroundSample(immediate: true)
+        guard let fit = computeFit() else {
+            pendingFontHostReconcile = true
+            scheduleFit()
+            return
+        }
+        pendingFontHostReconcile = false
+        if allowsInput, fit != lastReportedFit {
+            lastReportedFit = fit
+            stream?.updateFit(fit)
+        } else if hasScreen, stream?.phase == .live {
+            stream?.refreshSnapshot()
+        }
+    }
+
+    @objc private func deliverFit() {
+        guard presented, !feedingHost, !isPinching, bounds.width > 0, bounds.height > 0 else { return }
+        if pendingFontHostReconcile {
+            reconcileHostAfterFontChange()
+            return
+        }
+        guard let fit = computeFit(), fit != lastReportedFit else { return }
         lastReportedFit = fit
         stream?.updateFit(fit)
     }
@@ -200,10 +514,12 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
             resetToInitialState()
             feedFromHost(data)
         }
+        scheduleSurfaceBackgroundSample(immediate: true)
     }
 
     func terminalFeed(_ data: Data) {
         feedFromHost(data)
+        scheduleSurfaceBackgroundSample(immediate: false)
     }
 
     private func feedFromHost(_ data: Data) {
@@ -221,6 +537,7 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
         Task { @MainActor [weak self] in
             self?.touchInteraction?.cancelScrolling()
             self?.selectNone()
+            self?.scheduleSurfaceBackgroundSample(immediate: true)
         }
     }
 
@@ -297,6 +614,7 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
     }
 
     func sizeChanged(source: SwiftTerm.TerminalView, newCols: Int, newRows: Int) {
+        guard !isPinching else { return }
         scheduleFit()
     }
 
@@ -304,7 +622,9 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
 
     func hostCurrentDirectoryUpdate(source: SwiftTerm.TerminalView, directory: String?) {}
 
-    func scrolled(source: SwiftTerm.TerminalView, position: Double) {}
+    func scrolled(source: SwiftTerm.TerminalView, position: Double) {
+        scheduleSurfaceBackgroundSample(immediate: false)
+    }
 
     func rangeChanged(source: SwiftTerm.TerminalView, startY: Int, endY: Int) {}
 

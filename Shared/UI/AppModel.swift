@@ -21,6 +21,8 @@ final class AppModel {
 
     /// 当前连接 hello 带回的配对权限（"readonly" 则隐藏复制/接力菜单；nil 按旧开发机 full 处理）。
     private(set) var connectedAccess: String?
+    /// Active runtimes reported by the connected host's latest `hello`.
+    private(set) var connectedRuntimes: [RuntimeEntry] = []
     /// 当前连接 hello 带回的配对权限（"readonly" 隐藏复制/接力菜单；nil 按旧开发机 full 处理）。
     private(set) var connectionState: ConnectionState = .disconnected
     /// 当前连接通路（局域网 / 中继），未连上时为 nil。
@@ -37,8 +39,37 @@ final class AppModel {
     }
     /// 会话对话内容字号档位（写入 UserDefaults）。
     var sessionTextSize: SessionTextSize {
-        didSet { UserDefaults.standard.set(sessionTextSize.rawValue, forKey: SessionTextSize.storageKey) }
+        didSet {
+            UserDefaults.standard.set(sessionTextSize.rawValue, forKey: SessionTextSize.storageKey)
+            #if os(iOS)
+            mobileChatZoomScale = Double(sessionTextSize.scale)
+            #endif
+        }
     }
+    #if os(iOS)
+    /// Cross-session mobile Chat View zoom scale (persisted independently of TUI zoom).
+    var mobileChatZoomScale: Double {
+        didSet {
+            let clamped = MobileZoomPreferences.clampChatScale(mobileChatZoomScale)
+            if mobileChatZoomScale != clamped {
+                mobileChatZoomScale = clamped
+                return
+            }
+            MobileZoomPreferences.saveChatScale(clamped)
+        }
+    }
+    /// Cross-session mobile TUI font size in points (persisted independently of Chat zoom).
+    var mobileTerminalFontSize: Double {
+        didSet {
+            let clamped = MobileZoomPreferences.clampTerminalFontSize(mobileTerminalFontSize)
+            if mobileTerminalFontSize != clamped {
+                mobileTerminalFontSize = clamped
+                return
+            }
+            MobileZoomPreferences.saveTerminalFontSize(clamped)
+        }
+    }
+    #endif
     /// 应用内语言（写入 UserDefaults；同时同步 AppleLanguages 供下次启动的
     /// Foundation 文案使用，SwiftUI 文案经 locale 环境即时切换）。
     var appLanguage: AppLanguage {
@@ -70,9 +101,16 @@ final class AppModel {
         } else {
             preferDirectConnection = UserDefaults.standard.bool(forKey: "corral.preferDirect")
         }
-        sessionTextSize = SessionTextSize.resolve(
+        let resolvedTextSize = SessionTextSize.resolve(
             stored: UserDefaults.standard.string(forKey: SessionTextSize.storageKey)
         )
+        sessionTextSize = resolvedTextSize
+        #if os(iOS)
+        mobileChatZoomScale = MobileZoomPreferences.loadChatScale(
+            fallbackScale: Double(resolvedTextSize.scale)
+        )
+        mobileTerminalFontSize = MobileZoomPreferences.loadTerminalFontSize()
+        #endif
         appLanguage = AppLanguage.resolve(
             stored: UserDefaults.standard.string(forKey: AppLanguage.storageKey)
         )
@@ -189,6 +227,7 @@ final class AppModel {
                 applyHelloLocalHintsIfNeeded(hello, hostID: host.hostID)
                 applyHelloHostNameIfNeeded(hello, hostID: host.hostID)
                 connectedAccess = hello.access
+                connectedRuntimes = remote.hostRuntimes
                 connectedHostID = host.hostID
                 connectionState = .connected
                 activeTransport = remote.activeTransport
@@ -246,6 +285,7 @@ final class AppModel {
         activeTransport = nil
         connectedHostID = nil
         connectedAccess = nil
+        connectedRuntimes = []
         connectionState = .failed(message)
     }
 
@@ -257,6 +297,7 @@ final class AppModel {
         activeTransport = nil
         connectedHostID = nil
         connectedAccess = nil
+        connectedRuntimes = []
         connectionState = .disconnected
         if clearSelection {
             selectedHostID = nil
@@ -330,6 +371,7 @@ final class AppModel {
             try Task.checkCancellation()
             guard client === remote else { throw CancellationError() }
             connectedAccess = hello.access
+            connectedRuntimes = remote.hostRuntimes
             applyHelloRelayIfNeeded(hello, hostID: payload.hostID)
             applyHelloLocalHintsIfNeeded(hello, hostID: payload.hostID)
             applyHelloHostNameIfNeeded(hello, hostID: payload.hostID)
@@ -370,6 +412,7 @@ final class AppModel {
             guard let self, let remote, self.client === remote, remote.isUsable else { return }
             self.connectedHostID = hostID
             self.connectedAccess = remote.confirmedAccess
+            self.connectedRuntimes = remote.hostRuntimes
             self.connectionState = .connected
             self.activeTransport = remote.activeTransport
             if self.deferredPathCheck { self.deferredPathCheck = false; self.handleSceneBecameActive() }
@@ -403,6 +446,7 @@ final class AppModel {
                         }
                         droppedAt = nil
                         self.connectedAccess = remote.confirmedAccess
+                        self.connectedRuntimes = remote.hostRuntimes
                         self.activeTransport = transport
                         self.connectionState = .connected
                         self.connectedHostID = hostID
@@ -424,6 +468,7 @@ final class AppModel {
                         droppedAt = nil
                         self.connectionState = remote.terminalConnectionError.map { .failed($0) } ?? .disconnected
                         self.connectedAccess = nil
+                        self.connectedRuntimes = []
                         self.connectedHostID = nil
                         self.activeTransport = nil
                     }
@@ -442,6 +487,7 @@ final class AppModel {
             if client.controlConfirmed {
                 connectionState = .connected
                 connectedAccess = client.confirmedAccess
+                connectedRuntimes = client.hostRuntimes
                 connectedHostID = client.reconnectHost?.hostID
             } else {
                 connectionState = .connecting
@@ -456,6 +502,7 @@ final class AppModel {
         case .disconnected:
             connectionState = client.terminalConnectionError.map { .failed($0) } ?? .disconnected
             connectedAccess = nil
+            connectedRuntimes = []
             connectedHostID = nil
             activeTransport = nil
         }

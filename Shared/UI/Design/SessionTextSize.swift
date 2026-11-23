@@ -45,6 +45,14 @@ enum SessionTextSize: String, CaseIterable, Identifiable, Sendable {
         let clamped = min(max(Int(sliderIndex.rounded()), 0), allCases.count - 1)
         return allCases[clamped]
     }
+
+    static func matching(scale: CGFloat, tolerance: CGFloat = 0.005) -> SessionTextSize? {
+        allCases.first { abs($0.scale - scale) <= tolerance }
+    }
+
+    static func nearest(to scale: CGFloat) -> SessionTextSize {
+        allCases.min { abs($0.scale - scale) < abs($1.scale - scale) } ?? .default
+    }
 }
 
 enum SessionFontStyle {

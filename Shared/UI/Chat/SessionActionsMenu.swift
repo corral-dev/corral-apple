@@ -109,12 +109,7 @@ enum SessionActionsMenu {
 
 // MARK: - SwiftUI 菜单视图
 
-enum SessionDetailMode: String, CaseIterable, Identifiable, Hashable {
-    case chat
-    case terminal
-
-    var id: String { rawValue }
-
+extension SessionDetailMode {
     var title: LocalizedStringKey {
         switch self {
         case .chat: "mac.pane.chat"
@@ -122,16 +117,8 @@ enum SessionDetailMode: String, CaseIterable, Identifiable, Hashable {
         }
     }
 
-    var toggled: SessionDetailMode {
-        self == .chat ? .terminal : .chat
-    }
-
     var switchTitle: LocalizedStringKey {
         self == .chat ? "mac.pane.switch_to_terminal" : "mac.pane.switch_to_chat"
-    }
-
-    var switchSymbol: String {
-        self == .chat ? "terminal" : "bubble.left.and.text.bubble.right"
     }
 }
 
@@ -161,7 +148,6 @@ struct SessionMenuItems: View {
     var onCopyPath: (() -> Void)? = nil
     var onRequestDelete: (() -> Void)? = nil
     var displayMode: Binding<SessionDetailMode>? = nil
-    var onOpenAgentTerminal: (() -> Void)? = nil
 
     private var visible: Bool {
         SessionActionsMenu.isMenuVisible(access: access)
@@ -190,12 +176,6 @@ struct SessionMenuItems: View {
                     displayMode.wrappedValue = displayMode.wrappedValue.toggled
                 } label: {
                     Label(displayMode.wrappedValue.switchTitle, systemImage: displayMode.wrappedValue.switchSymbol)
-                }
-            }
-        } else if let onOpenAgentTerminal {
-            Section {
-                Button(action: onOpenAgentTerminal) {
-                    Label("mac.pane.switch_to_terminal", systemImage: "terminal")
                 }
             }
         }

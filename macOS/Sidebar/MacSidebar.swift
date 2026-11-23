@@ -38,6 +38,11 @@ struct MacSidebar: View {
     }
 
     private var sessions: [SessionSummary] { feed.listStore.windowSessions }
+    private var effectiveHostRuntimes: [RuntimeEntry] {
+        if workspace.runtimeCatalog.isLoaded { return workspace.runtimes }
+        if appModel.connectedHostID == feed.host.hostID { return appModel.connectedRuntimes }
+        return []
+    }
     /// Text search uses the same host-catalog hits as the iPhone. The ordinary
     /// 80-row display window is only the immediate/local fallback, not the
     /// boundary of what the user can find.
@@ -154,7 +159,10 @@ struct MacSidebar: View {
             .safeAreaBar(edge: .top, spacing: 0) {
                 MacSidebarFilters(
                     sessions: sessions,
-                    quickFilter: $quickFilter, runtimes: $runtimeFilter, projects: $projectFilter
+                    quickFilter: $quickFilter,
+                    runtimes: $runtimeFilter,
+                    projects: $projectFilter,
+                    hostRuntimes: effectiveHostRuntimes
                 )
                     .id(feed.host.id)
                     .modifier(MacZoomContent())

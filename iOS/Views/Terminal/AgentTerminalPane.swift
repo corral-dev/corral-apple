@@ -1,9 +1,11 @@
 import SwiftUI
 
-/// One retained native emulator for this detail. Visibility owns the stream,
-/// size vote and keyboard. Entering a stopped session resumes it once.
+/// Agent terminal pane backed by `MobileTerminalSessions` so opened terminals
+/// outlive transient detail mounts (Back navigation, session switches, Chat
+/// toggles, and `NavigationSplitView` relocation) and reveal immediately on return.
 struct AgentTerminalPane: View {
     @Environment(AppModel.self) private var appModel
+    @Environment(MobileTerminalSessions.self) private var terminals
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.colorScheme) private var colorScheme
     let session: SessionSummary
@@ -13,23 +15,41 @@ struct AgentTerminalPane: View {
     var promptRequest: TerminalPromptRequest? = nil
     /// Reports how a prompt request ended, for the tapped row's status.
     var onPromptOutcome: (UUID, TerminalPromptOutcome) -> Void = { _, _ in }
+    var onBackgroundColorChange: (TerminalRGB?) -> Void = { _ in }
 
-    @State private var stream: RemoteTerminalStream?
+    @State private var sampledBackground: TerminalRGB?
     @State private var isResuming = false
     @State private var startAttempted = false
     @State private var resumed = false
     @State private var resumeTask: Task<Void, Never>?
-    @State private var sawScreen = false
     @State private var handledPromptRequest: UUID?
-    @State private var visibility = TerminalVisibility()
+
+    private var terminal: MobileTerminalSessions.Terminal? {
+        terminals.terminal(for: session.key, client: appModel.client)
+    }
+
+    private var stream: RemoteTerminalStream? { terminal?.stream }
+    private var sawLive: Bool { stream?.hasBeenLive ?? false }
+    private var hasScreen: Bool { sawLive || terminal?.view.hasScreen == true }
 
     var body: some View {
         ZStack {
-            if let stream {
-                ShellTerminalView(stream: stream, isPresented: isPresented,
-                                  allowsInput: isActive && isReady && !isReadonly && !inputSuspended && stream.phase == .live,
-                                  isAgent: true,
-                                  usesIdentityBackground: SessionPresentation.titleIcon(in: session.title) != nil)
+            if let terminal, showsEmulator {
+                RetainedShellTerminalView(
+                    host: terminal.view,
+                    isPresented: isPresented,
+                    sceneActive: scenePhase == .active,
+                    allowsInput: isActive && isReady && !isReadonly && !inputSuspended && terminal.stream.phase == .live,
+                    isAgent: true,
+                    usesIdentityBackground: SessionPresentation.titleIcon(in: session.title) != nil,
+                    fontSize: CGFloat(appModel.mobileTerminalFontSize),
+                    onFontSizeChange: { appModel.mobileTerminalFontSize = $0 },
+                    onBackgroundColorChange: { rgb in
+                        terminal.sampledBackground = rgb
+                        sampledBackground = rgb
+                        onBackgroundColorChange(rgb)
+                    }
+                )
             }
             if isPresented { status }
         }
@@ -42,6 +62,12 @@ struct AgentTerminalPane: View {
         .background {
             if isPresented { background }
         }
+        .onAppear {
+            syncCachedBackground()
+        }
+        .onChange(of: terminal?.sampledBackground, initial: true) { _, _ in
+            syncCachedBackground()
+        }
         .task(id: isActive && isReady && !isReadonly && needsStart) {
             guard isActive, isReady, !isReadonly, needsStart else { return }
             // resume owns an unstructured task: changing startAttempted must
@@ -50,27 +76,31 @@ struct AgentTerminalPane: View {
         }
         .task(id: ConnectionKey(client: appModel.clientIdentity, active: isActive && isReady,
                                 hosted: session.hosted || resumed)) {
-            updateStream()
+            openTerminal()
         }
-        .onChange(of: stream?.phase) { _, phase in
-            if phase == .live { sawScreen = true }
+        .onChange(of: session.hosted) { _, hosted in
+            if hosted, isActive, isReady, !isResuming, stream?.phase == .ended, let client = appModel.client {
+                terminals.restart(session.key, client: client)
+            }
         }
         .onChange(of: isPresented) { _, presented in
-            visibility.active = presented && scenePhase == .active
             if !presented {
                 cancelResume()
-                stream?.stop()
+            } else {
+                syncCachedBackground()
             }
         }
         .onChange(of: scenePhase) { _, phase in
-            visibility.active = isPresented && phase == .active
-            if phase != .active {
-                cancelResume()
-                stream?.stop()
-            }
+            if phase != .active { cancelResume() }
         }
         .onChange(of: isReady) { _, ready in
             if !ready { cancelResume() }
+        }
+        .onChange(of: colorScheme) { _, _ in
+            if stream == nil {
+                sampledBackground = nil
+                onBackgroundColorChange(nil)
+            }
         }
         .task(id: TerminalPromptTaskKey(request: promptRequest?.id, stream: stream.map(ObjectIdentifier.init),
                                          presented: isPresented, ready: stream?.phase == .live)) {
@@ -85,9 +115,7 @@ struct AgentTerminalPane: View {
             onPromptOutcome(request.id, outcome)
         }
         .onDisappear {
-            visibility.active = false
             cancelResume()
-            stream?.stop()
         }
     }
 
@@ -99,38 +127,52 @@ struct AgentTerminalPane: View {
     /// starts once. Never undo the user's exit after showing a live terminal.
     private var needsStart: Bool {
         guard !startAttempted, !isResuming else { return false }
-        if let stream { return stream.phase == .ended && !sawScreen }
+        if let stream { return stream.phase == .ended && !sawLive }
         return !session.hosted && !session.live && !resumed
     }
 
-    private func updateStream() {
-        visibility.active = isActive
-        guard isActive, isReady, !isResuming, let client = appModel.client, session.hosted || resumed else {
-            stream?.stop()
-            return
+    private var runsElsewhere: Bool {
+        stream == nil && !isResuming && session.live && !session.hosted && !resumed
+    }
+
+    private var showsRestartPrompt: Bool {
+        guard !isResuming else { return false }
+        if let stream, stream.phase == .ended {
+            return isReadonly || sawLive || startAttempted
         }
-        if stream?.clientIdentity != ObjectIdentifier(client) {
-            stream?.stop()
-            let next = RemoteTerminalStream(sessionKey: session.key, client: client)
-            let visibility = visibility
-            next.isInFront = { visibility.active }
-            stream = next
-            sawScreen = false
+        return !session.hosted && !resumed && !session.live && (isReadonly || startAttempted)
+    }
+
+    private var showsEmulator: Bool {
+        !runsElsewhere && !showsRestartPrompt && !isResuming
+    }
+
+    private func openTerminal() {
+        guard isActive, isReady, !isResuming, let client = appModel.client, session.hosted || resumed else { return }
+        terminals.open(session.key, client: client, fontSize: CGFloat(appModel.mobileTerminalFontSize))
+    }
+
+    private func syncCachedBackground() {
+        guard let rgb = terminal?.sampledBackground ?? terminal?.view.currentBackgroundRGB else { return }
+        if sampledBackground != rgb {
+            sampledBackground = rgb
         }
-        stream?.start()
+        if isPresented {
+            onBackgroundColorChange(rgb)
+        }
     }
 
     @ViewBuilder
     private var status: some View {
         if isResuming {
             waitingIndicator
-        } else if session.live && !session.hosted && !resumed {
+        } else if runsElsewhere {
             ContentUnavailableView {
                 Label("terminal.running_elsewhere.title", systemImage: "macwindow.on.rectangle")
             } description: {
                 Text("terminal.running_elsewhere.description")
             }
-        } else if (stream?.phase == .ended || (!session.hosted && !resumed)) && (isReadonly || sawScreen || startAttempted) {
+        } else if showsRestartPrompt {
             ContentUnavailableView {
                 Label("terminal.not_running.title", systemImage: "terminal")
             } description: {
@@ -144,7 +186,11 @@ struct AgentTerminalPane: View {
                         .disabled(!isReady || isResuming)
                 }
             }
-        } else if !isReady || !sawScreen {
+        } else if let stream {
+            if stream.phase == .connecting && (!hasScreen || !isReady) {
+                waitingIndicator
+            }
+        } else {
             waitingIndicator
         }
     }
@@ -172,7 +218,7 @@ struct AgentTerminalPane: View {
             defer {
                 isResuming = false
                 resumeTask = nil
-                updateStream()
+                openTerminal()
             }
             var attempt = 0
             while !Task.isCancelled, isActive, isReady, !isReadonly, appModel.client === client {
@@ -186,9 +232,7 @@ struct AgentTerminalPane: View {
                         return
                     }
                     resumed = true
-                    stream?.stop()
-                    stream = nil
-                    sawScreen = false
+                    terminals.restart(session.key, client: client)
                     return
                 } catch {
                     guard !Task.isCancelled, isActive, isReady, !isReadonly, appModel.client === client else {
@@ -212,11 +256,8 @@ struct AgentTerminalPane: View {
     }
 
     private var background: Color {
-        let rgb = (colorScheme == .dark ? TerminalColorScheme.dark : .light).background
-        return Color(red: Double(rgb.red) / 255, green: Double(rgb.green) / 255, blue: Double(rgb.blue) / 255)
+        (sampledBackground ?? terminal?.sampledBackground ?? TerminalColorScheme.forAppearance(isDark: colorScheme == .dark).backgroundRGB).swiftUIColor
     }
-
-    private final class TerminalVisibility { var active = false }
 
     private struct ConnectionKey: Hashable {
         let client: ObjectIdentifier?

@@ -45,6 +45,7 @@ private struct SessionSplitView: View {
     @Environment(AppModel.self) private var appModel
     @State private var feed: HostSessionFeed
     @State private var presentation = ConversationPresentation()
+    @State private var terminals = MobileTerminalSessions()
     @State private var selection: SessionRoute?
     /// A conversation opened by New Session (or copy/hand-off) focuses its composer once.
     @State private var autoFocusKey: String?
@@ -53,6 +54,7 @@ private struct SessionSplitView: View {
     @State private var showSettings = false
     @State private var newSessionRequest = 0
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    private let modeStore = SessionDetailModeStore.shared
 
     init(host: HostInfo, onPair: @escaping () -> Void) {
         self.host = host
@@ -71,7 +73,7 @@ private struct SessionSplitView: View {
                         set: { select($0, focusComposer: false) }
                     ),
                     open: { select($0, focusComposer: $1) },
-                    openMode: { select($0, focusComposer: $1 == .chat, initialMode: $1) },
+                    openMode: { select($0, focusComposer: false, initialMode: $1) },
                     showSettings: { showSettings = true },
                     showPairing: onPair,
                     newSessionRequest: newSessionRequest,
@@ -84,11 +86,16 @@ private struct SessionSplitView: View {
             NavigationStack { detail.modifier(HorizontalBars()) }
         }
         .navigationSplitViewStyle(.balanced)
+        .environment(terminals)
         .onChange(of: appModel.clientIdentity) { _, _ in
             prepareSelectedConversation()
         }
         .onAppear { prepareSelectedConversation() }
-        .onDisappear { presentation.dismiss() }
+        .onDisappear {
+            presentation.dismiss()
+            terminals.reset()
+            modeStore.discardEmptyEntries()
+        }
         #if DEBUG
         .onAppear {
             if ProcessInfo.processInfo.arguments.contains("-CorralInspectNotifications") {
@@ -110,7 +117,8 @@ private struct SessionSplitView: View {
 
     private func select(_ route: SessionRoute?, focusComposer: Bool, initialMode: SessionDetailMode? = nil) {
         autoFocusKey = focusComposer ? route?.key : nil
-        if let initialMode {
+        if let initialMode, let route {
+            recordMode(initialMode, for: route.key)
             modeRequestCounter &+= 1
             requestedMode = SessionModeRequest(id: modeRequestCounter, mode: initialMode)
         } else if selection?.key != route?.key {
@@ -118,6 +126,18 @@ private struct SessionSplitView: View {
         }
         selection = route
         prepareSelectedConversation()
+    }
+
+    private func canonicalSessionKey(for key: String) -> String {
+        feed.listStore.resolvedKey(key)
+    }
+
+    private func rememberedMode(for sessionKey: String) -> SessionDetailMode {
+        modeStore.effectiveMode(for: canonicalSessionKey(for: sessionKey), hostID: host.hostID)
+    }
+
+    private func recordMode(_ mode: SessionDetailMode, for sessionKey: String) {
+        modeStore.setMode(mode, for: canonicalSessionKey(for: sessionKey), hostID: host.hostID)
     }
 
     private func prepareSelectedConversation() {
@@ -143,8 +163,12 @@ private struct SessionSplitView: View {
             SessionDetailView(
                 session: session,
                 autoFocusComposer: autoFocusKey == route.key,
-                initialMode: requestedMode?.mode ?? .chat,
+                initialMode: rememberedMode(for: session.key),
                 modeRequest: requestedMode,
+                onModeChange: { mode in
+                    requestedMode = nil
+                    recordMode(mode, for: session.key)
+                },
                 metadataStore: feed.listStore,
                 injectedStore: store,
                 onDidCreateSession: { created in
@@ -157,7 +181,12 @@ private struct SessionSplitView: View {
                 onDelete: { target in
                     Task {
                         do {
+                            let canonicalKey = canonicalSessionKey(for: target.key)
                             try await feed.delete(target)
+                            terminals.close(target.key)
+                            if canonicalKey != target.key {
+                                terminals.close(canonicalKey)
+                            }
                             if selection?.key == target.key {
                                 selection = nil
                                 presentation.dismiss()

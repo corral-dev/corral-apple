@@ -12,6 +12,9 @@ struct SessionDetailView: View {
     @Environment(\.interfaceScale) private var interfaceScale
     @Environment(AppModel.self) private var appModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    #if os(iOS)
+    @Environment(\.colorScheme) private var colorScheme
+    #endif
 
     private let fallbackSession: SessionSummary
     private let sessionKey: String
@@ -31,6 +34,7 @@ struct SessionDetailView: View {
         autoFocusComposer: Bool = false,
         initialMode: SessionDetailMode = .chat,
         modeRequest: SessionModeRequest? = nil,
+        onModeChange: ((SessionDetailMode) -> Void)? = nil,
         metadataStore: SessionListStore? = nil,
         injectedStore: ConversationStore? = nil,
         composerFocusRequest: Int = 0,
@@ -53,6 +57,7 @@ struct SessionDetailView: View {
         self.metadataStore = metadataStore
         self.autoFocusComposer = autoFocusComposer
         self.modeRequest = modeRequest
+        self.onModeChange = onModeChange
         self.onDidCreateSession = onDidCreateSession
         self.onPin = onPin
         self.onStop = onStop
@@ -63,6 +68,7 @@ struct SessionDetailView: View {
     /// New-session path: focus the composer once after appear.
     var autoFocusComposer = false
     var modeRequest: SessionModeRequest? = nil
+    var onModeChange: ((SessionDetailMode) -> Void)? = nil
     /// A conversation owned by the container (a Mac pane keeps it alive across
     /// chat/terminal switches and feeds its prompts panel). The container starts
     /// and stops it; this view only renders and sends through it.
@@ -112,6 +118,10 @@ struct SessionDetailView: View {
     @State private var imageLoader: ChatImageLoader?
     @State private var fileLoader: ChatFileLoader?
     @State private var visitedTerminal = false
+    #if os(iOS)
+    @State private var terminalSurfaceBackground: TerminalRGB?
+    @State private var liveChatZoomScale: Double?
+    #endif
     @State private var draft = ""
     @State private var draftAttachments: [DraftImageAttachment] = []
     @State private var draftFiles: [DraftFileAttachment] = []
@@ -143,9 +153,11 @@ struct SessionDetailView: View {
         } composer: {
             if pane == .chat || !canShowAgentTerminal { composerStack }
         }
-        .background(Color(.systemGroupedBackground))
-        .environment(\.sessionTextScale, appModel.sessionTextSize.scale)
+        .background(pageBackground)
+        .environment(\.sessionTextScale, effectiveSessionTextScale)
         #if os(iOS)
+        .modifier(TerminalScrollEdgeChrome(hidden: isShowingAgentTerminal))
+        .modifier(TerminalNavigationBarChrome(isActive: isShowingAgentTerminal, colorScheme: activeTerminalChromeScheme))
         .navigationTitle(SessionPresentation.displayTitle(for: session))
         .inlineNavigationTitle()
         .navigationBarBackButtonHidden(false)
@@ -157,6 +169,7 @@ struct SessionDetailView: View {
                     sessionHeaderLabel
                 }
                 .buttonStyle(PressableButtonStyle())
+                .environment(\.colorScheme, isShowingAgentTerminal ? activeTerminalChromeScheme : colorScheme)
                 .accessibilityHint(Text("session.detail.user_prompts.open_hint"))
             }
             ToolbarItem(placement: .topBarTrailing) {
@@ -168,7 +181,7 @@ struct SessionDetailView: View {
         }
         // iPad menu bar ⌘E, as on the Mac (owner request 2026-11-01).
         .focusedSceneValue(\.corralToggleSessionMode, canShowAgentTerminal ? CorralCommandAction(id: sessionKey) {
-            pane = pane.toggled
+            selectDisplayMode(pane.toggled)
         } : nil)
         .focusedSceneValue(\.corralFocusedSessionMode, canShowAgentTerminal ? pane : nil)
         #if DEBUG
@@ -187,10 +200,10 @@ struct SessionDetailView: View {
         }) {
             UserPromptsView(
                 prompts: userPrompts,
-                status: pane == .terminal ? promptStatus : nil,
+                status: isShowingAgentTerminal ? promptStatus : nil,
                 onSelect: selectPrompt
             )
-            .environment(\.sessionTextScale, appModel.sessionTextSize.scale)
+            .environment(\.sessionTextScale, effectiveSessionTextScale)
             .presentationDetents([.large])
             .presentationDragIndicator(.visible)
             .presentationContentInteraction(.scrolls)
@@ -250,13 +263,20 @@ struct SessionDetailView: View {
             scrollToMessageID = scrollRequest.messageID
         }
         .onChange(of: pane) { _, newValue in
-            if newValue == .terminal { visitedTerminal = true }
+            if newValue == .terminal {
+                visitedTerminal = true
+                #if os(iOS)
+                liveChatZoomScale = nil
+                #endif
+            }
         }
-        .onChange(of: canShowAgentTerminal) { _, allowed in
-            if !allowed { pane = .chat }
+        #if os(iOS)
+        .onChange(of: sessionKey) { _, _ in
+            terminalSurfaceBackground = nil
         }
+        #endif
         .onChange(of: modeRequest) { _, request in
-            guard let request, canShowAgentTerminal else { return }
+            guard let request else { return }
             if request.mode == .terminal { visitedTerminal = true }
             pane = request.mode
         }
@@ -270,6 +290,9 @@ struct SessionDetailView: View {
         #endif
         .hapticScope(hapticScope)
         .onDisappear {
+            #if os(iOS)
+            liveChatZoomScale = nil
+            #endif
             persistDraft(draft)
             fileLoader?.cancelActiveDownload()
             transientNoticeTask?.cancel()
@@ -313,8 +336,18 @@ struct SessionDetailView: View {
             onCopyPath: showCopiedPathNotice,
             onDelete: onDelete != nil ? { onDelete?(session) } : nil,
             onOpenTerminal: openTerminalAction,
-            displayMode: canShowAgentTerminal ? $pane : nil
+            displayMode: canShowAgentTerminal ? Binding(
+                get: { pane },
+                set: { selectDisplayMode($0) }
+            ) : nil
         )
+    }
+
+    private func selectDisplayMode(_ mode: SessionDetailMode) {
+        if mode == .terminal { visitedTerminal = true }
+        guard pane != mode else { return }
+        pane = mode
+        onModeChange?(mode)
     }
 
     /// iPhone: the project terminal lives in this menu (the session page keeps
@@ -439,10 +472,38 @@ struct SessionDetailView: View {
     }
 
     #if os(iOS)
+    private var isShowingAgentTerminal: Bool { pane == .terminal && canShowAgentTerminal }
+
+    private var activeTerminalBackgroundRGB: TerminalRGB {
+        terminalSurfaceBackground ?? TerminalColorScheme.forAppearance(isDark: colorScheme == .dark).backgroundRGB
+    }
+
+    private var activeTerminalChromeScheme: ColorScheme {
+        activeTerminalBackgroundRGB.prefersDarkChrome ? .dark : .light
+    }
+    #endif
+
+    private var effectiveSessionTextScale: CGFloat {
+        #if os(iOS)
+        CGFloat(liveChatZoomScale ?? appModel.mobileChatZoomScale)
+        #else
+        appModel.sessionTextSize.scale
+        #endif
+    }
+
+    private var pageBackground: Color {
+        #if os(iOS)
+        isShowingAgentTerminal ? activeTerminalBackgroundRGB.swiftUIColor : Color(.systemGroupedBackground)
+        #else
+        Color(.systemGroupedBackground)
+        #endif
+    }
+
+    #if os(iOS)
     /// Returns whether the prompts sheet stays open: it does while a terminal
     /// prompt is located, so its row shows the status (owner decision 2026-10-19).
     private func selectPrompt(_ message: RichMessage) -> Bool {
-        guard pane == .terminal else {
+        guard isShowingAgentTerminal else {
             pendingPromptJump = ConversationTimelineItem.message(message).id
             return false
         }
@@ -467,6 +528,14 @@ struct SessionDetailView: View {
         VStack(spacing: 0) {
             ZStack {
                 conversationContent
+                    #if os(iOS)
+                    .chatPinchZoom(
+                        isEnabled: pane == .chat || !canShowAgentTerminal,
+                        currentScale: appModel.mobileChatZoomScale,
+                        onLiveScaleChange: { liveChatZoomScale = $0 },
+                        onCommitScale: { appModel.mobileChatZoomScale = $0 }
+                    )
+                    #endif
                     .opacity(pane == .chat || !canShowAgentTerminal ? 1 : 0)
                     .allowsHitTesting(pane == .chat || !canShowAgentTerminal)
                     .accessibilityHidden(pane != .chat && canShowAgentTerminal)
@@ -481,7 +550,8 @@ struct SessionDetailView: View {
                             && (!showUserPrompts || promptStatus?.kind == .locating),
                         inputSuspended: showUserPrompts,
                         promptRequest: terminalPromptRequest,
-                        onPromptOutcome: finishPrompt
+                        onPromptOutcome: finishPrompt,
+                        onBackgroundColorChange: { terminalSurfaceBackground = $0 }
                     )
                 }
                 #endif
@@ -559,7 +629,7 @@ struct SessionDetailView: View {
                     onDismiss: { fileLoader?.dismissMarkdown() },
                     onSystemPreview: { url in fileLoader?.viewerQuickLookURL = url }
                 )
-                .environment(\.sessionTextScale, appModel.sessionTextSize.scale)
+                .environment(\.sessionTextScale, effectiveSessionTextScale)
             }
             .overlay {
                 if let loader = fileLoader,
@@ -729,7 +799,7 @@ struct SessionDetailView: View {
                 attachments: $draftAttachments,
                 fileAttachments: $draftFiles,
                 isBusy: isSending || isActionBusy || restartPhase == .restarting,
-                autoFocus: autoFocusComposer,
+                autoFocus: autoFocusComposer && (pane == .chat || !canShowAgentTerminal),
                 focusRequest: composerFocusRequest,
                 onFocusChange: composerFocusChanged,
                 history: userPrompts.compactMap { $0.text?.trimmingCharacters(in: .whitespacesAndNewlines) },

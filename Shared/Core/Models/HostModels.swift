@@ -120,6 +120,8 @@ nonisolated struct HelloResponse: Codable, Sendable {
     /// 开发机当前局域网直连提示（如 `["192.168.1.5:8737"]`）。未配对也返回。
     /// 缺字段为 nil；坏元素在解码时跳过。
     let localHints: [String]?
+    /// Active runtimes reported by the host in `hello`, if present.
+    let runtimes: [RuntimeEntry]?
     /// Host-advertised feature flags from hello `capabilities` (unknown keys ignored).
     let capabilities: HostCapabilities
 
@@ -134,6 +136,7 @@ nonisolated struct HelloResponse: Codable, Sendable {
         case relayEnabled = "relay_enabled"
         case localEnabled = "local_enabled"
         case localHints = "local_hints"
+        case runtimes
         case capabilities
     }
 
@@ -177,6 +180,13 @@ nonisolated struct HelloResponse: Codable, Sendable {
             localHints = hints.isEmpty ? nil : hints
         } else {
             localHints = nil
+        }
+        if container.contains(.runtimes),
+           let raw = try? container.decodeIfPresent([FailableDecodable<RuntimeEntry>].self, forKey: .runtimes) {
+            let entries = raw.compactMap(\.value).filter(\.isActive)
+            runtimes = entries.isEmpty ? nil : entries
+        } else {
+            runtimes = nil
         }
         if let caps = try? container.decodeIfPresent(HostCapabilities.self, forKey: .capabilities) {
             capabilities = caps

@@ -74,6 +74,7 @@ final class HostStore {
         SessionListCache.removeAll(hostID: hostID)
         ComposerDraftStore.removeAll(hostID: hostID)
         RecentSessionComboStore.removeAll(hostID: hostID)
+        SessionDetailModeStore.shared.removeAll(hostID: hostID)
         saveHosts()
     }
 

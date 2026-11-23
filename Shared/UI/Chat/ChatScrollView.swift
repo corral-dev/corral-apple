@@ -241,6 +241,9 @@ private struct NativeChatScrollView<Header: View, Content: View>: View {
             .scrollTargetLayout()
             .chatReadableColumn()
             .nativeOverlayScrollers()
+            #if os(iOS)
+            .installChatPinchZoom()
+            #endif
         }
         #if os(macOS)
         // Messages pass under the window toolbar; a hard edge keeps the title legible.
@@ -517,6 +520,9 @@ private struct CompatibleChatScrollView<Header: View, Content: View>: View {
                     Color.clear.interfaceFrame(height: 1).id(Self.bottomID)
                 }
                 .scrollTargetLayout()
+                #if os(iOS)
+                .installChatPinchZoom()
+                #endif
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
                     contentHeight = $0
                     if positionID == nil { showLatest(proxy) }

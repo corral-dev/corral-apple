@@ -37,7 +37,7 @@ with tempfile.TemporaryDirectory(prefix="corral-phone-touch-") as directory:
     run("xcrun", "--sdk", "iphonesimulator", "swiftc", "-swift-version", "6", "-default-isolation", "MainActor",
         "-parse-as-library", "-sdk", sdk, "-target", "arm64-apple-ios17.0-simulator",
         "-I", str(products),
-        str(ROOT / "Shared/UI/Terminal/TerminalColors.swift"),
+        str(ROOT / "Shared/Core/Terminal/TerminalColors.swift"),
         str(ROOT / "Shared/UI/Terminal/TerminalHostFeed.swift"),
         str(ROOT / "Shared/UI/Terminal/TerminalPromptNavigation.swift"),
         str(ROOT / "iOS/Views/Terminal/ShellTerminalView.swift"),

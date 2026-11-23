@@ -77,9 +77,14 @@ struct SessionRuntimeFilterRow: View {
     @State private var didInspectQuickFilter = false
     #endif
     @Binding var selected: Set<SessionRuntimeFilter>
+    var hostRuntimes: [RuntimeEntry] = []
 
     var body: some View {
-        let activeRuntimes = SessionRuntimeFilter.ordered.filter { $0 != .all }
+        let activeRuntimes = SessionListFiltering.visibleRuntimes(
+            hostRuntimes: hostRuntimes,
+            sessions: sessions,
+            selected: selected
+        )
         SessionFilterScrollView { viewportWidth in
             AdaptiveFilterRowLayout(
                 viewportWidth: viewportWidth,
@@ -101,9 +106,11 @@ struct SessionRuntimeFilterRow: View {
                 .accessibilityLabel(Text(LocalizedStringKey(quickFilter.titleKey)))
                 .accessibilityValue(Text(verbatim: quickFilter.count(sessions: sessions).formatted()))
                 .accessibilityIdentifier("corral.filter.attention")
-                // HStack gives SwiftUI Divider its vertical-hairline orientation inside a custom Layout.
-                HStack(spacing: 0) { Divider() }
-                    .frame(height: 20)
+                if !activeRuntimes.isEmpty {
+                    // HStack gives SwiftUI Divider its vertical-hairline orientation inside a custom Layout.
+                    HStack(spacing: 0) { Divider() }
+                        .frame(height: 20)
+                }
                 // No All chip: an empty selection already means every assistant.
                 ForEach(activeRuntimes, id: \.self) { option in
                     // Icon only, large enough to tell apart; the name stays for VoiceOver.

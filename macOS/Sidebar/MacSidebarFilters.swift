@@ -7,6 +7,7 @@ struct MacSidebarFilters: View {
     @Binding var quickFilter: SessionQuickFilter
     @Binding var runtimes: Set<SessionRuntimeFilter>
     @Binding var projects: Set<SessionProjectFilter>
+    var hostRuntimes: [RuntimeEntry] = []
     @State private var showProjects = false
     @State private var choices: [SessionProjectOption] = []
     @State private var extraChoices: [SessionProjectOption] = []
@@ -19,7 +20,11 @@ struct MacSidebarFilters: View {
     @Environment(\.controlActiveState) private var activeState
 
     var body: some View {
-        let activeRuntimes = SessionRuntimeFilter.ordered.filter { $0 != .all }
+        let activeRuntimes = SessionListFiltering.visibleRuntimes(
+            hostRuntimes: hostRuntimes,
+            sessions: sessions,
+            selected: runtimes
+        )
         VStack(alignment: .leading, spacing: 6 * interfaceScale) {
             MacFilterScrollView { viewportWidth in
                 AdaptiveFilterRowLayout(
@@ -38,8 +43,10 @@ struct MacSidebarFilters: View {
                     .accessibilityLabel(Text(LocalizedStringKey(quickFilter.titleKey)))
                     .accessibilityValue(Text(verbatim: quickFilter.count(sessions: sessions).formatted()))
                     .accessibilityIdentifier("corral.filter.attention")
-                    // HStack gives SwiftUI Divider its vertical-hairline orientation inside a custom Layout.
-                    HStack(spacing: 0) { Divider() }.interfaceFrame(width: 1, height: 16)
+                    if !activeRuntimes.isEmpty {
+                        // HStack gives SwiftUI Divider its vertical-hairline orientation inside a custom Layout.
+                        HStack(spacing: 0) { Divider() }.interfaceFrame(width: 1, height: 16)
+                    }
                     ForEach(activeRuntimes, id: \.self) { runtime in
                         MacQuickFilterButton(selected: runtimes.contains(runtime), sidebar: true, flexibleWidth: true, labelWidth: 18) {
                             if let logo = Palette.runtimeLogoName(runtime.rawValue) {

@@ -175,6 +175,74 @@ nonisolated enum MacHostCommand {
 
     private static let homebrewPrefixes = ["/opt/homebrew", "/usr/local"]
 
+    private actor ShellPathCache {
+        private var cached: String?
+        private var inFlight: Task<String, Never>?
+
+        func resolve() async -> String {
+            if let cached { return cached }
+            if let inFlight { return await inFlight.value }
+            let task = Task.detached(priority: .utility) { () -> String in
+                let shell = MacHostCommand.loginShellPath()
+                let cmd = HostShellPathPolicy.probeCommand(forShell: shell)
+                let probeEnv = [
+                    "TERM": "dumb",
+                    "NO_COLOR": "1",
+                    "CORRAL_PATH_PROBE": "1",
+                ]
+                var probed: String?
+                for (flags, timeout) in [
+                    (["-l", "-i", "-c", cmd], TimeInterval(3)),
+                    (["-l", "-c", cmd], TimeInterval(2)),
+                ] {
+                    if let output = try? await MacHostCommand.run(
+                        URL(fileURLWithPath: shell),
+                        flags,
+                        timeout: timeout,
+                        extraEnv: probeEnv,
+                        useResolvedPath: false
+                    ),
+                       output.status == 0,
+                       let extracted = HostShellPathPolicy.extractSentinelPath(from: output.stdout) {
+                        probed = extracted
+                        break
+                    }
+                }
+                let home = FileManager.default.homeDirectoryForCurrentUser
+                let common = HostShellPathPolicy.commonToolBinDirectories(home: home)
+                let inherited = HostShellPathPolicy.splitPath(ProcessInfo.processInfo.environment["PATH"])
+                let probedParts = HostShellPathPolicy.splitPath(probed)
+                return HostShellPathPolicy.mergePaths([probedParts, inherited, common])
+            }
+            inFlight = task
+            let value = await task.value
+            cached = value
+            inFlight = nil
+            return value
+        }
+    }
+
+    private static let shellPathCache = ShellPathCache()
+
+    static func resolvedUserPath() async -> String {
+        await shellPathCache.resolve()
+    }
+
+    private static func loginShellPath() -> String {
+        if let pw = getpwuid(getuid()), let raw = pw.pointee.pw_shell {
+            let candidate = String(cString: raw)
+            if !candidate.isEmpty, FileManager.default.isExecutableFile(atPath: candidate) {
+                return candidate
+            }
+        }
+        if let envShell = ProcessInfo.processInfo.environment["SHELL"],
+           !envShell.isEmpty,
+           FileManager.default.isExecutableFile(atPath: envShell) {
+            return envShell
+        }
+        return "/bin/zsh"
+    }
+
     static var appMarketingVersion: String {
         let raw = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0.0"
         return CLIVersionSyncPolicy.normalizedVersion(raw)
@@ -185,26 +253,38 @@ nonisolated enum MacHostCommand {
             .first { FileManager.default.isExecutableFile(atPath: $0.path) }
     }
 
-    /// Resolves known install locations first; when multiple copies coexist
-    /// (for example `~/.local/bin/corral` alongside Homebrew), asks the
-    /// interactive login shell so developer checkouts keep precedence.
+    /// Resolves known install locations and resolved PATH directories first; when
+    /// multiple copies coexist (for example `~/.local/bin/corral` alongside
+    /// Homebrew), asks the login shell so developer checkouts keep precedence.
     static func locateCorral() async -> URL? {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let known = [home.appending(path: ".local/bin/corral")]
-            + homebrewPrefixes.map { URL(fileURLWithPath: $0).appending(path: "bin/corral") }
-        let hits = known.filter { FileManager.default.isExecutableFile(atPath: $0.path) }
-        if hits.count == 1 {
-            return hits[0]
-        }
-        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
-        if let output = try? await run(URL(fileURLWithPath: shell), ["-ilc", "command -v corral"], timeout: 5),
-           output.status == 0,
-           let path = String(data: output.stdout, encoding: .utf8)?
-            .split(whereSeparator: \.isNewline).last.map(String.init),
-           path.hasPrefix("/"), FileManager.default.isExecutableFile(atPath: path) {
-            return URL(fileURLWithPath: path)
-        }
-        return hits.first
+        let userPath = await resolvedUserPath()
+        return await Task.detached(priority: .utility) {
+            let home = FileManager.default.homeDirectoryForCurrentUser
+            var candidates: [URL] = [home.appending(path: ".local/bin/corral")]
+                + homebrewPrefixes.map { URL(fileURLWithPath: $0).appending(path: "bin/corral") }
+            var seenPaths = Set(candidates.map(\.path))
+            for dir in HostShellPathPolicy.splitPath(userPath) {
+                let candidate = URL(fileURLWithPath: dir).appending(path: "corral")
+                if seenPaths.insert(candidate.path).inserted {
+                    candidates.append(candidate)
+                }
+            }
+            let hits = candidates.filter { FileManager.default.isExecutableFile(atPath: $0.path) }
+            if hits.count == 1 {
+                return hits[0]
+            }
+            let shell = loginShellPath()
+            for flags in [["-ilc", "command -v corral"], ["-lc", "command -v corral"]] {
+                if let output = try? await run(URL(fileURLWithPath: shell), flags, timeout: 4),
+                   output.status == 0,
+                   let path = String(data: output.stdout, encoding: .utf8)?
+                    .split(whereSeparator: \.isNewline).last.map(String.init),
+                   path.hasPrefix("/"), FileManager.default.isExecutableFile(atPath: path) {
+                    return URL(fileURLWithPath: path)
+                }
+            }
+            return hits.first
+        }.value
     }
 
     static func inspectCorral(corral: URL) async -> (snapshot: CLIStatusSnapshot?, supportsVersionFlag: Bool) {
@@ -392,17 +472,217 @@ nonisolated enum MacHostCommand {
             .last { !$0.isEmpty }
     }
 
-    /// Runs a program to completion; cancelling the task terminates it.
+    /// Runs a program to completion off the main actor; cancelling the task
+    /// terminates the process tree in the background.
     ///
-    /// Pipes are drained with non-blocking `availableData` polling instead of
-    /// `readDataToEndOfFile`: a child that inherits the pipes (Homebrew build
-    /// steps do) would otherwise hold EOF open forever after the parent exits.
+    /// Pipes use `O_NONBLOCK` + `DispatchSourceRead` on a utility queue rather
+    /// than `FileHandle.availableData` (which blocks synchronously on `read(2)`).
+    /// After exit, a short grace window drains any lingering descendant output
+    /// without hanging forever if a child inherits the pipes.
     static func run(
         _ executable: URL,
         _ arguments: [String],
         timeout: TimeInterval?,
         extraEnv: [String: String] = [:],
-        unsetEnv: [String] = []
+        unsetEnv: [String] = [],
+        useResolvedPath: Bool = true
+    ) async throws -> Output {
+        let resolvedPath = useResolvedPath ? await resolvedUserPath() : HostShellPathPolicy.minimalBasePath
+        let job = Task.detached(priority: .utility) {
+            try Task.checkCancellation()
+            return try await runOffMain(
+                executable,
+                arguments,
+                timeout: timeout,
+                resolvedPath: resolvedPath,
+                extraEnv: extraEnv,
+                unsetEnv: unsetEnv
+            )
+        }
+        return try await withTaskCancellationHandler {
+            try await job.value
+        } onCancel: {
+            job.cancel()
+        }
+    }
+
+    private final class SubprocessCancelState: @unchecked Sendable {
+        private let lock = NSLock()
+        var pid: pid_t = 0
+        var cancelled = false
+        var collector: SubprocessPipeCollector?
+
+        func attach(_ collector: SubprocessPipeCollector) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            self.collector = collector
+            return cancelled
+        }
+
+        func setPID(_ value: pid_t) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            pid = value
+            return cancelled
+        }
+
+        func markCancelled() -> (pid: pid_t, collector: SubprocessPipeCollector?) {
+            lock.lock()
+            defer { lock.unlock() }
+            cancelled = true
+            return (pid, collector)
+        }
+    }
+
+    private final class SubprocessPipeCollector: @unchecked Sendable {
+        let ioQueue = DispatchQueue(label: "com.x0c.corral.hostcmd.io", qos: .utility)
+        private let outHandle: FileHandle
+        private let errHandle: FileHandle
+        private let continuation: OneShotThrowingContinuation<Output>
+        private var outSource: DispatchSourceRead?
+        private var errSource: DispatchSourceRead?
+        private var outData = Data()
+        private var errData = Data()
+        private var outDone = false
+        private var errDone = false
+        private var processExited = false
+        private var exitStatus: Int32 = 0
+        private var finished = false
+        private var timeoutWork: DispatchWorkItem?
+        private var graceWork: DispatchWorkItem?
+
+        init(outHandle: FileHandle, errHandle: FileHandle, continuation: OneShotThrowingContinuation<Output>) {
+            self.outHandle = outHandle
+            self.errHandle = errHandle
+            self.continuation = continuation
+        }
+
+        func startSources() {
+            let outFD = outHandle.fileDescriptor
+            let errFD = errHandle.fileDescriptor
+            let outSrc = DispatchSource.makeReadSource(fileDescriptor: outFD, queue: ioQueue)
+            let errSrc = DispatchSource.makeReadSource(fileDescriptor: errFD, queue: ioQueue)
+            outSource = outSrc
+            errSource = errSrc
+
+            outSrc.setCancelHandler { [outHandle] in try? outHandle.close() }
+            errSrc.setCancelHandler { [errHandle] in try? errHandle.close() }
+
+            outSrc.setEventHandler { [weak self] in
+                guard let self, !self.finished else { return }
+                if Self.drainPipe(self.outHandle, into: &self.outData) {
+                    self.outDone = true
+                    self.outSource?.cancel()
+                    if self.processExited && self.errDone { self.finishSuccess() }
+                }
+            }
+            errSrc.setEventHandler { [weak self] in
+                guard let self, !self.finished else { return }
+                if Self.drainPipe(self.errHandle, into: &self.errData) {
+                    self.errDone = true
+                    self.errSource?.cancel()
+                    if self.processExited && self.outDone { self.finishSuccess() }
+                }
+            }
+
+            outSrc.resume()
+            errSrc.resume()
+        }
+
+        func handleProcessExit(status: Int32) {
+            ioQueue.async { [self] in
+                guard !self.finished else { return }
+                self.processExited = true
+                self.exitStatus = status
+                if !self.outDone, Self.drainPipe(self.outHandle, into: &self.outData) {
+                    self.outDone = true
+                    self.outSource?.cancel()
+                }
+                if !self.errDone, Self.drainPipe(self.errHandle, into: &self.errData) {
+                    self.errDone = true
+                    self.errSource?.cancel()
+                }
+                if self.outDone && self.errDone {
+                    self.finishSuccess()
+                    return
+                }
+                let grace = DispatchWorkItem { [weak self] in
+                    guard let self, !self.finished else { return }
+                    if !self.outDone { _ = Self.drainPipe(self.outHandle, into: &self.outData) }
+                    if !self.errDone { _ = Self.drainPipe(self.errHandle, into: &self.errData) }
+                    self.finishSuccess()
+                }
+                self.graceWork = grace
+                self.ioQueue.asyncAfter(deadline: .now() + .milliseconds(150), execute: grace)
+            }
+        }
+
+        func scheduleTimeout(_ seconds: TimeInterval, pid: pid_t) {
+            ioQueue.async { [self] in
+                guard !self.finished else { return }
+                let item = DispatchWorkItem { [weak self] in
+                    guard let self, !self.finished else { return }
+                    DispatchQueue.global(qos: .utility).async { MacHostCommand.terminateTree(pid) }
+                }
+                self.timeoutWork = item
+                self.ioQueue.asyncAfter(deadline: .now() + seconds, execute: item)
+            }
+        }
+
+        func fail(_ error: Error) {
+            ioQueue.async { self.finishFailure(error) }
+        }
+
+        private func closeSources() {
+            if let outSource, !outSource.isCancelled { outSource.cancel() }
+            if let errSource, !errSource.isCancelled { errSource.cancel() }
+        }
+
+        private func finishSuccess() {
+            guard !finished else { return }
+            finished = true
+            timeoutWork?.cancel()
+            graceWork?.cancel()
+            closeSources()
+            continuation.resume(returning: Output(status: exitStatus, stdout: outData, stderr: errData))
+        }
+
+        private func finishFailure(_ error: Error) {
+            guard !finished else { return }
+            finished = true
+            timeoutWork?.cancel()
+            graceWork?.cancel()
+            closeSources()
+            continuation.resume(throwing: error)
+        }
+
+        private static func drainPipe(_ handle: FileHandle, into buffer: inout Data) -> Bool {
+            var chunk = [UInt8](repeating: 0, count: 8192)
+            while true {
+                let count = chunk.withUnsafeMutableBytes { raw in
+                    Darwin.read(handle.fileDescriptor, raw.baseAddress!, raw.count)
+                }
+                if count > 0 {
+                    buffer.append(contentsOf: chunk[..<count])
+                } else if count == 0 {
+                    return true
+                } else {
+                    let code = errno
+                    if code == EINTR { continue }
+                    if code == EAGAIN || code == EWOULDBLOCK { return false }
+                    return true
+                }
+            }
+        }
+    }
+
+    private static func runOffMain(
+        _ executable: URL,
+        _ arguments: [String],
+        timeout: TimeInterval?,
+        resolvedPath: String,
+        extraEnv: [String: String],
+        unsetEnv: [String]
     ) async throws -> Output {
         let process = Process()
         process.executableURL = executable
@@ -411,10 +691,7 @@ nonisolated enum MacHostCommand {
         for key in unsetEnv {
             environment.removeValue(forKey: key)
         }
-        let searchPath = homebrewPrefixes.flatMap { ["\($0)/bin", "\($0)/sbin"] }
-            + [FileManager.default.homeDirectoryForCurrentUser.appending(path: ".local/bin").path,
-               "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
-        environment["PATH"] = searchPath.joined(separator: ":")
+        environment["PATH"] = resolvedPath
         for (key, value) in extraEnv {
             environment[key] = value
         }
@@ -423,38 +700,61 @@ nonisolated enum MacHostCommand {
         let stdout = Pipe(), stderr = Pipe()
         process.standardOutput = stdout
         process.standardError = stderr
-        try process.run()
-        let timer = timeout.map { seconds in
-            Task.detached {
-                try? await Task.sleep(for: .seconds(seconds))
-                if process.isRunning { terminateTree(process.processIdentifier) }
+
+        let cancelState = SubprocessCancelState()
+        let outHandle = stdout.fileHandleForReading
+        let errHandle = stderr.fileHandleForReading
+        setNonBlocking(outHandle.fileDescriptor)
+        setNonBlocking(errHandle.fileDescriptor)
+
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { rawContinuation in
+                let continuation = OneShotThrowingContinuation<Output>(rawContinuation)
+                let collector = SubprocessPipeCollector(
+                    outHandle: outHandle,
+                    errHandle: errHandle,
+                    continuation: continuation
+                )
+                if cancelState.attach(collector) {
+                    collector.fail(CancellationError())
+                    return
+                }
+                process.terminationHandler = { proc in
+                    collector.handleProcessExit(status: proc.terminationStatus)
+                }
+                collector.startSources()
+
+                do {
+                    try process.run()
+                } catch {
+                    collector.fail(error)
+                    return
+                }
+
+                let pid = process.processIdentifier
+                if cancelState.setPID(pid) {
+                    collector.fail(CancellationError())
+                    DispatchQueue.global(qos: .utility).async { terminateTree(pid) }
+                    return
+                }
+
+                if let timeout, timeout > 0 {
+                    collector.scheduleTimeout(timeout, pid: pid)
+                }
+            }
+        } onCancel: {
+            let (pid, collector) = cancelState.markCancelled()
+            collector?.fail(CancellationError())
+            if pid > 0 {
+                DispatchQueue.global(qos: .utility).async { terminateTree(pid) }
             }
         }
-        defer { timer?.cancel() }
-        return try await withTaskCancellationHandler {
-            var outData = Data(), errData = Data()
-            let outHandle = stdout.fileHandleForReading, errHandle = stderr.fileHandleForReading
-            while process.isRunning {
-                try Task.checkCancellation()
-                outData += outHandle.availableData
-                errData += errHandle.availableData
-                try? await Task.sleep(for: .milliseconds(50))
-            }
-            await Task.detached { process.waitUntilExit() }.value
-            try Task.checkCancellation()
-            // Trailing output grace: two short windows, then whatever arrived.
-            for _ in 0..<4 {
-                outData += outHandle.availableData
-                errData += errHandle.availableData
-                try? await Task.sleep(for: .milliseconds(50))
-            }
-            outData += outHandle.availableData
-            errData += errHandle.availableData
-            try? outHandle.close()
-            try? errHandle.close()
-            return Output(status: process.terminationStatus, stdout: outData, stderr: errData)
-        } onCancel: {
-            if process.isRunning { terminateTree(process.processIdentifier) }
+    }
+
+    private static func setNonBlocking(_ fd: Int32) {
+        let flags = fcntl(fd, F_GETFL)
+        if flags >= 0 {
+            _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
         }
     }
 

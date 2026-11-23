@@ -546,6 +546,65 @@ final class SessionListFilteringTests: XCTestCase {
                        remembered.map(\.path))
     }
 
+    func testVisibleRuntimesHideUninstalledEmptyAndKeepInstalledOrSessionBacked() {
+        let hostRuntimes = [
+            RuntimeEntry(id: "claude", name: "Claude", available: true),
+            RuntimeEntry(id: "codex", name: "Codex", available: true),
+            RuntimeEntry(id: "opencode", name: "OpenCode", available: false),
+            RuntimeEntry(id: "cursor", name: "Cursor", available: false),
+            RuntimeEntry(id: "pi", name: "Pi", available: false),
+            RuntimeEntry(id: "antigravity", name: "Antigravity", available: false),
+            RuntimeEntry(id: "kimi", name: "Kimi", available: true),
+        ]
+        let sessions = [
+            summary(key: "pi:1", runtime: "pi"),
+            summary(key: "kimi:1", runtime: "kimi"),
+        ]
+        XCTAssertEqual(
+            SessionListFiltering.visibleRuntimes(
+                hostRuntimes: hostRuntimes,
+                sessions: sessions
+            ),
+            [.claude, .codex, .pi]
+        )
+        // Explicitly selected filter stays visible even if uninstalled and empty.
+        XCTAssertEqual(
+            SessionListFiltering.visibleRuntimes(
+                hostRuntimes: hostRuntimes,
+                sessions: sessions,
+                selected: [.antigravity]
+            ),
+            [.claude, .codex, .pi, .antigravity]
+        )
+        XCTAssertEqual(
+            SessionListFiltering.visibleRuntimes(hostRuntimes: [], sessions: []),
+            []
+        )
+    }
+
+    func testHelloResponseDecodesActiveRuntimesAndHandlesLegacyAbsence() throws {
+        let payload = Data("""
+        {
+          "protocol": 1,
+          "paired": true,
+          "runtimes": [
+            {"id": "claude", "name": "Claude", "available": true},
+            {"id": "antigravity", "name": "Antigravity", "available": false},
+            {"id": "kimi", "name": "Kimi", "available": true},
+            {"bad": 123}
+          ],
+          "capabilities": {}
+        }
+        """.utf8)
+        let decoded = try JSONDecoder().decode(HelloResponse.self, from: payload)
+        XCTAssertEqual(decoded.runtimes?.map(\.id), ["claude", "antigravity"])
+        XCTAssertEqual(decoded.runtimes?.map(\.isUsable), [true, false])
+
+        let legacy = Data(#"{"protocol":1,"paired":true,"capabilities":{}}"#.utf8)
+        let legacyDecoded = try JSONDecoder().decode(HelloResponse.self, from: legacy)
+        XCTAssertNil(legacyDecoded.runtimes)
+    }
+
     // MARK: - Helpers
 
     private func summary(

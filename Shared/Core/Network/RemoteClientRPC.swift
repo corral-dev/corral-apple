@@ -161,6 +161,9 @@ import Foundation
             caps.toolDetail = true
         }
         hostCapabilities = caps
+        if let runtimes = hello.runtimes {
+            hostRuntimes = runtimes
+        }
         supportsMediaImage = WireProtocol.supportsMediaImage(fromHelloPayload: payload)
         supportsMediaFile = WireProtocol.supportsMediaFile(fromHelloPayload: payload)
         supportsInputFile = WireProtocol.supportsInputFile(fromHelloPayload: payload)

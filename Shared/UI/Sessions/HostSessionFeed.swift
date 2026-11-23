@@ -391,6 +391,13 @@ final class HostSessionFeed {
                 WireProtocol.mSessionDelete,
                 params: ["key": session.key, "confirm": true]
             )
+            #if os(iOS)
+            let canonicalKey = listStore.resolvedKey(session.key)
+            SessionDetailModeStore.shared.remove(sessionKey: session.key, hostID: host.hostID)
+            if canonicalKey != session.key {
+                SessionDetailModeStore.shared.remove(sessionKey: canonicalKey, hostID: host.hostID)
+            }
+            #endif
             listStore.removeSession(key: session.key)
             loadError = nil
         } catch {

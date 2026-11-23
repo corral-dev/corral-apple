@@ -62,6 +62,8 @@ final class RemoteClient: NSObject {
     var dataPlaneRebindAttempt = 0
     /// Host feature flags from the last successful control-plane hello.
     var hostCapabilities: HostCapabilities = .empty
+    /// Active runtimes from the last successful control-plane hello.
+    var hostRuntimes: [RuntimeEntry] = []
     /// Convenience: durable `command_id` receipts are available on this connection.
     var supportsCommandReceipts: Bool { hostCapabilities.commandReceipts }
     /// Convenience: history wire omits tool bodies; fetch via `session.toolDetail`.
@@ -490,6 +492,7 @@ final class RemoteClient: NSObject {
         activeTransport = nil
         hasBeenReady = false
         hostCapabilities = .empty
+        hostRuntimes = []
         supportsMediaImage = false
         supportsMediaFile = false
         supportsInputFile = false

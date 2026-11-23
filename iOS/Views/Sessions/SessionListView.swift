@@ -31,6 +31,7 @@ struct SessionListView: View {
     static let listRecheckInterval = HostSessionFeed.listRecheckInterval
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(AppModel.self) private var appModel
+    @Environment(MobileTerminalSessions.self) private var terminals
 
     let host: HostInfo
     /// Shared live list plumbing (also drives the Mac sidebar).
@@ -123,7 +124,8 @@ struct SessionListView: View {
             SessionRuntimeFilterRow(
                 quickFilter: $quickFilter,
                 sessions: windowSessions,
-                selected: $runtimeFilter
+                selected: $runtimeFilter,
+                hostRuntimes: effectiveHostRuntimes
             )
                 .padding(.top, Space.xs)
             SessionProjectFilterRow(
@@ -712,10 +714,24 @@ struct SessionListView: View {
     }
 
     private func bootstrap() async {
-        feed.onListChanged = { await openPendingNotificationSession() }
+        feed.onSessionMigrated = { [hostID = host.hostID, terminals] oldKey, newKey in
+            SessionDetailModeStore.shared.promote(oldKey: oldKey, to: newKey, hostID: hostID)
+            terminals.migrate(from: oldKey, to: newKey)
+        }
+        feed.onListChanged = {
+            SessionDetailModeStore.shared.reconcileAliases(hostID: host.hostID) {
+                listStore.resolvedKey($0)
+            }
+            terminals.reconcileAliases { listStore.resolvedKey($0) }
+            await openPendingNotificationSession()
+        }
         // Cached session leg first: open from the persisted snapshot before any
         // connection completes, so offline body taps still land in the session.
         await feed.activate(appModel: appModel) {
+            SessionDetailModeStore.shared.reconcileAliases(hostID: host.hostID) {
+                listStore.resolvedKey($0)
+            }
+            terminals.reconcileAliases { listStore.resolvedKey($0) }
             await openPendingNotificationSession()
         }
     }
@@ -804,6 +820,8 @@ struct SessionListView: View {
                 // Server resolved a provisional key to its canonical identity:
                 // keep the tapped key usable as an alias.
                 listStore.migrateSession(from: key, to: summary.key)
+                SessionDetailModeStore.shared.promote(oldKey: key, to: summary.key, hostID: host.hostID)
+                terminals.migrate(from: key, to: summary.key)
             }
             listStore.patchSession(summary)
             listStore.rememberOpened(summary)
@@ -907,8 +925,13 @@ struct SessionListView: View {
 
     private func deleteSession(_ session: SessionSummary) async {
         let operationID = hapticScope.beginOperation()
+        let canonicalKey = listStore.resolvedKey(session.key)
         do {
             try await feed.delete(session)
+            terminals.close(session.key)
+            if canonicalKey != session.key {
+                terminals.close(canonicalKey)
+            }
             if split.selection.wrappedValue?.key == session.key {
                 split.selection.wrappedValue = nil
             }
@@ -927,6 +950,12 @@ struct SessionListView: View {
         return ObjectIdentifier(client)
     }
 
+    private var effectiveHostRuntimes: [RuntimeEntry] {
+        if runtimeCatalog.isLoaded { return runtimeCatalog.runtimes }
+        if appModel.connectedHostID == host.hostID { return appModel.connectedRuntimes }
+        return []
+    }
+
     private func loadRuntimes(retry: Bool = false) async {
         guard isHostReady, let client = appModel.client else { return }
         await runtimeCatalog.load(for: client, retry: retry) {
@@ -937,6 +966,8 @@ struct SessionListView: View {
     private func contextActions(for session: SessionSummary) -> SessionListContextActions {
         let caps = appModel.client?.hostCapabilities
         let supportsTerminal = ProductFeatures.terminalPaneEnabled && caps?.terminalStream == true
+        let canonicalKey = listStore.resolvedKey(session.key)
+        let rememberedMode = SessionDetailModeStore.shared.effectiveMode(for: canonicalKey, hostID: host.hostID)
         return SessionListContextActions(
             runtimes: runtimeCatalog.runtimes,
             runtimesLoaded: runtimeCatalog.isLoaded,
@@ -949,7 +980,8 @@ struct SessionListView: View {
             supportsTerminal: supportsTerminal,
             supportsExport: caps?.sessionExport == true,
             supportsRestart: caps?.sessionRestart == true,
-            onOpenAgentTerminal: { split.openMode(SessionRoute(key: session.key), .terminal) },
+            rememberedMode: rememberedMode,
+            onSelectMode: { mode in split.openMode(SessionRoute(key: session.key), mode) },
             onFork: { Task { await forkSession(session) } },
             onHandoff: { target in Task { await handoffSession(session, to: target) } },
             onExport: { Task { await exportSession(session) } },

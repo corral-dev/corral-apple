@@ -6,6 +6,20 @@ next version's section. A `Release: minor` or `Release: major` line requests a
 larger version step; `Release: hold <reason>` keeps the changes unreleased until
 the named acceptance is done.
 
+## Mac 1.0.2 (195) / iPhone 1.0.226 (240)
+
+### English
+
+- Mac: moved background CLI status, installation, upgrade, and remote restart subprocess execution and non-blocking pipe reads off `@MainActor`, resolving the app launch hang introduced in 1.0.1.
+- Mac: resolved the user's login-shell `PATH` and common Node/runtime tool directories (`~/.local/share/nodejs/current*/bin`, `nvm`, `fnm`, `volta`, `mise`, `bun`, Homebrew, etc.) before running `corral` commands so CLI assistants such as `pi` and `claude` remain discoverable after UI upgrades and restarts.
+- Mac & iPhone: session-list runtime filter controls now show only runtimes that are installed on the connected host, present in its unfiltered session list, or currently selected, hiding the trailing divider when no runtimes are shown.
+
+### 简体中文
+
+- Mac：将启动时检查、安装、升级与重启后台服务的 CLI 子进程调度及非阻塞管道读取全部移出 `@MainActor`，修复 1.0.1 启动即卡顿转圈无响应的问题。
+- Mac：执行 `corral` 命令前主动解析用户登录交互 shell 的 `PATH` 并补充常见节点与工具目录（含 `~/.local/share/nodejs/current*/bin`、`nvm`、`fnm`、`volta`、`mise`、`bun`、Homebrew 等），避免经 UI 升级或重启后台后丢失 `pi`、`claude` 等运行时识别。
+- Mac 与 iPhone：会话列表的运行时筛选栏仅展示已在本机安装、当前主机存在会话记录或正在被选中的运行时；无任何可筛选运行时时隐藏分隔线。
+
 ## Mac 1.0.1 (194)
 
 ### English

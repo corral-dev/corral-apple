@@ -89,4 +89,53 @@ struct CLIVersionSyncPolicyTests {
             ) == .upgrade(targetVersion: "1.0.1", channel: .pipx, viaVersionFlag: true)
         )
     }
+
+    @Test("Extracts sentinel-wrapped PATH ignoring shell startup noise")
+    func extractsSentinelPath() {
+        let noisy = Data(
+            """
+            Welcome to zsh
+            __CORRAL_PATH_BEGIN__/stale/path__CORRAL_PATH_END__
+            initializing nvm
+            __CORRAL_PATH_BEGIN__/home/.local/share/nodejs/current-v22/bin:/opt/homebrew/bin__CORRAL_PATH_END__
+            done
+            """.utf8
+        )
+        #expect(
+            HostShellPathPolicy.extractSentinelPath(from: noisy)
+                == "/home/.local/share/nodejs/current-v22/bin:/opt/homebrew/bin"
+        )
+        #expect(HostShellPathPolicy.extractSentinelPath(from: Data("plain output".utf8)) == nil)
+        #expect(HostShellPathPolicy.probeCommand(forShell: "/opt/homebrew/bin/fish").contains("string join : $PATH"))
+        #expect(HostShellPathPolicy.probeCommand(forShell: "/bin/zsh").contains("\"$PATH\""))
+    }
+
+    @Test("Merges PATH lists preserving order and discovers tool-manager bins")
+    func mergesAndDiscoversToolBins() throws {
+        let merged = HostShellPathPolicy.mergePaths([
+            ["/shell/bin", "/opt/homebrew/bin", ""],
+            ["/opt/homebrew/bin", "/usr/bin"],
+            ["/bin"],
+        ])
+        #expect(merged == "/shell/bin:/opt/homebrew/bin:/usr/bin:/bin")
+
+        let fm = FileManager.default
+        let rawRoot = fm.temporaryDirectory.appending(path: "corral-path-test-\(UUID().uuidString)")
+        try fm.createDirectory(at: rawRoot, withIntermediateDirectories: true)
+        let root = rawRoot.resolvingSymlinksInPath()
+        defer { try? fm.removeItem(at: root) }
+        let node22 = root.appending(path: ".local/share/nodejs/current-v22/bin")
+        let bun = root.appending(path: ".bun/bin")
+        let claude = root.appending(path: ".claude/local/bin")
+        for dir in [node22, bun, claude] {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        let discovered = HostShellPathPolicy.commonToolBinDirectories(home: root, fileManager: fm)
+            .map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path }
+        #expect(discovered.contains(node22.resolvingSymlinksInPath().path))
+        #expect(discovered.contains(bun.resolvingSymlinksInPath().path))
+        #expect(discovered.contains(claude.resolvingSymlinksInPath().path))
+        #expect(!discovered.contains(root.appending(path: ".volta/bin").resolvingSymlinksInPath().path))
+        #expect(discovered.contains("/opt/homebrew/bin"))
+    }
 }

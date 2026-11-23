@@ -14,9 +14,12 @@ enum TerminalPromptOutcome { case landed, superseded, absent, failed }
     enum Phase { case live, connecting }
     var phase = Phase.live
     weak var sink: TerminalStreamSink?
+    var isInFront: @MainActor () -> Bool = { true }
     let input = Input()
     func updateTheme(_ theme: TerminalTheme) {}
     func updateFit(_ fit: TerminalGrid) {}
+    func claimSize() {}
+    func refreshSnapshot() {}
     final class Input {
         var bytes: [UInt8] = []
         func send(_ data: ArraySlice<UInt8>) { bytes.append(contentsOf: data) }

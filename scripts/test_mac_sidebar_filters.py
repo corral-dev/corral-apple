@@ -49,6 +49,7 @@ struct RuntimeBoundsMarker: NSViewRepresentable {{
 
 private struct FilterHostView: View {{
     let sessions: [SessionSummary]
+    var hostRuntimes: [RuntimeEntry] = []
     @State var quickFilter: SessionQuickFilter
     @State var runtimes: Set<SessionRuntimeFilter>
     @State var projects: Set<SessionProjectFilter>
@@ -61,7 +62,8 @@ private struct FilterHostView: View {{
             sessions: sessions,
             quickFilter: $quickFilter,
             runtimes: $runtimes,
-            projects: $projects
+            projects: $projects,
+            hostRuntimes: hostRuntimes
         )
         .interfacePadding(.horizontal, Space.md)
         .interfacePadding(.vertical, 6)
@@ -230,6 +232,57 @@ struct Probe {{
             if let sw = selectedWidths[id], abs(uw - sw) > 0.5 {{
                 failures.append("Runtime \\(id) shifted width on selection: unselected=\\(uw) selected=\\(sw)")
             }}
+        }}
+
+        // Dynamic filtering: uninstalled runtime with 0 sessions hides; empty host shows 0 runtime buttons.
+        RuntimeBoundsMarker.views = [:]
+        let fiveSessions = sessions.filter {{ $0.runtime != "antigravity" }}
+        let fiveHostRuntimes = [
+            RuntimeEntry(id: "claude", name: "Claude", available: true),
+            RuntimeEntry(id: "codex", name: "Codex", available: true),
+            RuntimeEntry(id: "opencode", name: "OpenCode", available: true),
+            RuntimeEntry(id: "cursor", name: "Cursor", available: true),
+            RuntimeEntry(id: "pi", name: "Pi", available: true),
+            RuntimeEntry(id: "antigravity", name: "Antigravity", available: false),
+        ]
+        window.setContentSize(NSSize(width: 330, height: 160))
+        let fiveHost = NSHostingView(rootView: FilterHostView(
+            sessions: fiveSessions,
+            hostRuntimes: fiveHostRuntimes,
+            quickFilter: .all,
+            runtimes: [],
+            projects: [],
+            sidebarWidth: 310,
+            scale: 1.0
+        ) {{ _ in }})
+        window.contentView = fiveHost
+        for _ in 0..<10 {{
+            RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+            fiveHost.layoutSubtreeIfNeeded()
+        }}
+        let fiveMounted = RuntimeBoundsMarker.views.filter {{ $0.value.window === window }}
+        if fiveMounted.count != 5 || fiveMounted["antigravity"] != nil {{
+            failures.append("Expected 5 runtimes without antigravity, got \\(Array(fiveMounted.keys).sorted())")
+        }}
+
+        RuntimeBoundsMarker.views = [:]
+        let zeroHost = NSHostingView(rootView: FilterHostView(
+            sessions: [],
+            hostRuntimes: [],
+            quickFilter: .all,
+            runtimes: [],
+            projects: [],
+            sidebarWidth: 310,
+            scale: 1.0
+        ) {{ _ in }})
+        window.contentView = zeroHost
+        for _ in 0..<10 {{
+            RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+            zeroHost.layoutSubtreeIfNeeded()
+        }}
+        let zeroMounted = RuntimeBoundsMarker.views.filter {{ $0.value.window === window }}
+        if !zeroMounted.isEmpty {{
+            failures.append("Expected 0 runtimes for empty host, got \\(Array(zeroMounted.keys))")
         }}
 
         let report: [String: Any] = [

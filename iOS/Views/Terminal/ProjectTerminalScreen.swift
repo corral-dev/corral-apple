@@ -23,15 +23,27 @@ struct ProjectTerminalScreen: View {
     @State private var stream: RemoteTerminalStream?
     @State private var pendingClose: ProjectShell?
     @State private var loaded = false
+    @State private var sampledBackground: TerminalRGB?
 
     var body: some View {
         NavigationStack {
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(background)
+                .background(activeBackgroundRGB.swiftUIColor)
+                .modifier(TerminalScrollEdgeChrome(hidden: true))
+                .modifier(TerminalNavigationBarChrome(
+                    isActive: true,
+                    colorScheme: activeBackgroundRGB.prefersDarkChrome ? .dark : .light
+                ))
                 .navigationTitle(Text(verbatim: store.selected?.title ?? projectName))
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { toolbar }
+        }
+        .onChange(of: store.selectedKey) { _, _ in
+            sampledBackground = nil
+        }
+        .onChange(of: colorScheme) { _, _ in
+            if stream == nil { sampledBackground = nil }
         }
         .task(id: LoadKey(client: appModel.clientIdentity, ready: isReady)) { await load() }
         .task(id: StreamKey(shellKey: store.selectedKey, client: appModel.clientIdentity, ready: isReady)) {
@@ -110,7 +122,12 @@ struct ProjectTerminalScreen: View {
                 }
             }
         } else if let stream {
-            ShellTerminalView(stream: stream)
+            ShellTerminalView(
+                stream: stream,
+                fontSize: CGFloat(appModel.mobileTerminalFontSize),
+                onFontSizeChange: { appModel.mobileTerminalFontSize = $0 },
+                onBackgroundColorChange: { sampledBackground = $0 }
+            )
                 .id(stream.sessionKey)
                 .overlay {
                     if stream.phase == .connecting { waitingIndicator }
@@ -135,9 +152,8 @@ struct ProjectTerminalScreen: View {
         .background(.regularMaterial, in: .rect(cornerRadius: Radius.lg))
     }
 
-    private var background: Color {
-        let rgb = (colorScheme == .dark ? TerminalColorScheme.dark : .light).background
-        return Color(red: Double(rgb.red) / 255, green: Double(rgb.green) / 255, blue: Double(rgb.blue) / 255)
+    private var activeBackgroundRGB: TerminalRGB {
+        sampledBackground ?? TerminalColorScheme.forAppearance(isDark: colorScheme == .dark).backgroundRGB
     }
 
     private var projectName: String {

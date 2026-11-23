@@ -248,6 +248,31 @@ enum SessionListFiltering {
         }
     }
 
+    /// Active runtimes visible in the session-list filter row for one host:
+    /// installed on the host (`available != false`), present in the unfiltered
+    /// session window, or currently selected. Preserves `SessionRuntimeFilter.ordered`
+    /// and never surfaces dormant runtimes.
+    static func visibleRuntimes(
+        hostRuntimes: [RuntimeEntry],
+        sessions: [SessionSummary],
+        selected: Set<SessionRuntimeFilter> = []
+    ) -> [SessionRuntimeFilter] {
+        var allowed = Set<String>()
+        for entry in hostRuntimes where entry.isActive && entry.isUsable {
+            allowed.insert(entry.id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+        }
+        for session in sessions where ActiveRuntimeVisibility.isListVisible(session) {
+            if let runtime = session.runtime?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+               !runtime.isEmpty {
+                allowed.insert(runtime)
+            }
+        }
+        for choice in selected where choice != .all {
+            allowed.insert(choice.rawValue)
+        }
+        return SessionRuntimeFilter.ordered.filter { $0 != .all && allowed.contains($0.rawValue) }
+    }
+
     /// Production filter path used by the list: dormant-identity exclusion
     /// plus the Focus/runtime/project intersection. Order-preserving; empty
     /// filters pass everything through.

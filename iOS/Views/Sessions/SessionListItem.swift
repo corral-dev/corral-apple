@@ -13,7 +13,8 @@ struct SessionListContextActions {
     var supportsTerminal = false
     var supportsExport = false
     var supportsRestart = false
-    var onOpenAgentTerminal: (() -> Void)? = nil
+    var rememberedMode: SessionDetailMode = .chat
+    var onSelectMode: ((SessionDetailMode) -> Void)? = nil
     var onFork: (() -> Void)? = nil
     var onHandoff: ((RuntimeEntry) -> Void)? = nil
     var onExport: (() -> Void)? = nil
@@ -85,7 +86,10 @@ struct SessionListItem<Row: View>: View {
                         onStop: onStop,
                         onCopyPath: contextActions.onCopyPath,
                         onRequestDelete: { confirmation.wrappedValue = true },
-                        onOpenAgentTerminal: contextActions.supportsTerminal ? contextActions.onOpenAgentTerminal : nil
+                        displayMode: contextActions.supportsTerminal && contextActions.onSelectMode != nil ? Binding(
+                            get: { contextActions.rememberedMode },
+                            set: { contextActions.onSelectMode?($0) }
+                        ) : nil
                     )
                 } else {
                     pinButton
