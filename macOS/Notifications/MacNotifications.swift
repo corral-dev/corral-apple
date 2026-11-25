@@ -22,6 +22,9 @@ final class MacNotifications: NSObject, UNUserNotificationCenterDelegate {
     @ObservationIgnored private var startTask: Task<Void, Never>?
     @ObservationIgnored private var inFlight = Set<String>()
     @ObservationIgnored private var ledger = NotificationLedger()
+    @ObservationIgnored private var ledgerLoaded = false
+    @ObservationIgnored private var ledgerLoadTask: Task<NotificationLedger?, Never>?
+    @ObservationIgnored private let ledgerWriter = DispatchQueue(label: "com.x0c.corral.notification-ledger", qos: .utility)
     @ObservationIgnored private let center = UNUserNotificationCenter.current()
     @ObservationIgnored private var ledgerURL: URL { AppStorageLocation.appDirectory.appendingPathComponent("notification-ledger.json") }
     @ObservationIgnored private var preferencesURL: URL { AppStorageLocation.appDirectory.appendingPathComponent("notifications.json") }
@@ -36,8 +39,20 @@ final class MacNotifications: NSObject, UNUserNotificationCenterDelegate {
             aborted = values["aborted"] ?? true
             transient = values["transient"] ?? false
         }
-        if let data = try? Data(contentsOf: ledgerURL),
-           let saved = try? JSONDecoder().decode(NotificationLedger.self, from: data) { ledger = saved }
+        let url = ledgerURL
+        ledgerLoadTask = Task.detached(priority: .utility) {
+            guard let data = try? Data(contentsOf: url) else { return nil }
+            return try? JSONDecoder().decode(NotificationLedger.self, from: data)
+        }
+    }
+
+    private func ensureLedgerLoaded() async {
+        guard !ledgerLoaded else { return }
+        if let saved = await ledgerLoadTask?.value {
+            ledger.merge(saved)
+        }
+        ledgerLoaded = true
+        ledgerLoadTask = nil
     }
 
     func configure(model: AppModel) {
@@ -82,13 +97,13 @@ final class MacNotifications: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
-    /// One owner for watch/unwatch: SwiftUI tasks can cancel without tearing down the app's feed.
-    func sessionFeed(host: HostInfo, model: AppModel) async -> HostSessionFeed {
+    /// Non-blocking cache-first feed bootstrap: loads cached sessions synchronously
+    /// while network activation proceeds in the background `ready` task.
+    func startSessionFeed(host: HostInfo, model: AppModel) -> (feed: HostSessionFeed, ready: Task<Void, Never>) {
         if let feed, feed.host.hostID == host.hostID, feed.isActive,
            model.client?.reconnectHost?.hostID == host.hostID,
            feedClientIdentity == model.clientIdentity {
-            await startTask?.value
-            return feed
+            return (feed, startTask ?? Task {})
         }
         let previous = feed
         stopFeed()
@@ -111,13 +126,21 @@ final class MacNotifications: NSObject, UNUserNotificationCenterDelegate {
             guard let self, let current, self.feed === current else { return }
             await self.deliver(session, kind: kind, hostID: host.hostID)
         }
-        let task = Task { await current.activate(appModel: model) }
-        startTask = task
-        await task.value
-        if feed === current {
-            feedClientIdentity = model.clientIdentity
-            feedTask = Task { await current.runRecheckLoop() }
+        current.loadCacheIfNeeded()
+        let task = Task { [weak self] in
+            await current.activate(appModel: model)
+            guard let self, self.feed === current else { return }
+            self.feedClientIdentity = model.clientIdentity
+            self.feedTask = Task { await current.runRecheckLoop() }
         }
+        startTask = task
+        return (current, task)
+    }
+
+    /// One owner for watch/unwatch: SwiftUI tasks can cancel without tearing down the app's feed.
+    func sessionFeed(host: HostInfo, model: AppModel) async -> HostSessionFeed {
+        let (current, ready) = startSessionFeed(host: host, model: model)
+        await ready.value
         return current
     }
 
@@ -136,8 +159,9 @@ final class MacNotifications: NSObject, UNUserNotificationCenterDelegate {
               (kind != .waiting || waiting), (kind != .completed || completed),
               (kind != .aborted || aborted), (kind != .transient || transient),
               model?.hosts.contains(where: { $0.hostID == hostID }) == true,
-              let id = kind.identity(hostID: hostID, session: session),
-              !ledger.contains(id), inFlight.insert(id).inserted else { return }
+              let id = kind.identity(hostID: hostID, session: session) else { return }
+        await ensureLedgerLoaded()
+        guard !ledger.contains(id), inFlight.insert(id).inserted else { return }
         defer { inFlight.remove(id) }
         await refreshAuthorization()
         guard enabled, authorization == .authorized || authorization == .provisional else { return }
@@ -157,12 +181,11 @@ final class MacNotifications: NSObject, UNUserNotificationCenterDelegate {
         do {
             try await center.add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
             ledger.record(id)
-            // Tiny payload; encode inline, write off the main thread.
-            if let data = try? JSONEncoder().encode(ledger) {
-                let url = ledgerURL
-                Task.detached(priority: .utility) {
-                    try? data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-                }
+            let snapshot = ledger
+            let url = ledgerURL
+            ledgerWriter.async {
+                guard let data = try? JSONEncoder().encode(snapshot) else { return }
+                try? data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
             }
         } catch {
             failure = String(localized: "settings.notifications.registration_failed")

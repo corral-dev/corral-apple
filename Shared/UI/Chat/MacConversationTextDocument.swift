@@ -410,6 +410,7 @@ final class MacConversationTextDocument: NSObject, @MainActor NSTextViewDelegate
         let text: String
         let isUser: Bool
         var mediaRevision: Int = 0
+        var isStreaming: Bool = false
     }
 
     struct Style: Equatable {

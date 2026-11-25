@@ -52,6 +52,7 @@ nonisolated struct SessionSummary: Codable, Sendable, Identifiable, Equatable, H
     let runtime: String?
     let sessionID: String?
     let shortID: String?
+    let corralID: String?
     var title: String
     let cwd: String
     let cwdDisplay: String
@@ -64,6 +65,7 @@ nonisolated struct SessionSummary: Codable, Sendable, Identifiable, Equatable, H
     let attention: AttentionKind
     let lastUser: String
     let lastAgent: String
+    let lastMessageRole: String?
     let rich: Bool
     var group: SessionGroupInfo?
     var pinned: Bool?
@@ -82,6 +84,7 @@ nonisolated struct SessionSummary: Codable, Sendable, Identifiable, Equatable, H
         case key, runtime
         case sessionID = "id"
         case shortID = "short_id"
+        case corralID = "corral_id"
         case title, cwd
         case cwdDisplay = "cwd_display"
         case mtime, time
@@ -89,6 +92,7 @@ nonisolated struct SessionSummary: Codable, Sendable, Identifiable, Equatable, H
         case status, live, hosted, attention
         case lastUser = "last_user"
         case lastAgent = "last_agent"
+        case lastMessageRole = "last_msg_role"
         case rich, group, pinned, marker
         case needsAttention = "needs_attention"
         case completionID = "completion_id"
@@ -100,6 +104,7 @@ nonisolated struct SessionSummary: Codable, Sendable, Identifiable, Equatable, H
         runtime: String? = nil,
         sessionID: String? = nil,
         shortID: String? = nil,
+        corralID: String? = nil,
         title: String = "",
         cwd: String = "",
         cwdDisplay: String = "",
@@ -112,6 +117,7 @@ nonisolated struct SessionSummary: Codable, Sendable, Identifiable, Equatable, H
         attention: AttentionKind = .none,
         lastUser: String = "",
         lastAgent: String = "",
+        lastMessageRole: String? = nil,
         rich: Bool = false,
         group: SessionGroupInfo? = nil,
         pinned: Bool? = nil,
@@ -124,6 +130,7 @@ nonisolated struct SessionSummary: Codable, Sendable, Identifiable, Equatable, H
         self.runtime = runtime
         self.sessionID = sessionID
         self.shortID = shortID
+        self.corralID = corralID
         self.title = title
         self.cwd = cwd
         self.cwdDisplay = cwdDisplay
@@ -136,6 +143,7 @@ nonisolated struct SessionSummary: Codable, Sendable, Identifiable, Equatable, H
         self.attention = attention
         self.lastUser = lastUser
         self.lastAgent = lastAgent
+        self.lastMessageRole = lastMessageRole
         self.rich = rich
         self.group = group
         self.pinned = pinned
@@ -153,6 +161,7 @@ nonisolated struct SessionSummary: Codable, Sendable, Identifiable, Equatable, H
             runtime: runtime,
             sessionID: sessionID,
             shortID: shortID,
+            corralID: corralID,
             title: title,
             cwd: cwd,
             cwdDisplay: cwdDisplay,
@@ -165,6 +174,7 @@ nonisolated struct SessionSummary: Codable, Sendable, Identifiable, Equatable, H
             attention: attention,
             lastUser: lastUser,
             lastAgent: lastAgent,
+            lastMessageRole: lastMessageRole,
             rich: rich,
             group: group,
             pinned: pinned,
@@ -189,6 +199,11 @@ nonisolated struct SessionSummary: Codable, Sendable, Identifiable, Equatable, H
         runtime = container.decodeFlexibleOptionalString(forKey: .runtime)
         sessionID = container.decodeFlexibleOptionalString(forKey: .sessionID)
         shortID = container.decodeFlexibleOptionalString(forKey: .shortID)
+        if container.contains(.corralID) {
+            corralID = container.decodeFlexibleString(forKey: .corralID)
+        } else {
+            corralID = nil
+        }
         title = container.decodeFlexibleString(forKey: .title)
         cwd = container.decodeFlexibleString(forKey: .cwd)
         cwdDisplay = container.decodeFlexibleString(forKey: .cwdDisplay)
@@ -202,6 +217,10 @@ nonisolated struct SessionSummary: Codable, Sendable, Identifiable, Equatable, H
         attention = AttentionKind(rawValue: attentionRaw) ?? .none
         lastUser = container.decodeFlexibleString(forKey: .lastUser)
         lastAgent = container.decodeFlexibleString(forKey: .lastAgent)
+        let rawRole = container.decodeFlexibleOptionalString(forKey: .lastMessageRole)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        lastMessageRole = (rawRole == "user" || rawRole == "assistant") ? rawRole : nil
         rich = container.decodeFlexibleBool(forKey: .rich)
         // 分组坏掉时丢掉分组，不要整条会话失败。
         group = try? container.decodeIfPresent(SessionGroupInfo.self, forKey: .group)
@@ -221,12 +240,19 @@ nonisolated struct SessionSummary: Codable, Sendable, Identifiable, Equatable, H
     }
 }
 
-extension SessionSummary {
-    /// 搜索匹配：标题、路径、最近消息片段。
+nonisolated extension SessionSummary {
+    var resolvedCorralID: String {
+        CorralID.forSession(self)
+    }
+
+    /// 搜索匹配：标题、路径、最近消息片段、Corral ID。
     func matches(query: String) -> Bool {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !needle.isEmpty else { return true }
+        if CorralID.matches(self, query: needle) { return true }
+        let cid = resolvedCorralID
         return title.lowercased().contains(needle)
+            || (!cid.isEmpty && cid.contains(needle))
             || cwdDisplay.lowercased().contains(needle)
             || lastUser.lowercased().contains(needle)
             || lastAgent.lowercased().contains(needle)

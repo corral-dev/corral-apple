@@ -186,8 +186,9 @@ nonisolated final class PlaneIO: @unchecked Sendable {
         switch frameType {
         case WireProtocol.frameData:
             let decrypted = try decrypt(payload)
-            let message = try WireMessage.unpack(decrypted)
-            return WireResponseBox(value: message)
+            let jsonData = try WireMessage.unpackPayload(decrypted)
+            let header = try JSONDecoder().decode(WireFrameEnvelopeHeader.self, from: jsonData)
+            return WireResponseBox(rawData: jsonData, header: header)
         case WireProtocol.framePing:
             let pong = try WireFrame.encode(type: WireProtocol.framePong, channelID: channelID)
             enqueueRaw(pong)
@@ -224,10 +225,47 @@ nonisolated enum PlaneIOError: Error, Sendable, Equatable {
 }
 
 nonisolated struct WireResponseBox: @unchecked Sendable {
-    let value: [String: Any]
-    var message: [String: Any] { value }
+    let rawData: Data?
+    let header: WireFrameEnvelopeHeader?
+    private let storage: BoxStorage
+
+    var value: [String: Any] { storage.message() }
+    var message: [String: Any] { storage.message() }
 
     init(value: [String: Any]) {
-        self.value = value
+        self.rawData = nil
+        self.header = nil
+        self.storage = BoxStorage(message: value)
+    }
+
+    init(rawData: Data, header: WireFrameEnvelopeHeader) {
+        self.rawData = rawData
+        self.header = header
+        self.storage = BoxStorage(rawData: rawData)
+    }
+
+    private final class BoxStorage: @unchecked Sendable {
+        private let lock = NSLock()
+        private let rawData: Data?
+        private var cached: [String: Any]?
+
+        init(message: [String: Any]) {
+            self.rawData = nil
+            self.cached = message
+        }
+
+        init(rawData: Data) {
+            self.rawData = rawData
+            self.cached = nil
+        }
+
+        func message() -> [String: Any] {
+            lock.lock()
+            defer { lock.unlock() }
+            if let cached { return cached }
+            let parsed = rawData.flatMap { try? WireMessage.loads($0) } ?? [:]
+            cached = parsed
+            return parsed
+        }
     }
 }

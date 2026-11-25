@@ -95,12 +95,13 @@ struct SessionDetailView: View {
         case exported
         case stopping
         case stopped
+        case copiedCorralID
         case copiedPath
 
         var isBusy: Bool {
             switch self {
             case .exporting, .stopping: true
-            case .exported, .stopped, .copiedPath: false
+            case .exported, .stopped, .copiedCorralID, .copiedPath: false
             }
         }
 
@@ -110,6 +111,7 @@ struct SessionDetailView: View {
             case .exported: "mac.session.exported"
             case .stopping: "sessions.status.stopping"
             case .stopped: "sessions.status.stopped"
+            case .copiedCorralID: "session.actions.copied_corral_id"
             case .copiedPath: "session.workspace.copied"
             }
         }
@@ -146,6 +148,10 @@ struct SessionDetailView: View {
     @State private var terminalPromptRequest: TerminalPromptRequest?
     @State private var draftHostID = ""
     @State private var didLoadDraft = false
+    @State private var followUpDispatcherToken = UUID()
+    #if DEBUG
+    @State private var didSeedFollowUpInspection = false
+    #endif
 
     var body: some View {
         ChatScreen {
@@ -217,6 +223,8 @@ struct SessionDetailView: View {
             prepareConversationIfNeeded()
             // Red dot clears on tap; a Mac pane (injected store) does its own.
             if injectedStore == nil { metadataStore?.markReadLocally(key: sessionKey) }
+            registerFollowUpDispatcher()
+            syncFollowUpSnapshot()
         }
         .task {
             let conv = prepareConversationIfNeeded()
@@ -225,6 +233,30 @@ struct SessionDetailView: View {
             await chatStart
             await readMark
 #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("-CorralInspectFollowUpQueue"),
+               !didSeedFollowUpInspection, !effectiveHostID.isEmpty {
+                didSeedFollowUpInspection = true
+                appModel.followUpQueue.replaceQueueForInspection(
+                    hostID: effectiveHostID,
+                    sessionKey: sessionKey,
+                    items: [
+                        FollowUpItem(
+                            id: UUID(),
+                            text: "Summarize the failing tests and propose the smallest safe fix.",
+                            images: [],
+                            files: [],
+                            createdAt: Date()
+                        ),
+                        FollowUpItem(
+                            id: UUID(),
+                            text: "Run swift test after updating Package.swift and check every warning.",
+                            images: [],
+                            files: [StagedSendFile(id: UUID(), name: "Package.swift", data: Data("fixture".utf8))],
+                            createdAt: Date()
+                        ),
+                    ]
+                )
+            }
             await inspectDeliveryIfRequested(conv)
             if ProcessInfo.processInfo.arguments.contains("-CorralInspectFork"),
                ProcessInfo.processInfo.environment["CORRAL_INSPECTION_SESSION_KEY"] == sessionKey {
@@ -248,6 +280,10 @@ struct SessionDetailView: View {
         .onChange(of: draft) { _, newValue in
             persistDraft(newValue)
         }
+        .onChange(of: currentFollowUpSnapshot, initial: true) { _, snapshot in
+            guard !effectiveHostID.isEmpty else { return }
+            appModel.followUpQueue.updateSnapshot(snapshot, hostID: effectiveHostID, sessionKey: sessionKey)
+        }
         .task(id: runtimeCatalogClientID) {
             // Invalidate before starting: a cancelled predecessor may still be
             // unwinding its RPC when a ready replacement task begins.
@@ -270,11 +306,20 @@ struct SessionDetailView: View {
                 #endif
             }
         }
-        #if os(iOS)
-        .onChange(of: sessionKey) { _, _ in
+        .onChange(of: sessionKey) { oldKey, _ in
+            #if os(iOS)
             terminalSurfaceBackground = nil
+            #endif
+            if !effectiveHostID.isEmpty {
+                appModel.followUpQueue.unregisterMountedDispatcher(
+                    token: followUpDispatcherToken,
+                    hostID: effectiveHostID,
+                    sessionKey: oldKey
+                )
+            }
+            registerFollowUpDispatcher()
+            syncFollowUpSnapshot()
         }
-        #endif
         .onChange(of: modeRequest) { _, request in
             guard let request else { return }
             if request.mode == .terminal { visitedTerminal = true }
@@ -294,6 +339,13 @@ struct SessionDetailView: View {
             liveChatZoomScale = nil
             #endif
             persistDraft(draft)
+            if !effectiveHostID.isEmpty {
+                appModel.followUpQueue.unregisterMountedDispatcher(
+                    token: followUpDispatcherToken,
+                    hostID: effectiveHostID,
+                    sessionKey: sessionKey
+                )
+            }
             fileLoader?.cancelActiveDownload()
             transientNoticeTask?.cancel()
             transientNoticeTask = nil
@@ -333,6 +385,7 @@ struct SessionDetailView: View {
             onHandoff: { target in Task { await handoffSession(to: target) } },
             onExport: { Task { await exportSession() } },
             onStop: onStop != nil ? { Task { await stopSession() } } : nil,
+            onCopyCorralID: showCopiedCorralIDNotice,
             onCopyPath: showCopiedPathNotice,
             onDelete: onDelete != nil ? { onDelete?(session) } : nil,
             onOpenTerminal: openTerminalAction,
@@ -794,6 +847,37 @@ struct SessionDetailView: View {
                 .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
             }
 
+            if !activeFollowUpQueue.isEmpty {
+                ComposerFollowUpQueueView(
+                    queue: activeFollowUpQueue,
+                    onSendNow: { item in
+                        appModel.followUpQueue.sendNow(
+                            id: item.id,
+                            hostID: effectiveHostID,
+                            sessionKey: sessionKey
+                        )
+                    },
+                    onEdit: editQueuedItem,
+                    onRemove: { item in
+                        appModel.followUpQueue.remove(
+                            id: item.id,
+                            hostID: effectiveHostID,
+                            sessionKey: sessionKey
+                        )
+                    },
+                    onPause: {
+                        appModel.followUpQueue.pause(hostID: effectiveHostID, sessionKey: sessionKey)
+                    },
+                    onResume: {
+                        appModel.followUpQueue.resume(hostID: effectiveHostID, sessionKey: sessionKey)
+                    },
+                    onClear: {
+                        appModel.followUpQueue.clear(hostID: effectiveHostID, sessionKey: sessionKey)
+                    }
+                )
+                .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+            }
+
             ComposerBar(
                 text: $draft,
                 attachments: $draftAttachments,
@@ -805,7 +889,10 @@ struct SessionDetailView: View {
                 history: userPrompts.compactMap { $0.text?.trimmingCharacters(in: .whitespacesAndNewlines) },
                 onStop: stopAction,
                 isStopping: isInterrupting,
-                onSend: submitDraft
+                showsFollowUpContextAction: currentFollowUpSnapshot.shouldQueueNewFollowUp || !activeFollowUpQueue.isEmpty,
+                onSend: submitDraft,
+                onFollowUp: followUpDraft,
+                onRecallQueued: recallQueuedItem
             )
         }
     }
@@ -931,6 +1018,9 @@ struct SessionDetailView: View {
         guard !isInterrupting, canInterrupt, let store = conversationStore else { return }
         // Acquired before the task: a second tap cannot send a second interrupt key.
         isInterrupting = true
+        if !effectiveHostID.isEmpty {
+            appModel.followUpQueue.pauseIfActive(hostID: effectiveHostID, sessionKey: sessionKey)
+        }
         clearComposerError()
         let operationID = hapticScope.beginOperation()
         HapticFeedback.shared.emit(.committed, operationID: operationID, scope: hapticScope)
@@ -1066,8 +1156,8 @@ struct SessionDetailView: View {
         isActionBusy = true
         defer { isActionBusy = false }
         do {
-            let json = try await SessionActionsMenu.exportJSON(sourceKey: sessionKey, client: client)
-            PlatformPasteboard.copy(json)
+            let path = try await SessionActionsMenu.exportPath(sourceKey: sessionKey, client: client)
+            PlatformPasteboard.copy(path)
             HapticFeedback.shared.emit(.success, operationID: operationID, scope: hapticScope)
             showTransientNotice(.exported)
         } catch {
@@ -1075,6 +1165,11 @@ struct SessionDetailView: View {
             HapticFeedback.shared.failure(error, operationID: operationID, scope: hapticScope)
             showComposerError(SessionActionsMenu.failureMessage(for: error), feedback: nil)
         }
+    }
+
+    private func showCopiedCorralIDNotice() {
+        HapticFeedback.shared.emit(.selection, scope: hapticScope)
+        showTransientNotice(.copiedCorralID)
     }
 
     private func showCopiedPathNotice() {
@@ -1117,6 +1212,157 @@ struct SessionDetailView: View {
 
     private func submitDraft(_ text: String, _ images: [DraftImageAttachment], _ files: [DraftFileAttachment] = []) {
         sendComposerDraft(text: text, images: images, files: files)
+    }
+
+    private func followUpDraft(_ text: String, _ images: [DraftImageAttachment], _ files: [DraftFileAttachment] = []) {
+        let hostID = effectiveHostID
+        let snapshot = currentFollowUpSnapshot
+        if !hostID.isEmpty,
+           appModel.followUpQueue.shouldQueueFollowUp(
+               hostID: hostID,
+               sessionKey: sessionKey,
+               snapshot: snapshot
+           ) {
+            let stagedImages = images.map {
+                StagedSendImage(id: $0.id, base64: $0.base64, commandID: $0.commandID)
+            }
+            let stagedFiles = files.map {
+                StagedSendFile(id: $0.id, name: $0.name, data: $0.data, commandID: $0.commandID)
+            }
+            _ = appModel.followUpQueue.enqueue(
+                hostID: hostID,
+                sessionKey: sessionKey,
+                text: text,
+                images: stagedImages,
+                files: stagedFiles
+            )
+            return
+        }
+        sendComposerDraft(text: text, images: images, files: files)
+    }
+
+    private var effectiveHostID: String {
+        draftHostID.isEmpty ? (appModel.selectedHost?.hostID ?? appModel.connectedHostID ?? "") : draftHostID
+    }
+
+    private var activeFollowUpQueue: SessionFollowUpQueue {
+        guard !effectiveHostID.isEmpty else { return SessionFollowUpQueue() }
+        return appModel.followUpQueue.queue(forHostID: effectiveHostID, sessionKey: sessionKey)
+    }
+
+    private var currentFollowUpSnapshot: FollowUpActivitySnapshot {
+        FollowUpActivitySnapshot.resolve(
+            session: session,
+            store: conversationStore,
+            isSending: isSending || isActionBusy,
+            isHostReady: isHostReady
+        )
+    }
+
+    private func syncFollowUpSnapshot() {
+        let hostID = effectiveHostID
+        guard !hostID.isEmpty else { return }
+        appModel.followUpQueue.updateSnapshot(currentFollowUpSnapshot, hostID: hostID, sessionKey: sessionKey)
+    }
+
+    private func registerFollowUpDispatcher() {
+        let hostID = effectiveHostID
+        guard !hostID.isEmpty else { return }
+        let key = sessionKey
+        appModel.followUpQueue.registerMountedDispatcher(
+            token: followUpDispatcherToken,
+            hostID: hostID,
+            sessionKey: key
+        ) { item in
+            await dispatchQueuedItem(item)
+        }
+    }
+
+    private func dispatchQueuedItem(_ item: FollowUpItem) async -> FollowUpDispatchResult {
+        #if DEBUG
+        guard !ProcessInfo.processInfo.arguments.contains("-CorralInspectFollowUpQueue") else {
+            return .deferred
+        }
+        #endif
+        let converted = draftAttachments(from: item)
+        let store: (any ConversationSendStore)? = conversationStore
+        let display = DetailSendDisplay(
+            view: self,
+            hapticScope: hapticScope,
+            sentImages: converted.images,
+            sentFiles: converted.files
+        )
+        switch sendCoordinator.beginQueuedComposerSend(
+            store: store,
+            display: display,
+            text: item.text,
+            images: item.images,
+            files: item.files,
+            isBusy: isSending || isActionBusy,
+            isHostReady: isHostReady
+        ) {
+        case .dispatched(let plan):
+            let outcome = await sendCoordinator.runComposerSend(plan, store: store, display: display)
+            switch outcome {
+            case .sent:
+                return .sent
+            case .failed(let message):
+                return .failed(message)
+            }
+        case .blockedByQuestion, .deferred:
+            return .deferred
+        case .rejected(let message):
+            return .failed(message)
+        }
+    }
+
+    private func editQueuedItem(_ item: FollowUpItem) {
+        let hostID = effectiveHostID
+        guard !hostID.isEmpty,
+              let removed = appModel.followUpQueue.remove(id: item.id, hostID: hostID, sessionKey: sessionKey) else {
+            return
+        }
+        restoreQueuedItemToComposer(removed)
+    }
+
+    private func recallQueuedItem() -> Bool {
+        let hostID = effectiveHostID
+        guard !hostID.isEmpty,
+              let popped = appModel.followUpQueue.popLastEditable(hostID: hostID, sessionKey: sessionKey) else {
+            return false
+        }
+        restoreQueuedItemToComposer(popped)
+        return true
+    }
+
+    private func restoreQueuedItemToComposer(_ item: FollowUpItem) {
+        draft = ComposerSendPolicy.restoredDraft(failedText: item.text, currentDraft: draft)
+        let converted = draftAttachments(from: item)
+        if !converted.images.isEmpty {
+            restoreAttachments(from: converted.images)
+        }
+        if !converted.files.isEmpty {
+            restoreFileAttachments(from: converted.files)
+        }
+    }
+
+    private func draftAttachments(from item: FollowUpItem) -> (
+        images: [DraftImageAttachment],
+        files: [DraftFileAttachment]
+    ) {
+        let images: [DraftImageAttachment] = item.images.compactMap { staged in
+            guard let data = Data(base64Encoded: staged.base64),
+                  let preview = PlatformImage(data: data) else { return nil }
+            var attachment = DraftImageAttachment(id: staged.id, base64: staged.base64, preview: preview)
+            attachment.commandID = staged.commandID
+            return attachment
+        }
+        let files = item.files.map { staged in
+            var attachment = DraftFileAttachment(id: staged.id, name: staged.name, data: staged.data)
+            attachment.commandID = staged.commandID
+            return attachment
+        }
+        return (images, files)
     }
 
     private func submitText(_ text: String) {

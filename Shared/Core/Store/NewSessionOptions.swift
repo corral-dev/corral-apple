@@ -30,7 +30,7 @@ nonisolated struct ProjectEntry: Codable, Identifiable, Sendable {
     }
 }
 
-nonisolated struct RuntimeEntry: Codable, Identifiable, Sendable {
+nonisolated struct RuntimeEntry: Codable, Identifiable, Sendable, Equatable {
     let id: String
     let name: String?
     var available: Bool? = nil

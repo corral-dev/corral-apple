@@ -67,7 +67,8 @@ enum ConversationMessagePolicy {
 
     static func timelineItems(
         from messages: [RichMessage],
-        preserving previous: [ConversationTimelineItem] = []
+        preserving previous: [ConversationTimelineItem] = [],
+        streamingDrafts: [StreamingDraft] = []
     ) -> [ConversationTimelineItem] {
         // A page can extend the first tool group backwards. Retain its existing
         // source sequence identity so the scroll anchor and expanded state survive.
@@ -131,6 +132,16 @@ enum ConversationMessagePolicy {
         }
 
         flushTools()
+        for draft in streamingDrafts {
+            guard !draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+            result.append(.message(RichMessage(
+                seq: draft.syntheticSeq,
+                role: "assistant",
+                text: draft.text,
+                timestamp: draft.timestamp,
+                isStreaming: true
+            )))
+        }
         return result
     }
 

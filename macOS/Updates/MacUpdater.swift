@@ -51,10 +51,18 @@ final class MacUpdater {
 
     private func refresh() {
         let updater = controller.updater
-        canCheckForUpdates = updater.canCheckForUpdates
-        automaticallyChecksForUpdates = updater.automaticallyChecksForUpdates
-        automaticallyDownloadsUpdates = updater.automaticallyDownloadsUpdates
-        allowsAutomaticUpdates = updater.allowsAutomaticUpdates
+        if canCheckForUpdates != updater.canCheckForUpdates {
+            canCheckForUpdates = updater.canCheckForUpdates
+        }
+        if automaticallyChecksForUpdates != updater.automaticallyChecksForUpdates {
+            automaticallyChecksForUpdates = updater.automaticallyChecksForUpdates
+        }
+        if automaticallyDownloadsUpdates != updater.automaticallyDownloadsUpdates {
+            automaticallyDownloadsUpdates = updater.automaticallyDownloadsUpdates
+        }
+        if allowsAutomaticUpdates != updater.allowsAutomaticUpdates {
+            allowsAutomaticUpdates = updater.allowsAutomaticUpdates
+        }
     }
 }
 

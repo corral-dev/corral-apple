@@ -42,6 +42,20 @@ enum SessionQuickFilter: String, CaseIterable {
 
     /// The unselected chip advertises Focus, the first mode entered on click.
     func count(sessions: [SessionSummary]) -> Int {
-        (self == .all ? Self.attention : self).apply(sessions: sessions).count
+        let effective = self == .all ? Self.attention : self
+        let now = Date()
+        return sessions.reduce(0) { total, session in
+            guard ActiveRuntimeVisibility.isListVisible(session) else { return total }
+            let matched: Bool
+            switch effective {
+            case .all:
+                matched = true
+            case .attention:
+                matched = SessionListFiltering.needsAttention(session, now: now)
+            case .active:
+                matched = SessionPresentation.activityMarker(for: session) != nil
+            }
+            return total + (matched ? 1 : 0)
+        }
     }
 }

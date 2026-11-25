@@ -554,6 +554,130 @@ final class ConversationSendCoordinatorTests: XCTestCase {
         XCTAssertTrue(display.restoredFileBatches.isEmpty)
         XCTAssertEqual(display.clearedErrorCount, 1)
     }
+
+    // MARK: - Queued follow-up send
+
+    func testQueuedFollowUpSuccessPreservesLiveComposerDraftAndAttachments() async {
+        store.supportsCommandReceipts = true
+        display.composerDraft = "currently editing next prompt"
+        let img = StagedSendImage(id: UUID(), base64: "QQ==", commandID: "img-q")
+        let file = StagedSendFile(id: UUID(), name: "plan.md", data: Data("ok".utf8), commandID: "file-q")
+
+        let start = coordinator.beginQueuedComposerSend(
+            store: store,
+            display: display,
+            text: "queued follow-up",
+            images: [img],
+            files: [file],
+            isBusy: false,
+            isHostReady: true
+        )
+        guard case .dispatched(let plan) = start else {
+            return XCTFail("Expected dispatched plan")
+        }
+
+        let outcome = await coordinator.runComposerSend(plan, store: store, display: display)
+        XCTAssertEqual(outcome, .sent)
+        XCTAssertEqual(display.composerDraft, "currently editing next prompt")
+        XCTAssertEqual(display.clearedPersistedCount, 0)
+        XCTAssertTrue(display.persistedDrafts.isEmpty)
+        XCTAssertTrue(display.restoredImageBatches.isEmpty)
+        XCTAssertTrue(display.restoredFileBatches.isEmpty)
+        XCTAssertEqual(store.orderedEvents, ["image:QQ==", "file:plan.md", "text:queued follow-up"])
+    }
+
+    func testQueuedFollowUpFailureDoesNotRestoreOntoLiveDraftOrAttachments() async {
+        store.supportsCommandReceipts = false
+        display.composerDraft = "unrelated draft"
+        store.sendTextError = RemoteCallError(code: "unavailable", message: "Host busy", hint: "")
+
+        let textStart = coordinator.beginQueuedComposerSend(
+            store: store,
+            display: display,
+            text: "queued text",
+            images: [],
+            files: [],
+            isBusy: false,
+            isHostReady: true
+        )
+        guard case .dispatched(let textPlan) = textStart else {
+            return XCTFail("Expected dispatched text plan")
+        }
+        let textOutcome = await coordinator.runComposerSend(textPlan, store: store, display: display)
+        XCTAssertEqual(textOutcome, .failed("Host busy"))
+        XCTAssertEqual(display.composerDraft, "unrelated draft")
+        XCTAssertTrue(display.persistedDrafts.isEmpty)
+
+        store.sendTextError = nil
+        store.sendImageErrors = [RemoteCallError(code: "unavailable", message: "Upload failed", hint: "")]
+        let img = StagedSendImage(id: UUID(), base64: "QQ==", commandID: "img-fail")
+        let file = StagedSendFile(id: UUID(), name: "spec.txt", data: Data("a".utf8), commandID: "file-fail")
+        let mixedStart = coordinator.beginQueuedComposerSend(
+            store: store,
+            display: display,
+            text: "with attachment",
+            images: [img],
+            files: [file],
+            isBusy: false,
+            isHostReady: true
+        )
+        guard case .dispatched(let mixedPlan) = mixedStart else {
+            return XCTFail("Expected dispatched mixed plan")
+        }
+        let mixedOutcome = await coordinator.runComposerSend(mixedPlan, store: store, display: display)
+        XCTAssertEqual(mixedOutcome, .failed("Upload failed"))
+        XCTAssertEqual(display.composerDraft, "unrelated draft")
+        XCTAssertTrue(display.restoredImageBatches.isEmpty)
+        XCTAssertTrue(display.restoredFileBatches.isEmpty)
+    }
+
+    func testQueuedFollowUpGuardsBlockedQuestionOfflineAndUnsupportedFiles() {
+        display.composerDraft = "draft stays"
+        store.prompts = [FakeSendStore.makeBlockingPrompt(requestID: "req-1")]
+        let blocked = coordinator.beginQueuedComposerSend(
+            store: store,
+            display: display,
+            text: "queued",
+            images: [],
+            files: [],
+            isBusy: false,
+            isHostReady: true
+        )
+        guard case .blockedByQuestion = blocked else {
+            return XCTFail("Expected blockedByQuestion")
+        }
+
+        store.prompts = []
+        let offline = coordinator.beginQueuedComposerSend(
+            store: store,
+            display: display,
+            text: "queued",
+            images: [],
+            files: [],
+            isBusy: false,
+            isHostReady: false
+        )
+        guard case .deferred = offline else {
+            return XCTFail("Expected deferred when offline")
+        }
+
+        store.supportsInputFile = false
+        let file = StagedSendFile(id: UUID(), name: "doc.pdf", data: Data("1".utf8))
+        let unsupported = coordinator.beginQueuedComposerSend(
+            store: store,
+            display: display,
+            text: "queued",
+            images: [],
+            files: [file],
+            isBusy: false,
+            isHostReady: true
+        )
+        guard case .rejected = unsupported else {
+            return XCTFail("Expected rejected when host lacks input_file")
+        }
+        XCTAssertEqual(display.composerDraft, "draft stays")
+        XCTAssertEqual(display.questionPendingCount, 0)
+    }
 }
 
 // MARK: - Fakes

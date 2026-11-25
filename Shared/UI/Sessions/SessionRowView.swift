@@ -1,5 +1,11 @@
 import SwiftUI
 
+extension EnvironmentValues {
+    /// List minute clock, ticked once by the owning session list so rows do not
+    /// register independent timers.
+    @Entry var sidebarNow: Date = Date()
+}
+
 /// Session row: at ordinary text sizes exactly three lines — one-line title,
 /// one-line preview (blank when genuinely empty), project + time + status.
 /// Height never depends on title length or preview presence and no unused line
@@ -8,6 +14,7 @@ import SwiftUI
 struct SessionRowView: View {
     @Environment(\.interfaceScale) private var interfaceScale
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.sidebarNow) private var now
     let session: SessionSummary
 
     private var isAccessibility: Bool { dynamicTypeSize.isAccessibilitySize }
@@ -86,27 +93,25 @@ struct SessionRowView: View {
 
             Spacer(minLength: Space.sm * interfaceScale)
 
-            TimelineView(.periodic(from: .now, by: 30)) { context in
-                let time = SessionPresentation.timeLabel(for: session, now: context.date)
-                HStack(spacing: 4 * interfaceScale) {
-                    if let loopCount = SessionPresentation.positiveLoopCount(for: session),
-                       let loopText = SessionPresentation.compactLoopCount(loopCount) {
-                        SessionLoopCountLabel(count: loopCount, text: loopText, font: Typography.sessionMeta)
-                            .fixedSize()
-                        if !time.isEmpty {
-                            Text(verbatim: "·")
-                                .interfaceFont(Typography.sessionMeta)
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
+            let time = SessionPresentation.timeLabel(for: session, now: now)
+            HStack(spacing: 4 * interfaceScale) {
+                if let loopCount = SessionPresentation.positiveLoopCount(for: session),
+                   let loopText = SessionPresentation.compactLoopCount(loopCount) {
+                    SessionLoopCountLabel(count: loopCount, text: loopText, font: Typography.sessionMeta)
+                        .fixedSize()
                     if !time.isEmpty {
-                        Text(time)
+                        Text(verbatim: "·")
                             .interfaceFont(Typography.sessionMeta)
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
-                            .lineLimit(1)
-                            .fixedSize()
+                            .foregroundStyle(.tertiary)
                     }
+                }
+                if !time.isEmpty {
+                    Text(time)
+                        .interfaceFont(Typography.sessionMeta)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .fixedSize()
                 }
             }
             SessionStatusDots(session: session)

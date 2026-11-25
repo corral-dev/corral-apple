@@ -139,6 +139,8 @@ struct SelectableAttributedText: View {
     var tint: Color = Palette.accent
     var fontStyle: SessionFontStyle = .bubbleBody
     var maxHeight: CGFloat? = nil
+    /// Keeps a capped streaming bubble scrolled to its live bottom unless dragging.
+    var autoFollowBottom: Bool = false
     /// Reports whether capped text still has hidden content below the visible part.
     var onMoreBelowChange: ((Bool) -> Void)? = nil
     /// Original markdown source; iOS Copy puts this so selection pastes as markdown.
@@ -158,6 +160,7 @@ struct SelectableAttributedText: View {
             foreground: UIColor(foreground),
             tint: UIColor(tint),
             maxHeight: maxHeight,
+            autoFollowBottom: autoFollowBottom,
             onMoreBelowChange: onMoreBelowChange,
             sourceMarkdown: sourceMarkdown,
             linkHandler: linkHandler
@@ -172,6 +175,7 @@ private struct SelectableTextView: UIViewRepresentable {
     let foreground: UIColor
     let tint: UIColor
     let maxHeight: CGFloat?
+    let autoFollowBottom: Bool
     let onMoreBelowChange: ((Bool) -> Void)?
     let sourceMarkdown: String?
     let linkHandler: ((URL) -> (() -> Void)?)?
@@ -267,7 +271,11 @@ private struct SelectableTextView: UIViewRepresentable {
         coordinator.linkHandler = linkHandler
         let ns = converted(coordinator)
         if let stable = view as? EdgeFadeTextView { stable.sourceMarkdown = sourceMarkdown }
-        if coordinator.appliedText !== ns {
+        let wasNearBottom = !view.isScrollEnabled
+            || view.contentSize.height <= view.bounds.height + 24
+            || (view.contentOffset.y + view.bounds.height >= view.contentSize.height - 32)
+        let textChanged = coordinator.appliedText !== ns
+        if textChanged {
             if let stable = view as? EdgeFadeTextView { stable.replaceContent(ns) }
             else { view.attributedText = ns }
             coordinator.appliedText = ns
@@ -279,6 +287,17 @@ private struct SelectableTextView: UIViewRepresentable {
         view.tintColor = tint
         (view as? EdgeFadeTextView)?.onMoreBelowChange = onMoreBelowChange
         (view as? EdgeFadeTextView)?.refreshEdgeFade()
+        if textChanged && autoFollowBottom && wasNearBottom && !view.isTracking && !view.isDragging && !view.isDecelerating {
+            DispatchQueue.main.async {
+                guard view.isScrollEnabled, !view.isTracking, !view.isDragging, !view.isDecelerating else { return }
+                view.layoutManager.ensureLayout(for: view.textContainer)
+                let maxY = max(0, view.contentSize.height - view.bounds.height)
+                if maxY > view.contentOffset.y + 1 {
+                    view.setContentOffset(CGPoint(x: view.contentOffset.x, y: maxY), animated: false)
+                    (view as? EdgeFadeTextView)?.refreshEdgeFade()
+                }
+            }
+        }
     }
 
     private static func applyScrollMode(to view: UITextView, scrolling: Bool) {
@@ -296,15 +315,8 @@ private struct SelectableTextView: UIViewRepresentable {
         (view as? EdgeFadeTextView)?.refreshEdgeFade()
     }
 
-    /// Stateless measurement: a detached sizer mirrors makeUIView's text-container
-    /// config but never joins the hierarchy, so the result can't depend on (or
-    /// disturb) the live view's scroll state. Measuring the live view here used
-    /// to toggle isScrollEnabled mid-layout and oscillate around the cap.
-    private static func naturalSize(
-        for ns: NSAttributedString,
-        font: UIFont,
-        proposalWidth: CGFloat
-    ) -> CGSize {
+    @MainActor
+    private static let sizerTextView: UITextView = {
         let sizer = UITextView(usingTextLayoutManager: false)
         sizer.backgroundColor = .clear
         sizer.isOpaque = false
@@ -314,6 +326,19 @@ private struct SelectableTextView: UIViewRepresentable {
         sizer.textContainerInset = .zero
         sizer.textContainer.lineFragmentPadding = 0
         sizer.textContainer.widthTracksTextView = false
+        return sizer
+    }()
+
+    /// Stateless measurement: a detached sizer mirrors makeUIView's text-container
+    /// config but never joins the hierarchy, so the result can't depend on (or
+    /// disturb) the live view's scroll state. Measuring the live view here used
+    /// to toggle isScrollEnabled mid-layout and oscillate around the cap.
+    private static func naturalSize(
+        for ns: NSAttributedString,
+        font: UIFont,
+        proposalWidth: CGFloat
+    ) -> CGSize {
+        let sizer = Self.sizerTextView
         sizer.textContainer.size = CGSize(width: proposalWidth, height: .greatestFiniteMagnitude)
         sizer.attributedText = ns
         sizer.layoutManager.ensureLayout(for: sizer.textContainer)
@@ -322,6 +347,7 @@ private struct SelectableTextView: UIViewRepresentable {
         sizer.textContainer.size = CGSize(width: fittedWidth, height: .greatestFiniteMagnitude)
         sizer.layoutManager.ensureLayout(for: sizer.textContainer)
         let fitted = sizer.sizeThatFits(CGSize(width: fittedWidth, height: .greatestFiniteMagnitude))
+        sizer.attributedText = nil
         return CGSize(width: fittedWidth, height: ceil(max(fitted.height, font.lineHeight)))
     }
 
@@ -441,6 +467,8 @@ struct SelectableAttributedText: View {
     var tint: Color = Palette.accent
     var fontStyle: SessionFontStyle = .bubbleBody
     var maxHeight: CGFloat? = nil
+    /// Keeps parity with the iOS interface; macOS conversations scroll externally.
+    var autoFollowBottom: Bool = false
     var onMoreBelowChange: ((Bool) -> Void)? = nil
     /// Original markdown source; Mac hover copy uses it (selection copy stays native).
     var sourceMarkdown: String? = nil
@@ -936,7 +964,8 @@ struct MacConversationTextSelection: ViewModifier {
             // paths stay out of the text).
             guard let text = message.chatBodyText, !text.allSatisfy(\.isWhitespace) else { return nil }
             return .init(id: message.seq, text: text, isUser: message.role.lowercased() == "user",
-                         mediaRevision: mediaRevisions[message.seq] ?? 0)
+                         mediaRevision: mediaRevisions[message.seq] ?? 0,
+                         isStreaming: message.isStreaming)
         }
         let font = Typography.sessionUIFont(.bubbleBody, scale: sessionTextScale * interfaceScale)
         let style = MacConversationTextDocument.Style(
@@ -946,8 +975,11 @@ struct MacConversationTextSelection: ViewModifier {
         // This updates AppKit reference objects only, never SwiftUI state. The
         // identity/source/style gate makes ordinary view updates a no-op.
         document.update(identity: identity, sources: sources, style: style) { source in
-            MacMessageTextRenderer.convert(
-                renderText?(source.text, source.id) ?? ChatMarkdown.attributed(source.text), font: font,
+            let rendered = source.isStreaming
+                ? ChatMarkdown.attributed(source.text, cache: false, streaming: true)
+                : (renderText?(source.text, source.id) ?? ChatMarkdown.attributed(source.text))
+            return MacMessageTextRenderer.convert(
+                rendered, font: font,
                 foreground: source.isUser ? style.userForeground : style.foreground,
                 workingDirectory: workingDirectory
             )

@@ -37,11 +37,28 @@ final class RemoteClient: NSObject {
     let diagnostics = ClientDiagnostics()
     private var diagnosticHeartbeat: Task<Void, Never>?
     var state: State = .disconnected {
-        didSet { if oldValue != state { diagnose(.stateChanged) } }
+        didSet {
+            if oldValue != state {
+                diagnose(.stateChanged)
+                notifyStateChangeHandlers()
+            }
+        }
     }
-    var controlConfirmed = false
-    var confirmedAccess: String?
-    var terminalConnectionError: String?
+    var controlConfirmed = false {
+        didSet {
+            if oldValue != controlConfirmed { notifyStateChangeHandlers() }
+        }
+    }
+    var confirmedAccess: String? {
+        didSet {
+            if oldValue != confirmedAccess { notifyStateChangeHandlers() }
+        }
+    }
+    var terminalConnectionError: String? {
+        didSet {
+            if oldValue != terminalConnectionError { notifyStateChangeHandlers() }
+        }
+    }
     var isUsable: Bool { state == .ready && controlConfirmed }
     var candidateRound = 0
     var recoveryCheckTask: Task<Bool, Never>?
@@ -50,7 +67,11 @@ final class RemoteClient: NSObject {
 
     var channelID: Data = WireProtocol.zeroChannel
     /// 当前生效通路（局域网 / 中继），供界面展示。
-    var activeTransport: ConnectionTransport?
+    var activeTransport: ConnectionTransport? {
+        didSet {
+            if oldValue != activeTransport { notifyStateChangeHandlers() }
+        }
+    }
     /// 数据面是否已附着。hello / 重绑失败时保持 false，控制面仍可 ready。
     var hasDataPlane: Bool { dataPlane != nil }
     /// 最近一次数据面绑定失败原因；成功附着后清空。
@@ -63,7 +84,11 @@ final class RemoteClient: NSObject {
     /// Host feature flags from the last successful control-plane hello.
     var hostCapabilities: HostCapabilities = .empty
     /// Active runtimes from the last successful control-plane hello.
-    var hostRuntimes: [RuntimeEntry] = []
+    var hostRuntimes: [RuntimeEntry] = [] {
+        didSet {
+            if oldValue != hostRuntimes { notifyStateChangeHandlers() }
+        }
+    }
     /// Convenience: durable `command_id` receipts are available on this connection.
     var supportsCommandReceipts: Bool { hostCapabilities.commandReceipts }
     /// Convenience: history wire omits tool bodies; fetch via `session.toolDetail`.
@@ -134,6 +159,7 @@ final class RemoteClient: NSObject {
     var lastGapResyncAt: Date?
     /// 重连成功后通知上层重新发起 watch（服务端连接级订阅不会自动恢复）。
     var readyHandlers: [UUID: @MainActor () -> Void] = [:]
+    var stateChangeHandlers: [UUID: @MainActor () -> Void] = [:]
     private var hasBeenReady = false
 
     let addressDiscovery: @Sendable (String) async -> [String]

@@ -143,7 +143,16 @@ final class RemoteTerminalStream {
         events = Task { [weak self] in
             for await event in stream {
                 guard !Task.isCancelled else { break }
-                self?.handle(event.data)
+                if let raw = event.rawEnvelopeData {
+                    if let payload = try? await RemoteJSONDecoder.decodeEnvelopeDataOffMain(
+                        TerminalStreamPayload.self, from: raw
+                    ) {
+                        guard !Task.isCancelled else { break }
+                        self?.handle(payload)
+                    }
+                } else {
+                    self?.handle(event.data)
+                }
             }
         }
         #if DEBUG
@@ -582,10 +591,14 @@ final class RemoteTerminalStream {
     // MARK: - Events
 
     private func handle(_ payload: [String: Any]) {
+        handle(TerminalStreamPayload(dictionary: payload))
+    }
+
+    private func handle(_ payload: TerminalStreamPayload) {
         guard phase != .ended else { return }
         // A bounded subscriber that fell behind reports one coalesced gap: raw
         // bytes are missing, so only a fresh host snapshot may restore the screen.
-        if payload["resync"] as? Bool == true {
+        if payload.resync {
             backlog = nil
             backlogBytes = 0
             backlogNeedsResync = false
@@ -593,11 +606,11 @@ final class RemoteTerminalStream {
             requestResync()
             return
         }
-        let seq = (payload["seq"] as? Int) ?? 0
-        switch payload["kind"] as? String {
+        let seq = payload.seq
+        switch payload.kind {
         case "snapshot":
-            guard let cols = payload["cols"] as? Int, let rows = payload["rows"] as? Int,
-                  let data = decode(payload["data"]) else { return }
+            guard let cols = payload.cols, let rows = payload.rows,
+                  let data = payload.decodedData else { return }
             cancelSnapshotRecovery()
             lastSeq = seq
             snapshotRevision += 1
@@ -621,7 +634,7 @@ final class RemoteTerminalStream {
                 backlogNeedsResync = false
             }
         case "output":
-            guard synced, let data = decode(payload["data"]) else { return }
+            guard synced, let data = payload.decodedData else { return }
             guard seq == lastSeq + 1 else {
                 synced = false
                 requestResync()
@@ -687,9 +700,41 @@ final class RemoteTerminalStream {
             sink.terminalFeed(data)
         }
     }
+}
 
-    private func decode(_ value: Any?) -> Data? {
-        (value as? String).flatMap { Data(base64Encoded: $0) }
+private nonisolated struct TerminalStreamPayload: Decodable, Sendable {
+    let resync: Bool
+    let seq: Int
+    let kind: String?
+    let cols: Int?
+    let rows: Int?
+    let data: String?
+
+    enum CodingKeys: String, CodingKey {
+        case resync, seq, kind, cols, rows, data
+    }
+
+    init(dictionary payload: [String: Any]) {
+        resync = payload["resync"] as? Bool == true
+        seq = (payload["seq"] as? Int) ?? 0
+        kind = payload["kind"] as? String
+        cols = payload["cols"] as? Int
+        rows = payload["rows"] as? Int
+        data = payload["data"] as? String
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        resync = container.decodeFlexibleBool(forKey: .resync)
+        seq = container.decodeFlexibleInt(forKey: .seq, default: 0)
+        kind = container.decodeFlexibleOptionalString(forKey: .kind)
+        cols = container.contains(.cols) ? container.decodeFlexibleInt(forKey: .cols) : nil
+        rows = container.contains(.rows) ? container.decodeFlexibleInt(forKey: .rows) : nil
+        data = container.decodeFlexibleOptionalString(forKey: .data)
+    }
+
+    var decodedData: Data? {
+        data.flatMap { Data(base64Encoded: $0) }
     }
 }
 

@@ -476,6 +476,7 @@ private final class KeyboardFixture {
     let store = ConversationStore(sessionKey: "keyboard-test", client: nil, live: false)
     var text = ""
     var attachments: [DraftImageAttachment] = []
+    var fileAttachments: [DraftFileAttachment] = []
     var targetID: String?
     var submitRequest = 0
     var isRunning = false
@@ -498,9 +499,10 @@ private struct KeyboardFixtureView: View {
             } composer: {
                 // Same focus route as SessionDetailView: the keyboard coming up
                 // requests latest.
-                ComposerBar(text: $fixture.text, attachments: $fixture.attachments, onFocusChange: { focused in
+                ComposerBar(text: $fixture.text, attachments: $fixture.attachments,
+                            fileAttachments: $fixture.fileAttachments, onFocusChange: { focused in
                     if focused { fixture.scrollToLatestRequest += 1 }
-                }, onStop: fixture.isRunning ? {} : nil, inspectionSubmitRequest: fixture.submitRequest) { text, _ in
+                }, onStop: fixture.isRunning ? {} : nil, inspectionSubmitRequest: fixture.submitRequest) { text, _, _ in
                     fixture.send(text)
                 }
             }

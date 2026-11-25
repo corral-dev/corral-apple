@@ -22,8 +22,24 @@ import Foundation
         params: [String: Any] = [:],
         as type: T.Type
     ) async throws -> T {
-        let data = try await call(method, params: params)
-        return try await RemoteJSONDecoder.decodeOffMain(type, from: JSONValueBox(value: data))
+        let box = try await callBox(method, params: params)
+        if let rawData = box.rawData {
+            if box.header?.ok == false {
+                if let error = (try? JSONDecoder().decode(WireErrorEnvelope.self, from: rawData))?.callError {
+                    throw error
+                }
+                throw ConnectionError.invalidResponse
+            }
+            return try await RemoteJSONDecoder.decodeEnvelopeDataOffMain(type, from: rawData)
+        }
+        let message = box.message
+        if let ok = message["ok"] as? Bool, !ok {
+            if let error = RemoteCallError(from: message) {
+                throw error
+            }
+            throw ConnectionError.invalidResponse
+        }
+        return try await RemoteJSONDecoder.decodeOffMain(type, from: JSONValueBox(value: message["d"] ?? [:]))
     }
 
     func callRaw(
@@ -32,6 +48,15 @@ import Foundation
         plane: PlaneIO? = nil,
         timeout timeoutSeconds: TimeInterval = 20
     ) async throws -> [String: Any] {
+        try await callBox(method, params: params, plane: plane, timeout: timeoutSeconds).message
+    }
+
+    private func callBox(
+        _ method: String,
+        params: [String: Any],
+        plane: PlaneIO? = nil,
+        timeout timeoutSeconds: TimeInterval = 20
+    ) async throws -> WireResponseBox {
         if state != .ready {
             try await waitForTransientReconnect()
         }
@@ -97,7 +122,7 @@ import Foundation
                         pending.continuation.resume(throwing: failure)
                     }
                 }
-            }.message
+            }
         }, onCancel: {
             Task { [weak self] in
                 await MainActor.run {
@@ -159,6 +184,9 @@ import Foundation
         }
         if !caps.toolDetail, WireProtocol.supportsToolDetail(fromHelloPayload: payload) {
             caps.toolDetail = true
+        }
+        if !caps.chatStreaming, WireProtocol.supportsChatStreaming(fromHelloPayload: payload) {
+            caps.chatStreaming = true
         }
         hostCapabilities = caps
         if let runtimes = hello.runtimes {

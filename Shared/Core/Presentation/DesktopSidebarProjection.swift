@@ -38,10 +38,11 @@ enum DesktopSidebarProjection {
     final class Cache {
         private struct Input: Equatable {
             let hostID: String
+            let sessionsRevision: UInt64?
             let sessions: [SessionSummary]
             let layout: DesktopLayout
             let filter: String
-            let now: Date
+            let dayStart: Date
             let calendar: Calendar
         }
 
@@ -53,11 +54,19 @@ enum DesktopSidebarProjection {
         private(set) var visibilityBuildCount = 0
 
         func sections(
-            hostID: String, sessions: [SessionSummary], layout: DesktopLayout,
-            filter: String, order: inout StableOrder, now: Date, calendar: Calendar
+            hostID: String, sessions: [SessionSummary], sessionsRevision: UInt64? = nil,
+            layout: DesktopLayout, filter: String, order: inout StableOrder, now: Date, calendar: Calendar
         ) -> [Section] {
-            let next = Input(hostID: hostID, sessions: sessions, layout: layout,
-                             filter: filter, now: now, calendar: calendar)
+            let dayStart = calendar.startOfDay(for: now)
+            let next = Input(
+                hostID: hostID,
+                sessionsRevision: sessionsRevision,
+                sessions: sessionsRevision == nil ? sessions : [],
+                layout: layout,
+                filter: filter,
+                dayStart: dayStart,
+                calendar: calendar
+            )
             guard next != input else { return result }
             if let input, input.hostID != hostID { order = StableOrder() }
             result = DesktopSidebarProjection.sections(sessions: sessions, layout: layout,
@@ -87,12 +96,16 @@ enum DesktopSidebarProjection {
         /// Discovery can bring back an old session. Keep existing rows stable
         /// and insert each unseen identity using its original effective time.
         mutating func register(_ sessions: [SessionSummary]) {
-            for session in sessions where rank[session.key] == nil {
+            var changed = false
+            for session in sessions where firstSeenTime[session.key] == nil {
                 let index = ids.firstIndex {
                     firstSeenTime[$0, default: 0] < session.mtime
                 } ?? ids.endIndex
                 ids.insert(session.key, at: index)
                 firstSeenTime[session.key] = session.mtime
+                changed = true
+            }
+            if changed {
                 rank = Dictionary(uniqueKeysWithValues: ids.enumerated().map { ($0.element, $0.offset) })
             }
         }
@@ -113,19 +126,26 @@ enum DesktopSidebarProjection {
         // Every session yields exactly one row: a native list misplaces rows
         // whose identities repeat.
         var seenKeys: Set<String> = []
-        let visible = sessions.filter { matches($0, filter: filter) && seenKeys.insert($0.key).inserted }
+        let needle = filter.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let visible: [SessionSummary]
+        if needle.isEmpty {
+            visible = sessions.filter { seenKeys.insert($0.key).inserted }
+        } else {
+            visible = sessions.filter { matches($0, lowercasedNeedle: needle) && seenKeys.insert($0.key).inserted }
+        }
         let items = visible.map { Item(session: $0, split: layout.group(containing: $0.key)) }
 
         // Layout arrival and split membership cannot reorder session rows.
         order.register(visible.sorted { $0.mtime > $1.mtime })
 
+        let thresholds = BucketThresholds(now: now, calendar: calendar)
         var pinned: [(Double, Item)] = []
         var buckets: [Bucket: [Item]] = [:]
         for item in items {
             if let pinTime = pinTime(of: item, layout: layout) {
                 pinned.append((pinTime, item))
             } else {
-                buckets[bucket(for: item, now: now, calendar: calendar), default: []].append(item)
+                buckets[thresholds.bucket(for: item), default: []].append(item)
             }
         }
 
@@ -148,6 +168,10 @@ enum DesktopSidebarProjection {
     /// Conversation bodies are searched separately (full-text search).
     static func matches(_ session: SessionSummary, filter: String) -> Bool {
         let needle = filter.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return matches(session, lowercasedNeedle: needle)
+    }
+
+    private static func matches(_ session: SessionSummary, lowercasedNeedle needle: String) -> Bool {
         guard !needle.isEmpty else { return true }
         if SessionPresentation.displayTitle(for: session).lowercased().contains(needle) { return true }
         return session.cwd.lowercased().contains(needle) || session.cwdDisplay.lowercased().contains(needle)
@@ -159,17 +183,35 @@ enum DesktopSidebarProjection {
         return [ownPin, splitPin].compactMap { $0 }.max()
     }
 
+    private struct BucketThresholds {
+        let calendar: Calendar
+        let today: Date
+        let yesterday: Date?
+        let weekAgo: Date?
+
+        init(now: Date, calendar: Calendar) {
+            self.calendar = calendar
+            let today = calendar.startOfDay(for: now)
+            self.today = today
+            self.yesterday = calendar.date(byAdding: .day, value: -1, to: today)
+            self.weekAgo = calendar.date(byAdding: .day, value: -6, to: today)
+        }
+
+        func bucket(for item: Item) -> Bucket {
+            let mtime = item.session.mtime
+            guard mtime > 0 else { return .older }
+            let date = Date(timeIntervalSince1970: mtime)
+            if date >= today { return .today }
+            guard let yesterday else { return .older }
+            if date >= yesterday { return .yesterday }
+            guard let weekAgo else { return .older }
+            if date >= weekAgo { return .weekday(calendar.component(.weekday, from: date)) }
+            return .older
+        }
+    }
+
     static func bucket(for item: Item, now: Date, calendar: Calendar) -> Bucket {
-        let mtime = item.session.mtime
-        guard mtime > 0 else { return .older }
-        let date = Date(timeIntervalSince1970: mtime)
-        let today = calendar.startOfDay(for: now)
-        if date >= today { return .today }
-        guard let yesterday = calendar.date(byAdding: .day, value: -1, to: today) else { return .older }
-        if date >= yesterday { return .yesterday }
-        guard let weekAgo = calendar.date(byAdding: .day, value: -6, to: today) else { return .older }
-        if date >= weekAgo { return .weekday(calendar.component(.weekday, from: date)) }
-        return .older
+        BucketThresholds(now: now, calendar: calendar).bucket(for: item)
     }
 
     /// Today, yesterday, then the five preceding days newest first, then older.

@@ -15,6 +15,7 @@ struct MacSessionRow: View {
     var isSelected = false
 
     var body: some View {
+        let preview = SessionPresentation.preview(for: session)
         HStack(alignment: .top, spacing: Space.xs * interfaceScale) {
             RuntimeGlyph(runtimeID: session.runtime, size: MacSidebarMetrics.glyph(rowSize))
                 .interfaceFrame(height: MacSidebarMetrics.titleLineHeight, alignment: .center)
@@ -44,7 +45,7 @@ struct MacSessionRow: View {
                             .help(Text(verbatim: splitHelp))
                             .accessibilityLabel(Text("mac.session.in_split"))
                     }
-                    secondaryLine
+                    secondaryLine(preview: preview)
                         .truncationMode(.tail)
                     if let loopCount = SessionPresentation.positiveLoopCount(for: session),
                        let loopText = SessionPresentation.compactLoopCount(loopCount) {
@@ -60,7 +61,7 @@ struct MacSessionRow: View {
         }
         .interfacePadding(.vertical, MacSidebarMetrics.rowPadding)
         .interfaceFrame(height: MacSidebarMetrics.rowHeight)
-        .help(Text(verbatim: tooltip))
+        .help(Text(verbatim: tooltip(preview: preview)))
         .accessibilityElement(children: .combine)
     }
 
@@ -75,8 +76,7 @@ struct MacSessionRow: View {
 
     /// Project then preview; a blank string keeps the line when both are empty.
     /// The project uses semibold green ink before the secondary preview.
-    private var secondaryLine: Text {
-        let preview = SessionPresentation.preview(for: session)
+    private func secondaryLine(preview: String) -> Text {
         let project = visibleProject
         switch (project, preview.isEmpty) {
         case (nil, true): return Text(verbatim: " ")
@@ -131,14 +131,14 @@ struct MacSessionRow: View {
         return dots
     }
 
-    private var tooltip: String {
-        let preview = String(SessionPresentation.preview(for: session).prefix(280))
+    private func tooltip(preview: String) -> String {
+        let truncated = String(preview.prefix(280))
         let loopNote = SessionPresentation.positiveLoopCount(for: session).map { "\($0) loops" } ?? ""
         return [
             SessionPresentation.displayTitle(for: session),
             SessionPresentation.fullWorkspacePath(from: session),
             loopNote,
-            preview,
+            truncated,
             splitHelp ?? "",
         ]
         .filter { !$0.isEmpty }

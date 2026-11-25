@@ -23,6 +23,17 @@ nonisolated struct NotificationLedger: Codable, Sendable {
 
     mutating func record(_ id: String, now: Double = Date().timeIntervalSince1970) {
         accepted[id] = now
+        trimIfNeeded()
+    }
+
+    mutating func merge(_ other: NotificationLedger) {
+        for (id, time) in other.accepted where accepted[id] == nil {
+            accepted[id] = time
+        }
+        trimIfNeeded()
+    }
+
+    private mutating func trimIfNeeded() {
         if accepted.count > 4096 {
             for key in accepted.keys.sorted(by: { accepted[$0]! < accepted[$1]! }).prefix(accepted.count - 4096) {
                 accepted[key] = nil

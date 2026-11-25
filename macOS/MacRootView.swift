@@ -235,8 +235,9 @@ struct MacRootView: View {
             NSApp.dockTile.badgeLabel = count > 0 ? count.formatted() : nil
         }
         .onChange(of: canCreateSession, initial: true) { _, ready in
-            commands.canCreateSession = ready
-            commands.hasFocusedPane = workspace.focusedKey != nil
+            if commands.canCreateSession != ready { commands.canCreateSession = ready }
+            let hasFocused = workspace.focusedKey != nil
+            if commands.hasFocusedPane != hasFocused { commands.hasFocusedPane = hasFocused }
             #if DEBUG
             if ready, !inspectedNewSession,
                ProcessInfo.processInfo.arguments.contains("-CorralInspectNewSession") {
@@ -246,32 +247,33 @@ struct MacRootView: View {
             #endif
         }
         .onChange(of: workspace.focusedKey) { _, key in
-            commands.hasFocusedPane = key != nil
+            let hasFocused = key != nil
+            if commands.hasFocusedPane != hasFocused { commands.hasFocusedPane = hasFocused }
         }
         .onChange(of: focusedAgentPaneMode, initial: true) { _, mode in
-            commands.focusedPaneMode = mode
+            if commands.focusedPaneMode != mode { commands.focusedPaneMode = mode }
         }
         .onChange(of: focusedSessionIsPinned, initial: true) { _, pinned in
-            commands.focusedSessionPinned = pinned
+            if commands.focusedSessionPinned != pinned { commands.focusedSessionPinned = pinned }
         }
         .onChange(of: commands.newSessionRequest) { _, _ in startNewSession() }
         .onChange(of: commands.searchRequest) { _, _ in showSearch = true }
         .onChange(of: commands.openInSplitRequest) { _, _ in openSelectionInSplit() }
         .onChange(of: commands.restartRequest) { _, _ in restartFocusedSession() }
         .onChange(of: workspace.paneKeys, initial: true) { _, keys in
-            commands.paneCount = keys.count
+            if commands.paneCount != keys.count { commands.paneCount = keys.count }
         }
         .onChange(of: openInSplitAvailable, initial: true) { _, available in
-            commands.canOpenInSplit = available
+            if commands.canOpenInSplit != available { commands.canOpenInSplit = available }
         }
         .onChange(of: restartAvailable, initial: true) { _, available in
-            commands.canRestartSession = available
+            if commands.canRestartSession != available { commands.canRestartSession = available }
         }
           .onChange(of: commands.backRequest) { _, _ in Task { await workspace.navigateHistory(by: -1) } }
           .onChange(of: commands.forwardRequest) { _, _ in Task { await workspace.navigateHistory(by: 1) } }
           .onChange(of: workspace.navigation.host.history, initial: true) { _, history in
-              commands.canGoBack = history.canGoBack
-              commands.canGoForward = history.canGoForward
+              if commands.canGoBack != history.canGoBack { commands.canGoBack = history.canGoBack }
+              if commands.canGoForward != history.canGoForward { commands.canGoForward = history.canGoForward }
           }
         .onChange(of: commands.closePaneRequest) { _, _ in
             if let key = workspace.focusedKey { workspace.requestClose(key) }
@@ -297,11 +299,16 @@ struct MacRootView: View {
         }
         .onChange(of: appModel.connectionState, initial: true) { _, state in
             guard state == .connected, let client = appModel.client else { return }
-            shellSupported = client.hostCapabilities.projectShell
+            let supported = client.hostCapabilities.projectShell
                 && !SessionActionsMenu.isReadonly(access: appModel.connectedAccess)
+            if shellSupported != supported { shellSupported = supported }
         }
-        .onChange(of: canUseTerminal, initial: true) { _, usable in commands.canUseTerminal = usable }
-        .onChange(of: appModel.selectedHost?.hostID) { _, _ in shellSupported = false }
+        .onChange(of: canUseTerminal, initial: true) { _, usable in
+            if commands.canUseTerminal != usable { commands.canUseTerminal = usable }
+        }
+        .onChange(of: appModel.selectedHost?.hostID) { _, _ in
+            if shellSupported { shellSupported = false }
+        }
         .onChange(of: commands.focusPaneRequest) { _, _ in
             workspace.focusPane(at: commands.focusPaneIndex)
         }
@@ -336,7 +343,7 @@ struct MacRootView: View {
                 deleteTitle,
                 isPresented: Binding(
                     get: { !workspace.pendingDeleteTargets.isEmpty },
-                    set: { if !$0 { workspace.pendingDeleteTargets = [] } }
+                    set: { if !$0, !workspace.pendingDeleteTargets.isEmpty { workspace.pendingDeleteTargets = [] } }
                 ),
                 titleVisibility: .visible,
                 presenting: workspace.pendingDeleteTargets
@@ -354,7 +361,7 @@ struct MacRootView: View {
                 Text(verbatim: deleteMessage(targets))
             }
             .alert("mac.sessions.action_failed", isPresented: Binding(
-                get: { workspace.batchError != nil }, set: { if !$0 { workspace.batchError = nil } }
+                get: { workspace.batchError != nil }, set: { if !$0, workspace.batchError != nil { workspace.batchError = nil } }
             )) {
                 Button("action.ok", role: .cancel) { workspace.batchError = nil }
             } message: {
@@ -416,6 +423,7 @@ struct MacRootView: View {
         switch feedback {
         case .exporting: Text("mac.session.exporting")
         case .copied: Text("mac.session.exported")
+        case .copiedCorralID: Text("session.actions.copied_corral_id")
         case .stopping: Text("sessions.status.stopping")
         case .stopped: Text("sessions.status.stopped")
         case .stoppingBatch(let count): Text("mac.sessions.stopping \(count)")
@@ -570,7 +578,7 @@ struct MacRootView: View {
     }
 
     private var needsYouCount: Int {
-        feed?.listStore.windowSessions.filter { SessionPresentation.activityMarker(for: $0) == .waiting }.count ?? 0
+        feed?.listStore.waitingCount ?? 0
     }
 
     /// Full pairing to a host that runs project shells. Kept through a
@@ -637,7 +645,7 @@ struct MacRootView: View {
             restoringHostID = nil
             return
         }
-        let current = await notifications.sessionFeed(host: host, model: appModel)
+        let (current, readyTask) = notifications.startSessionFeed(host: host, model: appModel)
         guard !Task.isCancelled, appModel.selectedHost?.hostID == host.hostID else {
             restoringHostID = nil
             return
@@ -646,10 +654,24 @@ struct MacRootView: View {
         feed = current
         workspace.feed = current
         current.onSessionMigrated = { [weak workspace] old, new in workspace?.sessionMigrated(from: old, to: new) }
-        current.onListChanged = { [weak current, weak workspace] in
+        current.onListChanged = { [weak current, weak workspace, weak appModel, hostID = host.hostID] in
             workspace?.canonicalizePaneKeys()
-            if let current, let workspace { await notifications.resolvePending(feed: current, workspace: workspace) }
+            if let current {
+                appModel?.syncFollowUpQueueFromSessionList(current.listStore.windowSessions, hostID: hostID)
+                if let workspace { await notifications.resolvePending(feed: current, workspace: workspace) }
+            }
         }
+        // Stale-While-Revalidate: paint cached sessions and panes on frame 0 without
+        // waiting on network connect/list RPCs.
+        var renderedCacheImmediately = false
+        if !current.listStore.windowSessions.isEmpty {
+            restorePanes(from: current)
+            appModel.syncFollowUpQueueFromSessionList(current.listStore.windowSessions, hostID: host.hostID)
+            restoringHostID = nil
+            renderedCacheImmediately = true
+        }
+        let uiMs = LaunchClock.millisSinceLaunch()
+        await readyTask.value
         guard !Task.isCancelled, appModel.selectedHost?.hostID == host.hostID,
               feed === current else {
             restoringHostID = nil
@@ -657,18 +679,24 @@ struct MacRootView: View {
         }
         feedClientIdentity = appModel.clientIdentity
         workspace.startLayoutWatch()
-        restorePanes(from: current)
-        restoringHostID = nil
+        if renderedCacheImmediately {
+            workspace.canonicalizePaneKeys()
+        } else {
+            restorePanes(from: current)
+            restoringHostID = nil
+        }
         // Launch anchor: cumulative ms since process start. Bounded poll below
         // resolves the remaining gap to user-perceived ready (control + data).
-        if let ms = LaunchClock.millisSinceLaunch(), let client = appModel.client {
+        if let ms = uiMs ?? LaunchClock.millisSinceLaunch(), let client = appModel.client {
             client.diagnose(.launchStage, durationMs: ms, stage: "ui")
             let hostID = host.hostID
             let clientID = ObjectIdentifier(client)
             Task { @MainActor [weak appModel] in
                 var firstCheckRecorded = false
-                for _ in 0..<150 {
-                    try? await Task.sleep(for: .milliseconds(200))
+                for iteration in 0..<150 {
+                    if iteration > 0 {
+                        try? await Task.sleep(for: .milliseconds(200))
+                    }
                     guard let appModel, appModel.selectedHost?.hostID == hostID,
                           let live = appModel.client, ObjectIdentifier(live) == clientID else { return }
                     if !firstCheckRecorded {
@@ -916,7 +944,7 @@ enum MacInspection {
             }
             return
         }
-        if arguments.contains("-CorralInspectConversation") {
+        if arguments.contains("-CorralInspectConversation") || arguments.contains("-CorralInspectFollowUpQueue") {
             let requested = (ProcessInfo.processInfo.environment["CORRAL_INSPECTION_SESSION_KEY"] ?? "")
                 .split(separator: ",").map(String.init)
             let keys = requested.isEmpty ? Array(sessions.prefix(1).map(\.key)) : requested

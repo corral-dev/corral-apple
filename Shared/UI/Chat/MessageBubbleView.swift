@@ -224,14 +224,17 @@ struct MessageBubbleView: View, Equatable {
             VStack(alignment: isUser ? .trailing : .leading, spacing: Space.sm * interfaceScale) {
                 if !body.isEmpty {
                     SelectableAttributedText(
-                        attributed: message.seq > 0
-                            ? (imageLoader?.rendered(text: body, dark: colorScheme == .dark, seq: message.seq) ?? ChatMarkdown.attributed(body))
-                            : ChatMarkdown.attributed(body),
+                        attributed: message.isStreaming
+                            ? ChatMarkdown.attributed(body, cache: false, streaming: true)
+                            : (message.seq > 0
+                                ? (imageLoader?.rendered(text: body, dark: colorScheme == .dark, seq: message.seq) ?? ChatMarkdown.attributed(body))
+                                : ChatMarkdown.attributed(body)),
                         foreground: isUser ? userForeground : Color.primary,
                         // Match links and selection handles to the bubble's contrast pair.
                         tint: isUser ? userForeground : Palette.accent,
                         fontStyle: .bubbleBody,
                         maxHeight: bubbleTextCap,
+                        autoFollowBottom: message.isStreaming,
                         onMoreBelowChange: { hasMoreBelow = $0 },
                         sourceMarkdown: body,
                         linkHandler: fileLinkHandler
@@ -273,7 +276,8 @@ struct MessageBubbleView: View, Equatable {
                 alignment: isUser ? .trailing : .leading
             )
             .background(hasBubble ? bubbleFill : Color.clear, in: bubbleShape)
-            .task(id: "\(imageLoader.map(ObjectIdentifier.init).map(String.init(describing:)) ?? "")|\(colorScheme)|\(body)") {
+            .task(id: "\(message.isStreaming ? "stream" : "official")|\(imageLoader.map(ObjectIdentifier.init).map(String.init(describing:)) ?? "")|\(colorScheme)|\(message.isStreaming ? "" : body)") {
+                guard !message.isStreaming else { return }
                 await imageLoader?.diagrams.prepare(text: body, dark: colorScheme == .dark)
                 if message.seq > 0, let text = message.text {
                     await imageLoader?.prepareImages(in: text, seq: message.seq)

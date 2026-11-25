@@ -114,12 +114,14 @@ nonisolated struct SessionMessagesResponse: Codable, Sendable {
     let generation: Int
     let attention: AttentionKind?
     let live: Bool?
+    let activeStreams: [WireStreamDraft]?
 
     enum CodingKeys: String, CodingKey {
         case messages, version, kind, resume, generation, attention, live
         case oldestSeq = "oldest_seq"
         case newestSeq = "newest_seq"
         case hasMore = "has_more"
+        case activeStreams = "active_streams"
     }
 
     init(from decoder: Decoder) throws {
@@ -139,6 +141,12 @@ nonisolated struct SessionMessagesResponse: Codable, Sendable {
         generation = container.decodeFlexibleInt(forKey: .generation, default: 0)
         attention = try? container.decodeIfPresent(AttentionKind.self, forKey: .attention)
         live = try? container.decodeIfPresent(Bool.self, forKey: .live)
+        if let wrapped = try? container.decodeIfPresent([FailableDecodable<WireStreamDraft>].self, forKey: .activeStreams) {
+            let drafts = wrapped.compactMap(\.value).filter { !$0.streamID.isEmpty }
+            activeStreams = drafts.isEmpty ? nil : drafts
+        } else {
+            activeStreams = nil
+        }
     }
 }
 

@@ -50,7 +50,10 @@ struct ComposerBar: View {
     /// Isolated native-editing regression trigger; never exposed by production UI.
     var inspectionSubmitRequest = 0
     #endif
+    var showsFollowUpContextAction = false
     var onSend: (_ text: String, _ images: [DraftImageAttachment], _ files: [DraftFileAttachment]) -> Void
+    var onFollowUp: ((_ text: String, _ images: [DraftImageAttachment], _ files: [DraftFileAttachment]) -> Void)? = nil
+    var onRecallQueued: (() -> Bool)? = nil
 
     @FocusState private var focused: Bool
     @State private var showFileImporter = false
@@ -253,7 +256,9 @@ struct ComposerBar: View {
             accessibilityLabel: String(localized: "composer.placeholder"),
             focusTrigger: macFocusTrigger,
             onSubmit: sendDraft,
+            onFollowUp: followUpDraft,
             onArrowHistory: { isUp in recallHistory(older: isUp) == .handled },
+            onRecallQueued: recallQueuedIfEmpty,
             onPasteFileURLs: { urls in addFileURLs(urls) },
             onPasteImageData: { data in addImageData([data]) },
             onFocusChange: { isFocused in onFocusChange?(isFocused) }
@@ -268,7 +273,15 @@ struct ComposerBar: View {
             .focused($focused)
             .submitLabel(.send)
             .onSubmit(sendDraft)
-            .onKeyPress(.upArrow, phases: .down) { _ in recallHistory(older: true) }
+            .onKeyPress(.return, phases: .down) { press in
+                guard press.modifiers == .option else { return .ignored }
+                followUpDraft()
+                return .handled
+            }
+            .onKeyPress(.upArrow, phases: .down) { press in
+                if press.modifiers == .option, recallQueuedIfEmpty() { return .handled }
+                return recallHistory(older: true)
+            }
             .onKeyPress(.downArrow, phases: .down) { _ in recallHistory(older: false) }
         #endif
     }
@@ -354,6 +367,15 @@ struct ComposerBar: View {
         .keyboardShortcut(stop ? nil : KeyboardShortcut(.return, modifiers: .command))
         #endif
         .accessibilityLabel(Text(label))
+        .contextMenu {
+            if !stop && showsFollowUpContextAction && canSend && onFollowUp != nil {
+                Button {
+                    followUpDraft()
+                } label: {
+                    Label("composer.followup.queue_action", systemImage: "clock.arrow.circlepath")
+                }
+            }
+        }
     }
 
     private func stopTurn() {
@@ -538,11 +560,25 @@ struct ComposerBar: View {
     }
 
     private func sendDraft() {
+        guard let taken = takeSubmittedDraft() else { return }
+        onSend(taken.text, taken.images, taken.files)
+    }
+
+    private func followUpDraft() {
+        guard let taken = takeSubmittedDraft() else { return }
+        if let onFollowUp {
+            onFollowUp(taken.text, taken.images, taken.files)
+        } else {
+            onSend(taken.text, taken.images, taken.files)
+        }
+    }
+
+    private func takeSubmittedDraft() -> (text: String, images: [DraftImageAttachment], files: [DraftFileAttachment])? {
         guard ComposerSendPolicy.canSend(
             text: text,
             attachmentCount: totalAttachmentCount,
             isBusy: isBusy
-        ) else { return }
+        ) else { return nil }
         let images = attachments
         let files = fileAttachments
         let payload = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -557,7 +593,12 @@ struct ComposerBar: View {
         attachmentError = nil
         recall.reset()
         requestFocus()
-        onSend(payload, images, files)
+        return (payload, images, files)
+    }
+
+    private func recallQueuedIfEmpty() -> Bool {
+        guard text.isEmpty && attachments.isEmpty && fileAttachments.isEmpty else { return false }
+        return onRecallQueued?() ?? false
     }
 
     /// Up / Down step through this session's prompts when the caret sits on the

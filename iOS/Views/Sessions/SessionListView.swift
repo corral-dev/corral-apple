@@ -99,12 +99,13 @@ struct SessionListView: View {
         case exported
         case stopping
         case stopped
+        case copiedCorralID
         case copiedPath
 
         var isBusy: Bool {
             switch self {
             case .exporting, .stopping: true
-            case .exported, .stopped, .copiedPath: false
+            case .exported, .stopped, .copiedCorralID, .copiedPath: false
             }
         }
 
@@ -114,6 +115,7 @@ struct SessionListView: View {
             case .exported: "mac.session.exported"
             case .stopping: "sessions.status.stopping"
             case .stopped: "sessions.status.stopped"
+            case .copiedCorralID: "session.actions.copied_corral_id"
             case .copiedPath: "session.workspace.copied"
             }
         }
@@ -139,9 +141,11 @@ struct SessionListView: View {
             if showsFulltext {
                 fulltextResults
             } else {
+            let sections = visibleSections
+            TimelineView(.periodic(from: .now, by: 60)) { context in
             Group {
                 switch SessionListPlaceholderPolicy.resolve(
-                sectionsEmpty: visibleSections.isEmpty,
+                sectionsEmpty: sections.isEmpty,
                 isLoading: isLoading,
                 connected: appModel.isConnected(to: host),
                 pendingTapWaiting: pendingWaitKey != nil,
@@ -184,7 +188,7 @@ struct SessionListView: View {
                             }
                         }
                     }
-                    ForEach(visibleSections) { section in
+                    ForEach(sections) { section in
                         let expanded = isSectionExpanded(section)
                         Section {
                             if expanded {
@@ -216,57 +220,69 @@ struct SessionListView: View {
                     await refreshSessions(showLoading: false)
                 }
             case .loading:
-                ProgressView()
+                SessionListCenteredState(bottomClearance: placeholderBottomClearance) {
+                    ProgressView()
+                }
             case .loadFailed:
-                ContentUnavailableView {
-                    Label("sessions.load_failed.title", systemImage: "exclamationmark.triangle")
-                } description: {
-                    Text(loadError ?? "")
-                } actions: {
-                    Button("action.retry") {
-                        Task { await refreshSessions(showLoading: true) }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Palette.accent)
-                }
-            case .tapError:
-                ContentUnavailableView {
-                    Label(pendingTapErrorText, systemImage: "exclamationmark.triangle")
-                } actions: {
-                    Button("action.retry") {
-                        Task { await retryPendingConnection() }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Palette.accent)
-                }
-            case .tapMissing:
-                ContentUnavailableView {
-                    Label("sessions.notification_missing.title", systemImage: "bell.slash")
-                } actions: {
-                    Button("action.dismiss") { missingNotificationKey = nil }
-                }
-            case .empty:
-                if hasActiveScope {
+                SessionListCenteredState(bottomClearance: placeholderBottomClearance) {
                     ContentUnavailableView {
-                        Label("sessions.filter.empty.title", systemImage: "magnifyingglass")
+                        Label("sessions.load_failed.title", systemImage: "exclamationmark.triangle")
                     } description: {
-                        Text(filterScopeDescription)
+                        Text(loadError ?? "")
                     } actions: {
-                        Button("sessions.filter.clear") {
-                            clearFilters()
+                        Button("action.retry") {
+                            Task { await refreshSessions(showLoading: true) }
                         }
                         .buttonStyle(.borderedProminent)
                         .tint(Palette.accent)
                     }
-                } else {
-                    ContentUnavailableView(
-                        "sessions.empty.title",
-                        systemImage: "bubble.left.and.bubble.right"
-                    )
+                }
+            case .tapError:
+                SessionListCenteredState(bottomClearance: placeholderBottomClearance) {
+                    ContentUnavailableView {
+                        Label(pendingTapErrorText, systemImage: "exclamationmark.triangle")
+                    } actions: {
+                        Button("action.retry") {
+                            Task { await retryPendingConnection() }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Palette.accent)
+                    }
+                }
+            case .tapMissing:
+                SessionListCenteredState(bottomClearance: placeholderBottomClearance) {
+                    ContentUnavailableView {
+                        Label("sessions.notification_missing.title", systemImage: "bell.slash")
+                    } actions: {
+                        Button("action.dismiss") { missingNotificationKey = nil }
+                    }
+                }
+            case .empty:
+                SessionListCenteredState(bottomClearance: placeholderBottomClearance) {
+                    if hasActiveScope {
+                        ContentUnavailableView {
+                            Label("sessions.filter.empty.title", systemImage: "magnifyingglass")
+                        } description: {
+                            Text(filterScopeDescription)
+                        } actions: {
+                            Button("sessions.filter.clear") {
+                                clearFilters()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Palette.accent)
+                        }
+                    } else {
+                        ContentUnavailableView(
+                            "sessions.empty.title",
+                            systemImage: "bubble.left.and.bubble.right"
+                        )
+                    }
                 }
             }
             }
+            .environment(\.sidebarNow, context.date)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -493,34 +509,36 @@ struct SessionListView: View {
     private var fulltextResults: some View {
         let rows = fulltextRows
         if let error = fulltext.errorMessage {
-            ContentUnavailableView {
-                Label("search.failed", systemImage: "exclamationmark.triangle")
-            } description: {
-                Text(verbatim: error)
-            } actions: {
-                Button("action.retry") { fulltextRetry += 1 }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Palette.accent)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if fulltext.result == nil {
-            ProgressView()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if rows.isEmpty {
-            if quickFilter != .all || !runtimeFilter.isEmpty || !projectFilter.isEmpty {
+            SessionListCenteredState(bottomClearance: placeholderBottomClearance) {
                 ContentUnavailableView {
-                    Label("sessions.filter.empty.title", systemImage: "magnifyingglass")
+                    Label("search.failed", systemImage: "exclamationmark.triangle")
                 } description: {
-                    Text(filterScopeDescription)
+                    Text(verbatim: error)
                 } actions: {
-                    Button("sessions.filter.clear") { clearFilters() }
+                    Button("action.retry") { fulltextRetry += 1 }
                         .buttonStyle(.borderedProminent)
                         .tint(Palette.accent)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ContentUnavailableView.search(text: listStore.searchQuery)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        } else if fulltext.result == nil {
+            SessionListCenteredState(bottomClearance: placeholderBottomClearance) {
+                ProgressView()
+            }
+        } else if rows.isEmpty {
+            SessionListCenteredState(bottomClearance: placeholderBottomClearance) {
+                if quickFilter != .all || !runtimeFilter.isEmpty || !projectFilter.isEmpty {
+                    ContentUnavailableView {
+                        Label("sessions.filter.empty.title", systemImage: "magnifyingglass")
+                    } description: {
+                        Text(filterScopeDescription)
+                    } actions: {
+                        Button("sessions.filter.clear") { clearFilters() }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Palette.accent)
+                    }
+                } else {
+                    ContentUnavailableView.search(text: listStore.searchQuery)
+                }
             }
         } else {
             List(selection: split.selection) {
@@ -573,6 +591,16 @@ struct SessionListView: View {
     /// A side-by-side sidebar keeps its search field at the top, so it needs none.
     private var searchBarClearance: CGFloat {
         if #available(iOS 26.0, *), isCompact { Space.xl } else { 0 }
+    }
+
+    /// Empty/error states shrink inside the keyboard-safe area, which on compact
+    /// iOS 26+ omits the floating bottom `.searchable` bar height when open.
+    private var placeholderBottomClearance: CGFloat {
+        if #available(iOS 26.0, *), isCompact {
+            isSearchPresented ? 88 : searchBarClearance
+        } else {
+            0
+        }
     }
 
     /// A collapsed split (iPhone, folded Duo, narrow windows) keeps the bottom
@@ -714,15 +742,17 @@ struct SessionListView: View {
     }
 
     private func bootstrap() async {
-        feed.onSessionMigrated = { [hostID = host.hostID, terminals] oldKey, newKey in
+        feed.onSessionMigrated = { [hostID = host.hostID, terminals, appModel] oldKey, newKey in
             SessionDetailModeStore.shared.promote(oldKey: oldKey, to: newKey, hostID: hostID)
             terminals.migrate(from: oldKey, to: newKey)
+            appModel.followUpQueue.migrate(hostID: hostID, from: oldKey, to: newKey)
         }
         feed.onListChanged = {
             SessionDetailModeStore.shared.reconcileAliases(hostID: host.hostID) {
                 listStore.resolvedKey($0)
             }
             terminals.reconcileAliases { listStore.resolvedKey($0) }
+            appModel.syncFollowUpQueueFromSessionList(listStore.windowSessions, hostID: host.hostID)
             await openPendingNotificationSession()
         }
         // Cached session leg first: open from the persisted snapshot before any
@@ -732,6 +762,7 @@ struct SessionListView: View {
                 listStore.resolvedKey($0)
             }
             terminals.reconcileAliases { listStore.resolvedKey($0) }
+            appModel.syncFollowUpQueueFromSessionList(listStore.windowSessions, hostID: host.hostID)
             await openPendingNotificationSession()
         }
     }
@@ -928,8 +959,10 @@ struct SessionListView: View {
         let canonicalKey = listStore.resolvedKey(session.key)
         do {
             try await feed.delete(session)
+            appModel.followUpQueue.clearSession(hostID: host.hostID, sessionKey: session.key)
             terminals.close(session.key)
             if canonicalKey != session.key {
+                appModel.followUpQueue.clearSession(hostID: host.hostID, sessionKey: canonicalKey)
                 terminals.close(canonicalKey)
             }
             if split.selection.wrappedValue?.key == session.key {
@@ -986,6 +1019,10 @@ struct SessionListView: View {
             onHandoff: { target in Task { await handoffSession(session, to: target) } },
             onExport: { Task { await exportSession(session) } },
             onRestart: { Task { await restartSession(session) } },
+            onCopyCorralID: {
+                HapticFeedback.shared.emit(.selection, scope: hapticScope)
+                showTransientNotice(.copiedCorralID)
+            },
             onCopyPath: {
                 HapticFeedback.shared.emit(.selection, scope: hapticScope)
                 showTransientNotice(.copiedPath)
@@ -1052,8 +1089,8 @@ struct SessionListView: View {
         isContextActionBusy = true
         defer { isContextActionBusy = false }
         do {
-            let json = try await SessionActionsMenu.exportJSON(sourceKey: session.key, client: client)
-            PlatformPasteboard.copy(json)
+            let path = try await SessionActionsMenu.exportPath(sourceKey: session.key, client: client)
+            PlatformPasteboard.copy(path)
             HapticFeedback.shared.emit(.success, operationID: operationID, scope: hapticScope)
             showTransientNotice(.exported)
         } catch {
@@ -1131,6 +1168,26 @@ private struct SessionDateDisclosureStyle: DisclosureGroupStyle {
             .contentShape(Rectangle())
         }
         .buttonStyle(PressableButtonStyle(pressedScale: 1))
+    }
+}
+
+private struct SessionListCenteredState<Content: View>: View {
+    let bottomClearance: CGFloat
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        GeometryReader { proxy in
+            ScrollView {
+                content()
+                    .frame(
+                        maxWidth: .infinity,
+                        minHeight: max(0, proxy.size.height - bottomClearance)
+                    )
+                    .padding(.bottom, bottomClearance)
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .scrollBounceBehavior(.basedOnSize)
+        }
     }
 }
 

@@ -211,18 +211,37 @@ enum SessionPresentation {
         return formatter
     }()
 
-    /// 列表预览：优先助手最近一段，否则用户最近一段。
+    private static let boldEmphasisRegex: NSRegularExpression = {
+        do {
+            return try NSRegularExpression(pattern: #"\*\*(?=\S)(.+?)(?<=\S)\*\*"#)
+        } catch {
+            preconditionFailure("Invalid boldEmphasisRegex: \(error)")
+        }
+    }()
+
+    /// 列表预览：按最新发言方展示最近一条消息（user 或 assistant），缺省或旧宿主回退优先助手再用户。
     static func preview(for session: SessionSummary) -> String {
-        let source = session.lastAgent.isEmpty ? session.lastUser : session.lastAgent
+        let source: String
+        switch session.lastMessageRole {
+        case "user":
+            source = session.lastUser.isEmpty ? session.lastAgent : session.lastUser
+        case "assistant":
+            source = session.lastAgent.isEmpty ? session.lastUser : session.lastAgent
+        default:
+            source = session.lastAgent.isEmpty ? session.lastUser : session.lastAgent
+        }
         // A list excerpt is bounded; full source remains available in the conversation.
         let excerpt = String(source.prefix(1_024))
         let key = excerpt as NSString
         if let cached = previewCache.object(forKey: key) { return cached as String }
         // CJK punctuation beside emphasis delimiters can remain literal in CommonMark.
-        let normalized = excerpt.replacingOccurrences(
-            of: #"\*\*(?=\S)(.+?)(?<=\S)\*\*"#,
-            with: "$1", options: .regularExpression
-        )
+        let normalized: String
+        if excerpt.contains("**") {
+            let range = NSRange(excerpt.startIndex..<excerpt.endIndex, in: excerpt)
+            normalized = boldEmphasisRegex.stringByReplacingMatches(in: excerpt, range: range, withTemplate: "$1")
+        } else {
+            normalized = excerpt
+        }
         let parsed = try? AttributedString(
             markdown: normalized,
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)

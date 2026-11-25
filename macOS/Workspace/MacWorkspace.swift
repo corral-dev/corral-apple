@@ -81,6 +81,7 @@ final class MacWorkspace {
     enum TransientFeedback: Equatable {
         case exporting(String)
         case copied(String)
+        case copiedCorralID(String)
         case stopping(String)
         case stopped(String)
         case stoppingBatch(Int)
@@ -89,7 +90,7 @@ final class MacWorkspace {
         var isBusy: Bool {
             switch self {
             case .exporting, .stopping, .stoppingBatch: true
-            case .copied, .stopped, .stoppedBatch: false
+            case .copied, .copiedCorralID, .stopped, .stoppedBatch: false
             }
         }
     }
@@ -218,8 +219,12 @@ final class MacWorkspace {
 
     /// The host can report promotion for a session that is not in a pane.
     func sessionMigrated(from oldKey: String, to newKey: String) {
-        sessionPresentation.promote(oldKey, to: canonicalPaneKey(newKey), host: hostID)
+        let canonicalNew = canonicalPaneKey(newKey)
+        sessionPresentation.promote(oldKey, to: canonicalNew, host: hostID)
         terminals.migrate(from: oldKey, to: newKey)
+        if let hostID {
+            appModel?.followUpQueue.migrate(hostID: hostID, from: oldKey, to: canonicalNew)
+        }
         canonicalizePaneKeys()
     }
 
@@ -926,7 +931,15 @@ final class MacWorkspace {
             for await event in events {
                 guard let self, !Task.isCancelled, self.layoutClient === client,
                       self.layoutGeneration == generation else { break }
-                if let snapshot = try? RemoteJSONDecoder.decode(DesktopLayout.self, from: event.data) {
+                let snapshot: DesktopLayout?
+                if let raw = event.rawEnvelopeData {
+                    snapshot = try? await RemoteJSONDecoder.decodeEnvelopeDataOffMain(DesktopLayout.self, from: raw)
+                    guard !Task.isCancelled, self.layoutClient === client,
+                          self.layoutGeneration == generation else { break }
+                } else {
+                    snapshot = try? RemoteJSONDecoder.decode(DesktopLayout.self, from: event.data)
+                }
+                if let snapshot {
                     self.applyLayout(snapshot)
                 }
             }
@@ -994,7 +1007,9 @@ final class MacWorkspace {
         } else {
             guard snapshot.revision >= layout.revision else { return }
         }
-        layout = snapshot
+        if layout != snapshot {
+            layout = snapshot
+        }
     }
 
     // MARK: - Session actions (pane header, sidebar menu and menu bar share these)
@@ -1057,8 +1072,14 @@ final class MacWorkspace {
                 navigation.host.reading[canonicalKey] = nil
             }
             feed?.listStore.removeSession(key: key)
+            if let hostID {
+                appModel?.followUpQueue.clearSession(hostID: hostID, sessionKey: key)
+            }
             if canonicalKey != key {
                 feed?.listStore.removeSession(key: canonicalKey)
+                if let hostID {
+                    appModel?.followUpQueue.clearSession(hostID: hostID, sessionKey: canonicalKey)
+                }
             }
             closePane(key)
             terminals.close(key)
@@ -1140,6 +1161,20 @@ final class MacWorkspace {
         showTransientFeedback(.stopped(resolvedKey))
     }
 
+    func copyCorralID(_ corralID: String, key: String) {
+        guard !corralID.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(corralID, forType: .string)
+        showTransientFeedback(.copiedCorralID(canonicalPaneKey(key)))
+    }
+
+    func copyCorralIDs(_ corralIDs: [String]) {
+        guard !corralIDs.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(corralIDs.joined(separator: "\n"), forType: .string)
+        showTransientFeedback(.copiedCorralID("batch"))
+    }
+
     func exportSession(_ key: String) async {
         let resolvedKey = canonicalPaneKey(key)
         guard !ProjectShell.isShellKey(resolvedKey), !PendingPane.isPending(resolvedKey) else { return }
@@ -1150,7 +1185,9 @@ final class MacWorkspace {
             if transientFeedback == .exporting(resolvedKey) { transientFeedback = nil }
             return
         }
-        guard let dict = payload as? [String: Any], let json = dict["json"] as? String else {
+        guard let dict = payload as? [String: Any],
+              let path = dict["path"] as? String,
+              !path.isEmpty else {
             if transientFeedback == .exporting(resolvedKey) { transientFeedback = nil }
             if payload != nil {
                 actionError = String(localized: "error.unknown")
@@ -1158,7 +1195,7 @@ final class MacWorkspace {
             return
         }
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(json, forType: .string)
+        NSPasteboard.general.setString(path, forType: .string)
         showTransientFeedback(.copied(resolvedKey))
     }
 

@@ -12,11 +12,64 @@ nonisolated struct FailableDecodable<T: Decodable>: Decodable {
     }
 }
 
+nonisolated struct WireFrameEnvelopeHeader: Decodable, Sendable {
+    let t: String?
+    let id: Int?
+    let ok: Bool?
+    let c: String?
+    let wireCompression: String?
+
+    private enum CodingKeys: String, CodingKey { case t, id, ok, c, wire }
+    private enum WireKeys: String, CodingKey { case compression }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        t = try? container.decodeIfPresent(String.self, forKey: .t)
+        ok = try? container.decodeIfPresent(Bool.self, forKey: .ok)
+        c = try? container.decodeIfPresent(String.self, forKey: .c)
+        if let intID = try? container.decodeIfPresent(Int.self, forKey: .id) {
+            id = intID
+        } else if let doubleID = try? container.decodeIfPresent(Double.self, forKey: .id), doubleID.isFinite {
+            id = Int(doubleID)
+        } else if let stringID = try? container.decodeIfPresent(String.self, forKey: .id), let parsed = Int(stringID) {
+            id = parsed
+        } else {
+            id = nil
+        }
+        if let wireContainer = try? container.nestedContainer(keyedBy: WireKeys.self, forKey: .wire) {
+            wireCompression = try? wireContainer.decodeIfPresent(String.self, forKey: .compression)
+        } else {
+            wireCompression = nil
+        }
+    }
+}
+
+nonisolated struct WireDataEnvelope<T: Decodable>: Decodable {
+    let d: T
+}
+
+nonisolated struct WireOptionalDataEnvelope<T: Decodable>: Decodable {
+    let d: T?
+}
+
 nonisolated enum RemoteJSONDecoder {
+    private static let emptyObjectData = Data("{}".utf8)
+
     static func decode<T: Decodable>(_ type: T.Type, from value: Any) throws -> T {
         let normalized = normalizeJSON(value)
         let data = try JSONSerialization.data(withJSONObject: normalized)
         return try JSONDecoder().decode(type, from: data)
+    }
+
+    static func decodeData<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
+        try JSONDecoder().decode(type, from: data)
+    }
+
+    static func decodeEnvelopeData<T: Decodable>(_ type: T.Type, from envelopeData: Data) throws -> T {
+        let decoder = JSONDecoder()
+        let envelope = try decoder.decode(WireOptionalDataEnvelope<T>.self, from: envelopeData)
+        if let decoded = envelope.d { return decoded }
+        return try decoder.decode(T.self, from: emptyObjectData)
     }
 
     /// Same as `decode`, on the concurrent executor: a history page or session list
@@ -24,6 +77,18 @@ nonisolated enum RemoteJSONDecoder {
     @concurrent
     static func decodeOffMain<T: Decodable & Sendable>(_ type: T.Type, from value: JSONValueBox) async throws -> T {
         try decode(type, from: value.value)
+    }
+
+    /// Decode a model directly from raw UTF-8 JSON bytes off the main actor in one pass.
+    @concurrent
+    static func decodeDataOffMain<T: Decodable & Sendable>(_ type: T.Type, from data: Data) async throws -> T {
+        try decodeData(type, from: data)
+    }
+
+    /// Decode an RPC/event `"d"` payload directly from a raw wire JSON envelope in one pass.
+    @concurrent
+    static func decodeEnvelopeDataOffMain<T: Decodable & Sendable>(_ type: T.Type, from envelopeData: Data) async throws -> T {
+        try decodeEnvelopeData(type, from: envelopeData)
     }
 
     /// 把 JSONSerialization 产出的 NSNumber 尽量收成 Int，减少 Int 字段被写成 `1.0` 后解码失败。

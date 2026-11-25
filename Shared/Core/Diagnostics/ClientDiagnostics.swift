@@ -100,8 +100,14 @@ nonisolated enum LaunchClock {
     private var maxWaitMs = 0.0
     private var slowWaits = 0
     private var lastWrite = ContinuousClock.now
+    nonisolated private final class WriterState: @unchecked Sendable {
+        let encoder = JSONEncoder()
+        var didEnsureAndPrune = false
+    }
+
     private let directory: URL?
     private let writer = DispatchQueue(label: "com.x0c.corral.diagnostics", qos: .utility)
+    private let writerState = WriterState()
     private let logger = Logger(subsystem: "com.x0c.corral", category: "client")
     private let clock = ContinuousClock()
 
@@ -176,19 +182,26 @@ nonisolated enum LaunchClock {
         guard force || lastWrite.duration(to: now) >= .seconds(1) else { return }
         lastWrite = now
         let snapshot = report(state: state)
+        let writerState = self.writerState
         writer.async {
             do {
                 let fm = FileManager.default
-                try fm.createDirectory(at: directory, withIntermediateDirectories: true,
-                                       attributes: [.posixPermissions: 0o700])
+                let needsPrune = !writerState.didEnsureAndPrune
+                if needsPrune {
+                    try fm.createDirectory(at: directory, withIntermediateDirectories: true,
+                                           attributes: [.posixPermissions: 0o700])
+                }
                 let destination = directory.appendingPathComponent("client-\(snapshot.processID)-\(snapshot.clientRun).json")
-                try JSONEncoder().encode(snapshot).write(to: destination, options: .atomic)
-                try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destination.path)
-                let reports = try fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey])
-                    .filter { $0.lastPathComponent.hasPrefix("client-") && $0.pathExtension == "json" }
-                    .sorted { ((try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast)
-                        > ((try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast) }
-                for old in reports.dropFirst(16) { try? fm.removeItem(at: old) }
+                try writerState.encoder.encode(snapshot).write(to: destination, options: .atomic)
+                if needsPrune {
+                    try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destination.path)
+                    let reports = try fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey])
+                        .filter { $0.lastPathComponent.hasPrefix("client-") && $0.pathExtension == "json" }
+                        .sorted { ((try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast)
+                            > ((try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast) }
+                    for old in reports.dropFirst(16) { try? fm.removeItem(at: old) }
+                    writerState.didEnsureAndPrune = true
+                }
             } catch {
                 // Telemetry must never change user operations or retry behavior.
                 Logger(subsystem: "com.x0c.corral", category: "client").error("Diagnostic persistence failed")

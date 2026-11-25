@@ -68,6 +68,8 @@ nonisolated enum WireProtocol {
     static let capabilityMediaImage = "media_image"
     static let capabilityMediaFile = "media_file"
     static let capabilityInputFile = "input_file"
+    /// Host supports ephemeral live assistant streaming frames (`kind: "stream"`).
+    static let capabilityChatStreaming = "chat_streaming"
 
     static let mSessionNew = "session.new"
     static let mSessionResume = "session.resume"
@@ -131,6 +133,7 @@ nonisolated enum WireProtocol {
     static let planeData = "data"
     static let wantDataPlaneKey = "want_data_plane"
     static let wantCommandReceiptsKey = "want_command_receipts"
+    static let wantChatStreamingKey = "want_chat_streaming"
 
     /// 历史页与终端帧走数据面；其余走控制面。未附着数据面时全部走唯一连接。
     static let dataPlaneMethods: Set<String> = [
@@ -156,6 +159,7 @@ nonisolated enum WireProtocol {
             "want_data_plane": true,
             // Opt in to durable input receipts when the host advertises command_receipts.
             "want_command_receipts": true,
+            "want_chat_streaming": true,
         ]
     }
 
@@ -236,6 +240,11 @@ nonisolated enum WireProtocol {
     /// Whether hello advertised on-demand tool bodies (`tool_detail`).
     static func supportsToolDetail(fromHelloPayload payload: Any) -> Bool {
         capabilityFlag(capabilityToolDetail, fromHelloPayload: payload)
+    }
+
+    /// Whether hello advertised ephemeral live chat streaming (`chat_streaming`).
+    static func supportsChatStreaming(fromHelloPayload payload: Any) -> Bool {
+        capabilityFlag(capabilityChatStreaming, fromHelloPayload: payload)
     }
 
     private static func capabilityFlag(_ name: String, fromHelloPayload payload: Any) -> Bool {
@@ -349,9 +358,12 @@ nonisolated enum WireMessage {
         return packed
     }
 
-    static func unpack(_ raw: Data) throws -> [String: Any] {
+    static func unpackPayload(_ raw: Data) throws -> Data {
         guard raw.count >= 2, raw[0] == payloadMagic[0], raw[1] == payloadMagic[1] else {
-            return try loads(raw)
+            guard raw.count <= maxUncompressedBytes else {
+                throw WireProtocolError.invalidMessage("消息未压缩体积过大")
+            }
+            return raw
         }
         guard raw.count >= payloadHeaderBytes else {
             throw WireProtocolError.invalidMessage("压缩载荷头不完整")
@@ -379,7 +391,11 @@ nonisolated enum WireMessage {
         guard decoded.count == expected else {
             throw WireProtocolError.invalidMessage("解压后长度不匹配")
         }
-        return try loads(decoded)
+        return decoded
+    }
+
+    static func unpack(_ raw: Data) throws -> [String: Any] {
+        try loads(try unpackPayload(raw))
     }
 
     static func request(
@@ -491,5 +507,23 @@ nonisolated extension RemoteCallError {
         code = error["code"] as? String ?? WireProtocol.eInternal
         self.message = error["message"] as? String ?? String(localized: String.LocalizationValue("error.unknown"))
         hint = error["hint"] as? String ?? ""
+    }
+}
+
+nonisolated struct WireErrorEnvelope: Decodable, Sendable {
+    struct Body: Decodable, Sendable {
+        let code: String?
+        let message: String?
+        let hint: String?
+    }
+    let e: Body?
+
+    var callError: RemoteCallError? {
+        guard let e else { return nil }
+        return RemoteCallError(
+            code: e.code ?? WireProtocol.eInternal,
+            message: e.message ?? String(localized: String.LocalizationValue("error.unknown")),
+            hint: e.hint ?? ""
+        )
     }
 }

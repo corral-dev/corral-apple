@@ -145,4 +145,53 @@ final class SessionPresentationTests: XCTestCase {
         XCTAssertFalse(SessionPresentation.hasUnread(for: wait))
         XCTAssertEqual(SessionPresentation.activityMarker(for: wait), .waiting)
     }
+
+    func testPreviewFollowsLatestSpeakerAndPreservesFallback() throws {
+        let userNewer = try RemoteJSONDecoder.decode(SessionSummary.self, from: [
+            "key": "antigravity:a",
+            "last_user": "最新的用户追问",
+            "last_agent": "更早的助手回复",
+            "last_msg_role": "user",
+        ])
+        XCTAssertEqual(SessionPresentation.preview(for: userNewer), "最新的用户追问")
+
+        let agentNewer = try RemoteJSONDecoder.decode(SessionSummary.self, from: [
+            "key": "antigravity:b",
+            "last_user": "用户问题",
+            "last_agent": "最新的助手回复",
+            "last_msg_role": "assistant",
+        ])
+        XCTAssertEqual(SessionPresentation.preview(for: agentNewer), "最新的助手回复")
+
+        let userRoleWithEmptyUser = SessionSummary(
+            key: "antigravity:c", lastUser: "", lastAgent: "回退助手", lastMessageRole: "user"
+        )
+        XCTAssertEqual(SessionPresentation.preview(for: userRoleWithEmptyUser), "回退助手")
+
+        let agentRoleWithEmptyAgent = SessionSummary(
+            key: "antigravity:d", lastUser: "回退用户", lastAgent: "", lastMessageRole: "assistant"
+        )
+        XCTAssertEqual(SessionPresentation.preview(for: agentRoleWithEmptyAgent), "回退用户")
+
+        let legacyHost = try RemoteJSONDecoder.decode(SessionSummary.self, from: [
+            "key": "claude:e",
+            "last_user": "旧宿主用户",
+            "last_agent": "旧宿主助手",
+        ])
+        XCTAssertNil(legacyHost.lastMessageRole)
+        XCTAssertEqual(SessionPresentation.preview(for: legacyHost), "旧宿主助手")
+
+        let migrated = userNewer.replacingKey("antigravity:a-canonical")
+        XCTAssertEqual(migrated.lastMessageRole, "user")
+
+        let store = SessionListStore()
+        let unreadUser = SessionSummary(
+            key: "pi:u", attention: .unread, lastUser: "新提问", lastAgent: "旧回答",
+            lastMessageRole: "user", marker: "unread"
+        )
+        store.updateSessions([unreadUser])
+        store.markReadLocally(key: "pi:u")
+        XCTAssertEqual(store.session(for: "pi:u")?.lastMessageRole, "user")
+        XCTAssertEqual(SessionPresentation.preview(for: store.session(for: "pi:u")!), "新提问")
+    }
 }

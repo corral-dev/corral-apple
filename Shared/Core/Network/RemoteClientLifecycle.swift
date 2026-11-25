@@ -78,7 +78,7 @@ import Foundation
             while !Task.isCancelled {
                 do {
                     if let box = try await plane.pump() {
-                        self.dispatch(box.message, from: plane, isControl: isControl)
+                        self.dispatch(box, from: plane, isControl: isControl)
                     }
                 } catch is CancellationError {
                     break

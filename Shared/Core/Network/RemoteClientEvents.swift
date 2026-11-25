@@ -45,12 +45,21 @@ final class RemoteEventDelivery {
     /// Retained events and bytes, for diagnostics and tests.
     var retentionDepth: (events: Int, bytes: Int) { (queue.count, queuedBytes) }
 
+    private static let streamKindMarker = Data("\"stream\"".utf8)
+
     func push(_ event: RemoteEvent, size: Int) -> Outcome {
         guard !finished else { return .terminated }
         lastChannel = event.channel
         if gapPending {
             dropped += 1
             return .droppedInGap
+        }
+        if let tail = queue.last,
+           let coalesced = Self.coalescedStreamReplacement(tail: tail, incoming: event, incomingSize: size) {
+            queue[queue.count - 1] = coalesced
+            queuedBytes = max(0, queuedBytes - tail.size + coalesced.size)
+            wake()
+            return .enqueued
         }
         if queue.count >= Self.capacity || (queuedBytes + size > Self.maxPendingBytes && !queue.isEmpty) {
             // A consumer that cannot keep up would only replay a truncated
@@ -66,6 +75,56 @@ final class RemoteEventDelivery {
         queuedBytes += size
         wake()
         return .enqueued
+    }
+
+    private static func streamDataIfPresent(_ event: RemoteEvent) -> [String: Any]? {
+        guard event.channel.hasPrefix("session:") else { return nil }
+        if let raw = event.rawEnvelopeData, raw.range(of: streamKindMarker) == nil {
+            return nil
+        }
+        let dict = event.data
+        guard (dict["kind"] as? String) == "stream" else { return nil }
+        return dict
+    }
+
+    private static func coalescedStreamReplacement(
+        tail: (event: RemoteEvent, size: Int),
+        incoming: RemoteEvent,
+        incomingSize: Int
+    ) -> (event: RemoteEvent, size: Int)? {
+        guard tail.event.channel == incoming.channel,
+              let next = streamDataIfPresent(incoming),
+              let prev = streamDataIfPresent(tail.event),
+              let sid = next["stream_id"] as? String, !sid.isEmpty,
+              let prevSID = prev["stream_id"] as? String, prevSID == sid else {
+            return nil
+        }
+        let nextOp = (next["op"] as? String ?? "").lowercased()
+        let prevOp = (prev["op"] as? String ?? "").lowercased()
+        if nextOp == "replace" || nextOp == "clear" {
+            return (incoming, incomingSize)
+        }
+        guard nextOp == "delta" else { return nil }
+        let chunk = next["delta"] as? String ?? ""
+        if prevOp == "delta" {
+            var merged = prev
+            merged["delta"] = (prev["delta"] as? String ?? "") + chunk
+            merged["rev"] = next["rev"] ?? prev["rev"]
+            merged["complete"] = ((prev["complete"] as? Bool) == true) || ((next["complete"] as? Bool) == true)
+            if let after = next["after_seq"] { merged["after_seq"] = after }
+            if let ts = next["timestamp"] { merged["timestamp"] = ts }
+            return (RemoteEvent(channel: incoming.channel, data: merged), tail.size + chunk.utf8.count)
+        }
+        if prevOp == "replace" {
+            var merged = prev
+            merged["text"] = (prev["text"] as? String ?? "") + chunk
+            merged["rev"] = next["rev"] ?? prev["rev"]
+            merged["complete"] = ((prev["complete"] as? Bool) == true) || ((next["complete"] as? Bool) == true)
+            if let after = next["after_seq"] { merged["after_seq"] = after }
+            if let ts = next["timestamp"] { merged["timestamp"] = ts }
+            return (RemoteEvent(channel: incoming.channel, data: merged), tail.size + chunk.utf8.count)
+        }
+        return nil
     }
 
     /// Next element: the coalesced gap marker first when events were lost, then
@@ -176,6 +235,24 @@ nonisolated enum RemoteEventSizing {
         }
     }
 
+    @discardableResult
+    func addStateChangeHandler(_ handler: @escaping @MainActor () -> Void) -> UUID {
+        let id = UUID()
+        stateChangeHandlers[id] = handler
+        return id
+    }
+
+    func removeStateChangeHandler(_ id: UUID) {
+        stateChangeHandlers[id] = nil
+    }
+
+    func notifyStateChangeHandlers() {
+        let handlers = Array(stateChangeHandlers.values)
+        for handler in handlers {
+            handler()
+        }
+    }
+
     /// APNs/local notification delivery is independent of the live socket.
     /// Reconcile retained subscriptions only on the notification's current host.
     @discardableResult
@@ -225,6 +302,37 @@ nonisolated enum RemoteEventSizing {
         channelSubscribers[channel]?[id] = nil
         if channelSubscribers[channel]?.isEmpty == true {
             channelSubscribers[channel] = nil
+        }
+    }
+
+    func dispatch(_ box: WireResponseBox, from plane: PlaneIO, isControl: Bool) {
+        guard isCurrentPlane(plane, isControl: isControl), !Task.isCancelled else { return }
+        dispatch(box)
+    }
+
+    func dispatch(_ box: WireResponseBox) {
+        guard let rawData = box.rawData, let header = box.header else {
+            dispatch(box.message)
+            return
+        }
+        switch header.t {
+        case "res":
+            if header.wireCompression == "deflate" {
+                compressionEnabled = true
+            }
+            if let id = header.id, let pending = pendingRequests.removeValue(forKey: id) {
+                pending.timeout.cancel()
+                pending.continuation.resume(returning: box)
+                diagnose(header.ok == false ? .responseRejected : .responseReceived)
+            } else {
+                diagnose(header.id == nil ? .malformedResponse : .orphanResponse)
+            }
+        case "evt":
+            if let channel = header.c {
+                deliver(RemoteEvent(channel: channel, rawEnvelopeData: rawData), channel: channel)
+            }
+        default:
+            break
         }
     }
 
@@ -279,7 +387,7 @@ nonisolated enum RemoteEventSizing {
 
     /// Multicast one event with bounded retention per subscriber.
     private func deliver(_ event: RemoteEvent, channel: String) {
-        let size = RemoteEventSizing.estimatedBytes(of: event.data)
+        let size = event.wireByteSize ?? RemoteEventSizing.estimatedBytes(of: event.data)
         var terminatedChannels: [UUID] = []
         var terminatedWildcards: [UUID] = []
         var gapped = false

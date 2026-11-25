@@ -57,6 +57,13 @@ final class HostSessionFeed {
 
     /// Cache first, then connect, watch and refresh. Call from the surface's task;
     /// `beforeConnect` runs after the cached snapshot loads (iOS opens cached taps).
+    func loadCacheIfNeeded() {
+        listStore.loadPersisted(hostID: host.hostID)
+        if !listStore.sections.isEmpty {
+            isLoading = false
+        }
+    }
+
     func activate(appModel: AppModel, beforeConnect: (() async -> Void)? = nil) async {
         self.appModel = appModel
         isActive = true
@@ -67,11 +74,8 @@ final class HostSessionFeed {
         func elapsed() -> Double {
             LaunchClock.millisSinceLaunch() ?? localT0.duration(to: .now).milliseconds
         }
-        listStore.loadPersisted(hostID: host.hostID)
+        loadCacheIfNeeded()
         let snapshotMs = elapsed()
-        if !listStore.sections.isEmpty {
-            isLoading = false
-        }
         await beforeConnect?()
         guard !Task.isCancelled, isActive else { return }
         if appModel.isConnected(to: host) {
@@ -264,6 +268,29 @@ final class HostSessionFeed {
             for await event in events {
                 guard let self, !Task.isCancelled, self.appModel?.client === client,
                       self.appModel?.connectedHostID == hostID else { break }
+                if let raw = event.rawEnvelopeData {
+                    let decoded = await Self.decodeSessionsEvent(from: raw)
+                    guard !Task.isCancelled, self.appModel?.client === client,
+                          self.appModel?.connectedHostID == hostID else { break }
+                    switch decoded {
+                    case let .notification(summary, kind):
+                        await self.onNotification?(summary, kind)
+                    case let .list(response):
+                        self.listStore.applyListResponse(response)
+                        self.loadError = nil
+                        await self.onListChanged?()
+                    case let .migrated(oldKey, newKey):
+                        self.listStore.migrateSession(from: oldKey, to: newKey)
+                        self.onSessionMigrated?(oldKey, newKey)
+                        await self.onListChanged?()
+                    case let .patch(summary, revision):
+                        self.listStore.applySessionEvent(summary, revision: revision)
+                        await self.onListChanged?()
+                    case .ignored:
+                        break
+                    }
+                    continue
+                }
                 if event.data["kind"] as? String == "notification" {
                     if let payload = event.data["notification"] as? [String: Any],
                        let kind = event.data["notification_kind"] as? String,
@@ -421,5 +448,83 @@ final class HostSessionFeed {
             return remote.message
         }
         return error.localizedDescription
+    }
+}
+
+private nonisolated enum DecodedSessionsEvent: Sendable {
+    case notification(SessionSummary, String)
+    case list(SessionsListResponse)
+    case migrated(oldKey: String, newKey: String)
+    case patch(SessionSummary, UInt64?)
+    case ignored
+}
+
+private nonisolated struct SessionsChannelHeader: Decodable, Sendable {
+    let kind: String?
+    let notificationKind: String?
+    let notification: SessionSummary?
+    let unchanged: Bool?
+    let hasSessionsKey: Bool
+    let oldKey: String?
+    let newKey: String?
+    let summary: SessionSummary?
+    let session: SessionSummary?
+    let revision: UInt64?
+
+    enum CodingKeys: String, CodingKey {
+        case kind
+        case notificationKind = "notification_kind"
+        case notification, unchanged, sessions
+        case oldKey = "old_key"
+        case newKey = "new_key"
+        case summary, session, revision, epoch
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        kind = container.decodeFlexibleOptionalString(forKey: .kind)
+        notificationKind = container.decodeFlexibleOptionalString(forKey: .notificationKind)
+        notification = try? container.decodeIfPresent(SessionSummary.self, forKey: .notification)
+        unchanged = container.contains(.unchanged) ? container.decodeFlexibleBool(forKey: .unchanged) : nil
+        hasSessionsKey = container.contains(.sessions)
+        oldKey = container.decodeFlexibleOptionalString(forKey: .oldKey)
+        newKey = container.decodeFlexibleOptionalString(forKey: .newKey)
+        summary = try? container.decodeIfPresent(SessionSummary.self, forKey: .summary)
+        session = try? container.decodeIfPresent(SessionSummary.self, forKey: .session)
+        if container.contains(.revision) {
+            revision = UInt64(max(0, container.decodeFlexibleDouble(forKey: .revision)))
+        } else if container.contains(.epoch) {
+            revision = UInt64(max(0, container.decodeFlexibleDouble(forKey: .epoch)))
+        } else {
+            revision = nil
+        }
+    }
+}
+
+private extension HostSessionFeed {
+    @concurrent
+    static func decodeSessionsEvent(from rawEnvelope: Data) async -> DecodedSessionsEvent {
+        guard let header = try? RemoteJSONDecoder.decodeEnvelopeData(SessionsChannelHeader.self, from: rawEnvelope) else {
+            return .ignored
+        }
+        if header.kind == "notification" {
+            if let summary = header.notification, let kind = header.notificationKind {
+                return .notification(summary, kind)
+            }
+            return .ignored
+        }
+        if header.unchanged == true || header.hasSessionsKey {
+            if let response = try? RemoteJSONDecoder.decodeEnvelopeData(SessionsListResponse.self, from: rawEnvelope) {
+                return .list(response)
+            }
+            return .ignored
+        }
+        if let oldKey = header.oldKey, let newKey = header.newKey {
+            return .migrated(oldKey: oldKey, newKey: newKey)
+        }
+        if let summary = header.summary ?? header.session {
+            return .patch(summary, header.revision)
+        }
+        return .ignored
     }
 }

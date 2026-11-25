@@ -84,26 +84,27 @@ enum SessionActionsMenu {
         ["key": sourceKey, "runtime": targetRuntimeID]
     }
 
-    /// Decode compact share JSON returned by `session.export`.
-    static func decodeExportJSON(from payload: Any) throws -> String {
+    /// Decode the exported share transcript file path returned by `session.export`.
+    static func decodeExportPath(from payload: Any) throws -> String {
         guard let dict = payload as? [String: Any],
-              let json = dict["json"] as? String else {
+              let path = dict["path"] as? String,
+              !path.isEmpty else {
             throw RemoteCallError(
                 code: WireProtocol.eInternal,
                 message: String(localized: String.LocalizationValue("error.unknown")),
                 hint: ""
             )
         }
-        return json
+        return path
     }
 
     @MainActor
-    static func exportJSON(sourceKey: String, client: RemoteClient) async throws -> String {
+    static func exportPath(sourceKey: String, client: RemoteClient) async throws -> String {
         let payload = try await client.call(
             WireProtocol.mSessionExport,
             params: copyParams(sourceKey: sourceKey)
         )
-        return try decodeExportJSON(from: payload)
+        return try decodeExportPath(from: payload)
     }
 }
 
@@ -145,6 +146,7 @@ struct SessionMenuItems: View {
     var onExport: (() -> Void)? = nil
     var onRestart: (() -> Void)? = nil
     var onStop: (() -> Void)? = nil
+    var onCopyCorralID: (() -> Void)? = nil
     var onCopyPath: (() -> Void)? = nil
     var onRequestDelete: (() -> Void)? = nil
     var displayMode: Binding<SessionDetailMode>? = nil
@@ -167,6 +169,10 @@ struct SessionMenuItems: View {
 
     private var workspacePath: String {
         SessionPresentation.fullWorkspacePath(from: session)
+    }
+
+    private var corralID: String {
+        session.resolvedCorralID
     }
 
     var body: some View {
@@ -238,6 +244,16 @@ struct SessionMenuItems: View {
         }
 
         Section {
+            Button {
+                PlatformPasteboard.copy(corralID)
+                onCopyCorralID?()
+            } label: {
+                Label("session.actions.copy_corral_id", systemImage: "doc.on.doc")
+                if !corralID.isEmpty {
+                    Text(verbatim: corralID)
+                }
+            }
+            .disabled(corralID.isEmpty)
             Button {
                 PlatformPasteboard.copy(workspacePath)
                 onCopyPath?()
@@ -333,6 +349,7 @@ struct SessionActionsMenuView: View {
     var onHandoff: (RuntimeEntry) -> Void
     var onExport: (() -> Void)? = nil
     var onStop: (() -> Void)? = nil
+    var onCopyCorralID: (() -> Void)? = nil
     var onCopyPath: (() -> Void)? = nil
     var onDelete: (() -> Void)? = nil
     /// Project terminal for the session's folder; nil hides the item (old host,
@@ -346,6 +363,7 @@ struct SessionActionsMenuView: View {
 
     private var hasAnyEnabledEntry: Bool {
         displayMode != nil
+            || !session.resolvedCorralID.isEmpty
             || !SessionPresentation.fullWorkspacePath(from: session).isEmpty
             || (clientReady && !isBusy)
     }
@@ -372,6 +390,7 @@ struct SessionActionsMenuView: View {
                 onExport: onExport,
                 onRestart: onRestart,
                 onStop: onStop,
+                onCopyCorralID: onCopyCorralID,
                 onCopyPath: onCopyPath,
                 onRequestDelete: onDelete != nil ? { confirmDelete = true } : nil,
                 displayMode: displayMode

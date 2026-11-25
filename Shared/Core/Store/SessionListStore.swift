@@ -34,6 +34,9 @@ final class SessionListStore {
     }
 
     private(set) var sections: [Section] = []
+    private(set) var windowSessions: [SessionSummary] = []
+    private(set) var waitingCount: Int = 0
+    private(set) var windowRevision: UInt64 = 0
     private(set) var version: String = ""
     var searchQuery: String = "" {
         didSet {
@@ -46,16 +49,16 @@ final class SessionListStore {
         }
     }
 
-    private var hostID: String = ""
+    @ObservationIgnored private var hostID: String = ""
     /// One metadata record per host and canonical session identity. Window membership
     /// is kept separately so search and an opened detail never own competing copies.
-    private var recordsByKey: [String: SessionSummary] = [:]
-    private var listKeys: [String] = []
-    private var searchKeys: [String]?
-    private var lastServerQuery: String = ""
-    private var openedKeys: Set<String> = []
+    @ObservationIgnored private var recordsByKey: [String: SessionSummary] = [:]
+    @ObservationIgnored private var listKeys: [String] = []
+    @ObservationIgnored private var searchKeys: [String]?
+    @ObservationIgnored private var lastServerQuery: String = ""
+    @ObservationIgnored private var openedKeys: Set<String> = []
     /// Explicit visits outlive replacement host windows; search previews do not.
-    private var revealedKeys: [String] = []
+    @ObservationIgnored private var revealedKeys: [String] = []
     static let maxRevealedSessions = 100
     #if DEBUG
     /// Warm-switch diagnostics: how often a full rebuild produced an identical
@@ -68,15 +71,15 @@ final class SessionListStore {
     }
     #endif
     /// Provisional → canonical redirects so an open detail keeps resolving after migrate.
-    private var aliasByKey: [String: String] = [:]
-    private var revisionByKey: [String: UInt64] = [:]
-    private var acceptedRevision: UInt64 = 0
+    @ObservationIgnored private var aliasByKey: [String: String] = [:]
+    @ObservationIgnored private var revisionByKey: [String: UInt64] = [:]
+    @ObservationIgnored private var acceptedRevision: UInt64 = 0
     /// Host-confirmed deletions outlive reconnects and delayed list/search events.
-    private var deletedKeys: Set<String> = []
+    @ObservationIgnored private var deletedKeys: Set<String> = []
     /// Sessions acknowledged on this client while red, with the activity time seen then.
     /// A host row still saying unread for that activity is a stale echo of the
     /// pre-read state; newer activity brings the dot back.
-    private var locallyReadMtime: [String: Double] = [:]
+    @ObservationIgnored private var locallyReadMtime: [String: Double] = [:]
     /// Bumped on every metadata merge so SwiftUI detail headers invalidate reliably.
     private(set) var metadataEpoch: UInt64 = 0
     private(set) var presentationDate: Date
@@ -150,32 +153,44 @@ final class SessionListStore {
     }
 
     func applyListResponse(_ response: SessionsListResponse, persist: Bool = true) {
-        refreshCalendar()
+        let calendarChanged = updateCalendarContext()
         // Ordering covers the entire reply, including aliases and retirement.
         // A delayed unchanged reply must not mutate a newer metadata epoch.
         if let revision = response.revision, revision < acceptedRevision { return }
         if let revision = response.revision { acceptedRevision = revision }
         // Install canonical evidence before migration, otherwise an old green
         // placeholder is copied to an out-of-window canonical identity.
-        for session in response.retainedSessions ?? [] { merge(session, revision: response.revision) }
-        applyAliases(response.aliases)
+        var mutated = false
+        for session in response.retainedSessions ?? [] {
+            if merge(session, revision: response.revision, bumpEpoch: false) { mutated = true }
+        }
+        let aliasesChanged = applyAliases(response.aliases)
+        var missingRemoved = false
         for key in response.missingKeys ?? [] where revealedKeys.contains(key) {
             removeSession(key: key, confirmedDeletion: false)
+            missingRemoved = true
         }
+        if mutated { metadataEpoch &+= 1 }
+        let anyPriorMutation = mutated || aliasesChanged || missingRemoved
         if response.unchanged {
-            if let next = response.version, !next.isEmpty {
+            var versionChanged = false
+            if let next = response.version, !next.isEmpty, next != version {
                 version = next
+                versionChanged = true
             }
-            if persist { persistIfNeeded() }
-            rebuildSections()
+            guard anyPriorMutation || calendarChanged || versionChanged else { return }
+            if persist && (anyPriorMutation || versionChanged) { persistIfNeeded() }
+            if anyPriorMutation || calendarChanged { rebuildSections() }
             return
         }
-        replaceWindow(response.sessions, version: response.version, revision: response.revision, persist: persist)
+        replaceWindow(response.sessions, version: response.version, revision: response.revision, persist: persist, priorMutation: anyPriorMutation)
     }
 
     /// Follow host-authoritative provisional → canonical keys.
-    func applyAliases(_ aliases: [String: String]?) {
-        guard let aliases, !aliases.isEmpty else { return }
+    @discardableResult
+    func applyAliases(_ aliases: [String: String]?) -> Bool {
+        guard let aliases, !aliases.isEmpty else { return false }
+        var migrated = false
         for (old, new) in aliases.sorted(by: { $0.key < $1.key }) {
             guard !old.isEmpty, !new.isEmpty, old != new else { continue }
             // Cheap guard: hosts repeat every live pane alias, but only keys this
@@ -187,7 +202,9 @@ final class SessionListStore {
                 || deletedKeys.contains(old)
             guard held, aliasByKey[old] != new else { continue }
             migrateSession(from: old, to: new)
+            migrated = true
         }
+        return migrated
     }
 
     func updateSessions(_ sessions: [SessionSummary]) {
@@ -196,9 +213,14 @@ final class SessionListStore {
 
     func applySearchHits(_ sessions: [SessionSummary], query: String) {
         lastServerQuery = query
-        for session in sessions { merge(session) }
+        var mutated = false
+        for session in sessions {
+            if merge(session, bumpEpoch: false) { mutated = true }
+        }
         searchKeys = Self.uniqueKeys(sessions.map { resolvedKey($0.key) })
-        pruneUnownedRecords()
+        if pruneUnownedRecords() || mutated {
+            metadataEpoch &+= 1
+        }
         rebuildSections()
     }
 
@@ -269,6 +291,7 @@ final class SessionListStore {
     }
 
     func session(for key: String) -> SessionSummary? {
+        _ = metadataEpoch
         guard let found = recordsByKey[resolvedKey(key)],
               ActiveRuntimeVisibility.isListVisible(found)
         else { return nil }
@@ -351,16 +374,6 @@ final class SessionListStore {
         return current
     }
 
-    /// Canonical host-window projection for filter choices: every visible
-    /// session in this window regardless of text search. Read-only; view
-    /// filters and search apply on top of it, so choices stay available while
-    /// search narrows the displayed rows.
-    var windowSessions: [SessionSummary] {
-        browsableKeys.compactMap { recordsByKey[$0] }.filter {
-            ActiveRuntimeVisibility.isListVisible($0)
-        }
-    }
-
     private var browsableKeys: [String] { Self.uniqueKeys(listKeys + revealedKeys) }
 
     /// Explicit visits need separate reconciliation; window absence is not deletion.
@@ -368,52 +381,63 @@ final class SessionListStore {
 
     var filteredSessions: [SessionSummary] {
         let needle = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        if needle.isEmpty { return windowSessions }
         let sourceKeys: [String]
-        if needle.isEmpty { sourceKeys = browsableKeys }
-        else if lastServerQuery == searchQuery, let hits = searchKeys { sourceKeys = hits }
+        if lastServerQuery == searchQuery, let hits = searchKeys { sourceKeys = hits }
         else { sourceKeys = browsableKeys }
         return sourceKeys.compactMap { recordsByKey[$0] }.filter { session in
             ActiveRuntimeVisibility.isListVisible(session)
-                && (needle.isEmpty || session.matches(query: searchQuery))
+                && session.matches(query: searchQuery)
         }
-    }
-
-    var waitingCount: Int {
-        browsableKeys.compactMap { recordsByKey[$0] }.filter {
-            ActiveRuntimeVisibility.isListVisible($0)
-                && SessionPresentation.activityMarker(for: $0) == .waiting
-        }.count
     }
 
     private func replaceWindow(
         _ sessions: [SessionSummary],
         version: String?,
         revision: UInt64?,
-        persist: Bool
+        persist: Bool,
+        priorMutation: Bool = false
     ) {
         if let revision, revision < acceptedRevision { return }
         if let revision { acceptedRevision = revision }
-        listKeys = Self.uniqueKeys(sessions.map { resolvedKey($0.key) })
-        for session in sessions { merge(session, revision: revision) }
-        if let next = version, !next.isEmpty {
-            self.version = next
+        let nextKeys = Self.uniqueKeys(sessions.map { resolvedKey($0.key) })
+        let keysChanged = nextKeys != listKeys
+        listKeys = nextKeys
+        var anyMutated = false
+        for session in sessions {
+            if merge(session, revision: revision, bumpEpoch: false) { anyMutated = true }
         }
-        pruneUnownedRecords()
-        if persist { persistIfNeeded() }
+        var versionChanged = false
+        if let next = version, !next.isEmpty, next != self.version {
+            self.version = next
+            versionChanged = true
+        }
+        let pruned = pruneUnownedRecords()
+        if anyMutated || keysChanged || pruned {
+            metadataEpoch &+= 1
+        }
+        if persist && (priorMutation || anyMutated || keysChanged || pruned || versionChanged) {
+            persistIfNeeded()
+        }
         rebuildSections()
     }
 
     /// Current surfaces own metadata; historical searches are not a second archive.
-    private func pruneUnownedRecords() {
+    @discardableResult
+    private func pruneUnownedRecords() -> Bool {
         let retained = Set(browsableKeys + (searchKeys ?? [])).union(openedKeys.map { resolvedKey($0) })
+        var removed = false
         for key in recordsByKey.keys where !retained.contains(key) {
             recordsByKey[key] = nil
             revisionByKey[key] = nil
             locallyReadMtime[key] = nil
+            removed = true
         }
         for (alias, target) in aliasByKey where !retained.contains(target) {
             aliasByKey[alias] = nil
+            removed = true
         }
+        return removed
     }
 
     private func persistIfNeeded() {
@@ -434,15 +458,17 @@ final class SessionListStore {
     /// lists, search hits, single patches, and watched events. Any pre-existing
     /// record under the key is purged so legacy snapshots cannot linger in memory;
     /// the next persist rewrites the snapshot without them (host files untouched).
-    private func merge(_ incoming: SessionSummary, revision: UInt64? = nil) {
+    @discardableResult
+    private func merge(_ incoming: SessionSummary, revision: UInt64? = nil, bumpEpoch: Bool = true) -> Bool {
         let key = resolvedKey(incoming.key)
-        guard !deletedKeys.contains(incoming.key), !deletedKeys.contains(key) else { return }
+        guard !deletedKeys.contains(incoming.key), !deletedKeys.contains(key) else { return false }
         guard ActiveRuntimeVisibility.isListVisible(incoming) else {
-            recordsByKey[key] = nil
+            let hadRecord = recordsByKey.removeValue(forKey: key) != nil
             revisionByKey[key] = nil
-            return
+            if hadRecord, bumpEpoch { metadataEpoch &+= 1 }
+            return hadRecord
         }
-        if let revision, let previous = revisionByKey[key], revision < previous { return }
+        if let revision, let previous = revisionByKey[key], revision < previous { return false }
         var merged = incoming
         if merged.key != key {
             merged = incoming.replacingKey(key)
@@ -457,9 +483,11 @@ final class SessionListStore {
                 locallyReadMtime[key] = nil
             }
         }
-        recordsByKey[key] = merged
         if let revision { revisionByKey[key] = revision }
-        metadataEpoch &+= 1
+        guard recordsByKey[key] != merged else { return false }
+        recordsByKey[key] = merged
+        if bumpEpoch { metadataEpoch &+= 1 }
+        return true
     }
 
     /// Keep provisional detail routes alive when the host promotes them to a canonical key.
@@ -515,7 +543,21 @@ final class SessionListStore {
 
     private func rebuildSections() {
         updateCalendarContext()
-        let source = filteredSessions
+        let nextWindow = browsableKeys.compactMap { recordsByKey[$0] }.filter {
+            ActiveRuntimeVisibility.isListVisible($0)
+        }
+        if nextWindow != windowSessions {
+            windowSessions = nextWindow
+            windowRevision &+= 1
+        }
+        let nextWaiting = nextWindow.reduce(0) { count, session in
+            count + (SessionPresentation.activityMarker(for: session) == .waiting ? 1 : 0)
+        }
+        if nextWaiting != waitingCount {
+            waitingCount = nextWaiting
+        }
+        let needle = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        let source = needle.isEmpty ? nextWindow : filteredSessions
         // Waiting membership follows the activity dot only; an independent red
         // unread overlay never moves a session in or out of this section.
         let waiting = source
@@ -535,9 +577,12 @@ final class SessionListStore {
         var today: [SessionSummary] = []
         var yesterday: [SessionSummary] = []
         var earlier: [SessionSummary] = []
+        let calendar = presentationCalendar
+        let startOfToday = calendar.startOfDay(for: presentationDate)
+        let startOfYesterday = calendar.date(byAdding: .day, value: -1, to: startOfToday)
 
         for session in remaining.sorted(by: Self.byRecency) {
-            switch timeBucket(for: session.mtime) {
+            switch timeBucket(for: session.mtime, today: startOfToday, yesterday: startOfYesterday) {
             case .today: today.append(session)
             case .yesterday: yesterday.append(session)
             case .earlier: earlier.append(session)
@@ -569,13 +614,11 @@ final class SessionListStore {
         case today, yesterday, earlier
     }
 
-    private func timeBucket(for mtime: Double) -> TimeBucket {
+    private func timeBucket(for mtime: Double, today: Date, yesterday: Date?) -> TimeBucket {
         guard mtime > 0 else { return .earlier }
         let date = Date(timeIntervalSince1970: mtime)
-        let calendar = presentationCalendar
-        let today = calendar.startOfDay(for: presentationDate)
         if date >= today { return .today }
-        if let yesterday = calendar.date(byAdding: .day, value: -1, to: today), date >= yesterday { return .yesterday }
+        if let yesterday, date >= yesterday { return .yesterday }
         return .earlier
     }
 
@@ -599,7 +642,8 @@ private extension SessionSummary {
             title: title, cwd: cwd, cwdDisplay: cwdDisplay, mtime: mtime, time: time,
             sizeKB: sizeKB, status: status, live: live, hosted: hosted,
             attention: attention == .unread ? .none : attention,
-            lastUser: lastUser, lastAgent: lastAgent, rich: rich, group: group,
+            lastUser: lastUser, lastAgent: lastAgent, lastMessageRole: lastMessageRole,
+            rich: rich, group: group,
             pinned: pinned, marker: isUnreadMarker ? "" : marker,
             needsAttention: needsAttention, completionID: completionID,
             loopCount: loopCount

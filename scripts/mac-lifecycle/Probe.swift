@@ -55,7 +55,10 @@ final class RemoteClient {
 
 struct RemoteCallError: Error { let message: String; var code = "" }
 
-struct RemoteEvent: @unchecked Sendable { let data: [String: Any] }
+struct RemoteEvent: @unchecked Sendable {
+    let data: [String: Any]
+    var rawEnvelopeData: Data? { nil }
+}
 enum WireProtocol {
     static let mShellList = "shell.list", mShellOpen = "shell.open", mShellClose = "shell.close"
     static let mSearchFulltext = "search.fulltext", chLayout = "layout", eUsage = "usage_error"
@@ -102,9 +105,14 @@ struct SessionUserPromptsResponse: Decodable {
 }
 enum ActiveRuntimeVisibility { static func isListVisible(_ session: SessionSummary) -> Bool { true } }
 struct RuntimeEntry: Decodable { var id: String; var name: String { id }; var isActive: Bool { true } }
+@MainActor final class FollowUpQueueStub {
+    func migrate(hostID: String, from oldKey: String, to newKey: String) {}
+    func clearSession(hostID: String, sessionKey: String) {}
+}
 @MainActor final class AppModel {
     var client: RemoteClient?
     let restarts = SessionRestartTracker()
+    let followUpQueue = FollowUpQueueStub()
 }
 @MainActor final class SessionListStore {
     var sessions: [String: SessionSummary] = [:]
@@ -1202,7 +1210,7 @@ struct LifecycleProbe {
         check(client.calls.contains { $0.0 == WireProtocol.mLayoutSetGroup },
               "openSplit did not sync the new split group to host")
 
-        // exportSession copies JSON and transitions transientFeedback cleanly, restoring prior pasteboard.
+        // exportSession copies file path and transitions transientFeedback cleanly, restoring prior pasteboard.
         let previousPasteboard = NSPasteboard.general.string(forType: .string)
         defer {
             NSPasteboard.general.clearContents()
@@ -1210,10 +1218,11 @@ struct LifecycleProbe {
                 NSPasteboard.general.setString(previousPasteboard, forType: .string)
             }
         }
+        let expectedExportPath = "/Users/example/.cache/corral/share/codex_s1-20261125-120000.json"
         client.handler = { method, params in
             if method == WireProtocol.mSessionExport {
                 check(params["key"] as? String == s1.key, "exportSession sent wrong key")
-                return ["json": "{\"ok\":true,\"data\":{\"id\":\"codex:s1\"}}"]
+                return ["path": expectedExportPath]
             }
             if method == WireProtocol.mSessionStop {
                 check(params["key"] as? String == s1.key && (params["confirm"] as? Bool) == true,
@@ -1223,11 +1232,25 @@ struct LifecycleProbe {
             return [:]
         }
         await workspace.exportSession(s1.key)
-        check(NSPasteboard.general.string(forType: .string) == "{\"ok\":true,\"data\":{\"id\":\"codex:s1\"}}",
-              "exportSession did not copy share JSON to pasteboard")
+        check(NSPasteboard.general.string(forType: .string) == expectedExportPath,
+              "exportSession did not copy share file path to pasteboard")
         check(workspace.transientFeedback == .copied(s1.key),
               "exportSession did not enter .copied feedback state")
         check(workspace.actionError == nil, "successful exportSession set actionError")
+
+        // Legacy {"json": ...} payload without path must fail instead of dumping raw JSON to pasteboard.
+        client.handler = { method, _ in
+            if method == WireProtocol.mSessionExport {
+                return ["json": "{\"ok\":true}"]
+            }
+            return [:]
+        }
+        await workspace.exportSession(s1.key)
+        check(NSPasteboard.general.string(forType: .string) == expectedExportPath,
+              "legacy json-only exportSession overwrote pasteboard")
+        check(workspace.transientFeedback == nil && !(workspace.actionError ?? "").isEmpty,
+              "legacy json-only exportSession did not surface error cleanly")
+        workspace.actionError = nil
 
         // Single stop transitions transientFeedback and releases stoppingKeys cleanly.
         await workspace.stop(s1.key)

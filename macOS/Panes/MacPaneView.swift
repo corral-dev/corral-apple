@@ -607,9 +607,6 @@ struct MacPaneHeader: View {
 extension EnvironmentValues {
     /// Session keys of the panes currently on screen (split or board page).
     @Entry var macVisiblePaneKeys: [String] = []
-    /// Sidebar minute clock, ticked once per minute by the sidebar itself so
-    /// a hundred rows do not run a hundred per-minute timers.
-    @Entry var sidebarNow: Date = Date()
 }
 
 /// Identity of the connection a pane's subscriptions belong to.

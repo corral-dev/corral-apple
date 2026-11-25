@@ -166,6 +166,19 @@ final class ChatMarkdownTests: XCTestCase {
         XCTAssertEqual(String(first.characters), String(second.characters))
     }
 
+    func testStreamingMarkdownBypassesCacheAndStabilizesUnclosedFence() {
+        let partial = "Demo:\n\n```python\nprint(1)"
+        let stabilized = ChatMarkdown.stabilizeStreamingMarkdown(partial)
+        XCTAssertTrue(stabilized.hasSuffix("\n```"), stabilized)
+        XCTAssertEqual(ChatMarkdown.stabilizeStreamingMarkdown("```swift\nlet x = 1\n```\nDone."), "```swift\nlet x = 1\n```\nDone.")
+        XCTAssertEqual(ChatMarkdown.stabilizeStreamingMarkdown("Inline ```code``` text"), "Inline ```code``` text")
+
+        let rendered = ChatMarkdown.attributed(partial, cache: false, streaming: true)
+        let text = String(rendered.characters)
+        XCTAssertTrue(text.contains("print(1)"), text)
+        XCTAssertFalse(text.contains("```"), "unclosed fence should be stabilized as a code block: \(text)")
+    }
+
     private func nsString(_ attributed: AttributedString) -> NSAttributedString {
         NSAttributedString(attributed)
     }

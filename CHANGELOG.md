@@ -6,6 +6,24 @@ next version's section. A `Release: minor` or `Release: major` line requests a
 larger version step; `Release: hold <reason>` keeps the changes unreleased until
 the named acceptance is done.
 
+## Mac 1.0.3 (197) / iPhone 1.0.227 (248)
+
+### English
+
+- Mac & iPhone: press `Option+Return` (or choose Queue Follow-up from the send menu) to queue follow-up messages while an agent is busy, view queued items directly above the input bar, edit or remove them, and let them send automatically once the turn finishes.
+- Mac & iPhone: stream live assistant replies progressively in chat view with automatic fallback when streaming is unavailable.
+- Mac & iPhone: display and copy compact runtime-prefixed Corral IDs for sessions across lists, menus, and details.
+- Mac & iPhone: reduce idle CPU and battery use by eliminating background redraw storms and redundant JSON decoding; copy the exported session JSON file path directly to the clipboard; show the latest message on the session preview line regardless of speaker.
+- iPhone: refine the terminal shortcut row and function keypad to span the full keyboard width with unified key styling, aligned edges, and single-line compact labels, and center session-list empty states above the bottom search bar and keyboard.
+
+### 简体中文
+
+- Mac 与 iPhone：助手运行时按 `Option+Return`（或通过发送菜单选择排队追问）可将追问消息加入等待队列，在输入框上方直接查看、编辑或撤回排队消息，待当前轮次结束后自动发出。
+- Mac 与 iPhone：对话视图支持实时流式展示助手回复内容，并在不可流式推送时自动回退。
+- Mac 与 iPhone：在会话列表、菜单与详情中展示并支持复制简短的运行时前缀 Corral ID。
+- Mac 与 iPhone：消除空闲重绘风暴与重复 JSON 解码以降低 CPU 与能耗；导出会话改为直接复制保存后的 JSON 文件路径到剪贴板；会话列表预览行统一展示最新一条消息，不再区分发言方。
+- iPhone：优化终端快捷键栏与功能键盘布局，铺满键盘宽度、统一按键样式并对齐左右边缘，同时将单行紧凑按键标题与底部搜索栏/键盘上方的空状态居中对齐。
+
 ## Mac 1.0.2 (195) / iPhone 1.0.226 (240)
 
 ### English

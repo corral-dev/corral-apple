@@ -13,6 +13,7 @@ struct RichMessage: Equatable {
     var failureDetail: String? = nil
     var localImageData: [Data] = []
     var localFiles: [LocalFileAttachment] = []
+    var isStreaming: Bool = false
     var hasLocalImages: Bool { !localImageData.isEmpty }
     var chatBodyText: String? { text }
 }
@@ -26,7 +27,11 @@ enum MessageDelivery: Equatable {
     case needsReview
 }
 #if !CORRAL_REAL_MARKDOWN
-enum ChatMarkdown { static let referenceBodyPointSize: CGFloat = 14; static func attributed(_ text: String) -> AttributedString { AttributedString(text) } }
+enum ChatMarkdown {
+    static let referenceBodyPointSize: CGFloat = 14
+    static func attributed(_ text: String) -> AttributedString { AttributedString(text) }
+    static func attributed(_ text: String, cache: Bool, streaming: Bool = false) -> AttributedString { AttributedString(text) }
+}
 #endif
 enum Palette {
  static let accent = Color.accentColor

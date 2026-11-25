@@ -215,10 +215,12 @@ nonisolated struct HostCapabilities: Codable, Sendable, Equatable {
     var userPrompts: Bool = false
     /// Host runs project shells for the project terminal (`shell.*`).
     var projectShell: Bool = false
-    /// Host exports a share-format JSON payload for a session (`session.export`).
+    /// Host writes a share-format JSON file to cache and returns its path (`session.export`).
     var sessionExport: Bool = false
     /// Host accepts arbitrary pasted files via `input.file`.
     var inputFile: Bool = false
+    /// Host emits ephemeral live chat streaming frames (`kind: "stream"`).
+    var chatStreaming: Bool = false
 
     static let empty = HostCapabilities(commandReceipts: false, toolDetail: false)
 
@@ -238,6 +240,7 @@ nonisolated struct HostCapabilities: Codable, Sendable, Equatable {
         case projectShell = "project_shell"
         case sessionExport = "session_export"
         case inputFile = "input_file"
+        case chatStreaming = "chat_streaming"
     }
 
     init(commandReceipts: Bool, toolDetail: Bool = false, sessionRestart: Bool = false) {
@@ -261,6 +264,7 @@ nonisolated struct HostCapabilities: Codable, Sendable, Equatable {
         projectShell = (try? container.decode(Bool.self, forKey: .projectShell)) ?? features.contains("project_shell")
         sessionExport = (try? container.decode(Bool.self, forKey: .sessionExport)) ?? features.contains("session_export")
         inputFile = (try? container.decode(Bool.self, forKey: .inputFile)) ?? features.contains("input_file")
+        chatStreaming = (try? container.decode(Bool.self, forKey: .chatStreaming)) ?? features.contains("chat_streaming")
         if container.contains(.commandReceipts) {
             if let flag = try? container.decode(Bool.self, forKey: .commandReceipts) {
                 commandReceipts = flag
@@ -300,6 +304,7 @@ nonisolated struct HostCapabilities: Codable, Sendable, Equatable {
         try container.encode(projectShell, forKey: .projectShell)
         try container.encode(sessionExport, forKey: .sessionExport)
         try container.encode(inputFile, forKey: .inputFile)
+        try container.encode(chatStreaming, forKey: .chatStreaming)
     }
 }
 

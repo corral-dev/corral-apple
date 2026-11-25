@@ -25,6 +25,7 @@ struct MacSidebarFilters: View {
             sessions: sessions,
             selected: runtimes
         )
+        let quickCountText = quickFilter.count(sessions: sessions).formatted()
         VStack(alignment: .leading, spacing: 6 * interfaceScale) {
             MacFilterScrollView { viewportWidth in
                 AdaptiveFilterRowLayout(
@@ -37,11 +38,11 @@ struct MacSidebarFilters: View {
                 ) {
                     MacQuickFilterButton(selected: quickFilter != .all, sidebar: true) {
                         Text(LocalizedStringKey(quickFilter.titleKey))
-                        Text(verbatim: quickFilter.count(sessions: sessions).formatted()).monospacedDigit().opacity(0.75)
+                        Text(verbatim: quickCountText).monospacedDigit().opacity(0.75)
                     } action: { advanceQuickFilter() }
                     .fixedSize()
                     .accessibilityLabel(Text(LocalizedStringKey(quickFilter.titleKey)))
-                    .accessibilityValue(Text(verbatim: quickFilter.count(sessions: sessions).formatted()))
+                    .accessibilityValue(Text(verbatim: quickCountText))
                     .accessibilityIdentifier("corral.filter.attention")
                     if !activeRuntimes.isEmpty {
                         // HStack gives SwiftUI Divider its vertical-hairline orientation inside a custom Layout.
@@ -286,30 +287,42 @@ struct MacQuickFilterButton<Content: View>: View {
     }
 }
 
+private nonisolated struct MacFilterEdgeOverflow: Equatable, Sendable {
+    let leading: Bool
+    let trailing: Bool
+}
+
 /// Edge-faded horizontal scroller exposing the live viewport width so adaptive
 /// rows can distribute extra space rather than stranding trailing margin.
 private struct MacFilterScrollView<Content: View>: View {
     @Namespace private var coordinateSpace
-    @State private var contentFrame: CGRect = .zero
+    @State private var edgeOverflow = MacFilterEdgeOverflow(leading: false, trailing: false)
     @State private var viewportWidth: CGFloat = 0
     @ViewBuilder let content: (CGFloat) -> Content
 
     var body: some View {
         let space = coordinateSpace
+        let currentWidth = viewportWidth
         return ScrollView(.horizontal, showsIndicators: false) {
             content(viewportWidth)
-                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(space)) } action: {
-                    contentFrame = $0
+                .onGeometryChange(for: MacFilterEdgeOverflow.self) { geometry in
+                    let frame = geometry.frame(in: .named(space))
+                    return MacFilterEdgeOverflow(
+                        leading: frame.minX < -0.5,
+                        trailing: frame.maxX > currentWidth + 0.5
+                    )
+                } action: { overflow in
+                    edgeOverflow = overflow
                 }
         }
         .coordinateSpace(name: space)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { viewportWidth = $0 }
         .mask {
             HStack(spacing: 0) {
-                LinearGradient(colors: [contentFrame.minX < -0.5 ? .clear : .white, .white], startPoint: .leading, endPoint: .trailing)
+                LinearGradient(colors: [edgeOverflow.leading ? .clear : .white, .white], startPoint: .leading, endPoint: .trailing)
                     .frame(width: 16)
                 Rectangle().fill(.white)
-                LinearGradient(colors: [.white, contentFrame.maxX > viewportWidth + 0.5 ? .clear : .white], startPoint: .leading, endPoint: .trailing)
+                LinearGradient(colors: [.white, edgeOverflow.trailing ? .clear : .white], startPoint: .leading, endPoint: .trailing)
                     .frame(width: 16)
             }
         }

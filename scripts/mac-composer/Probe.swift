@@ -8,6 +8,8 @@ import Observation
     var fileAttachments: [DraftFileAttachment] = []
     var revision = 0
     var sends = 0
+    var followUps: [String] = []
+    var recalls = 0
     var interfaceScale: CGFloat = 1.0
 }
 
@@ -20,7 +22,16 @@ struct ComposerScreen: View {
             Spacer()
             ComposerBar(text: $state.text, attachments: $state.attachments,
                         fileAttachments: $state.fileAttachments,
-                        history: ["Older prompt", "Newest 中文🙂 prompt"]) { _, _, _ in state.sends += 1 }
+                        history: ["Older prompt", "Newest 中文🙂 prompt"],
+                        showsFollowUpContextAction: true,
+                        onSend: { _, _, _ in state.sends += 1 },
+                        onFollowUp: { text, _, _ in state.followUps.append(text) },
+                        onRecallQueued: {
+                            guard let popped = state.followUps.popLast() else { return false }
+                            state.text = popped
+                            state.recalls += 1
+                            return true
+                        })
         }
         .padding()
         .environment(\.interfaceScale, state.interfaceScale)
@@ -127,6 +138,24 @@ struct ComposerScreen: View {
                      "Shift-Return did not insert at native caret")
         precondition(state.sends == 0, "Inspection sent a prompt")
         print("PASS native Up/Down recall, draft restoration and Shift-Return; no sends")
+
+        // Verify Option+Return follow-up trigger, IME composition guard, and Option+Up queue recall.
+        replaceDraft("Follow up 中文🙂")
+        key(36, "\r", modifiers: [.option])
+        precondition(state.followUps == ["Follow up 中文🙂"] && state.text.isEmpty && state.sends == 0,
+                     "Option+Return did not trigger follow-up cleanly")
+        editor.setMarkedText("待确认", selectedRange: NSRange(location: 3, length: 0),
+                             replacementRange: editor.selectedRange())
+        pump(host)
+        key(36, "\r", modifiers: [.option])
+        precondition(state.followUps == ["Follow up 中文🙂"], "Option+Return must not bypass active IME marked text")
+        editor.unmarkText()
+        replaceDraft("")
+        key(126, String(UnicodeScalar(NSUpArrowFunctionKey)!), modifiers: [.option, .function, .numericPad])
+        precondition(state.followUps.isEmpty && state.text == "Follow up 中文🙂" && state.recalls == 1,
+                     "Option+Up did not recall the last queued follow-up item")
+        replaceDraft("")
+        print("PASS Option+Return follow-up trigger, IME guard, and Option+Up recall")
 
         // Verify TextKit 1 wrapping of mixed CJK + ASCII timestamps across 100%, 120%, and 140% zoom has zero blank line gaps.
         let repro = "允许 tw-1 混跑，毕竟不能浪费资源，然后没有装zerotier这些事情你可以帮我做好。caozc.com到期时间是2029-09-05 19:22:00，然后caozc.top到期时间是2027-09-26 12:11:55，计划到期之后就不再续费了。"

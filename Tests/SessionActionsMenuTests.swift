@@ -163,10 +163,14 @@ final class SessionActionsMenuTests: XCTestCase {
         XCTAssertTrue(roundtrip.sessionExport)
     }
 
-    func testDecodeExportJSONExtractsStringOrThrows() throws {
-        let json = try SessionActionsMenu.decodeExportJSON(from: ["json": "{\"ok\":true}"] as [String: Any])
-        XCTAssertEqual(json, "{\"ok\":true}")
-        XCTAssertThrowsError(try SessionActionsMenu.decodeExportJSON(from: ["ok": true] as [String: Any]))
+    func testDecodeExportPathExtractsNonEmptyPathOrThrows() throws {
+        let path = try SessionActionsMenu.decodeExportPath(
+            from: ["path": "/Users/example/.cache/corral/share/s1.json"] as [String: Any]
+        )
+        XCTAssertEqual(path, "/Users/example/.cache/corral/share/s1.json")
+        XCTAssertThrowsError(try SessionActionsMenu.decodeExportPath(from: ["path": ""] as [String: Any]))
+        XCTAssertThrowsError(try SessionActionsMenu.decodeExportPath(from: ["json": "{\"ok\":true}"] as [String: Any]))
+        XCTAssertThrowsError(try SessionActionsMenu.decodeExportPath(from: ["ok": true] as [String: Any]))
     }
 
     func testSessionDetailModeToggleMetadata() {
@@ -174,5 +178,24 @@ final class SessionActionsMenuTests: XCTestCase {
         XCTAssertEqual(SessionDetailMode.terminal.toggled, .chat)
         XCTAssertEqual(SessionDetailMode.chat.switchSymbol, "terminal")
         XCTAssertEqual(SessionDetailMode.terminal.switchSymbol, "bubble.left.and.text.bubble.right")
+    }
+
+    func testCopyCorralIDUsesResolvedServerOrFallbackValue() {
+        let normal = SessionSummary(
+            key: "claude:631fad3d-fc68-43cf-9342-7b0f33af7a65",
+            runtime: "claude",
+            sessionID: "631fad3d-fc68-43cf-9342-7b0f33af7a65",
+            title: "demo"
+        )
+        XCTAssertEqual(normal.resolvedCorralID, "ccm7k4bh")
+
+        let provisional = SessionSummary(
+            key: "claude:tmp",
+            runtime: "claude",
+            sessionID: "tmp",
+            corralID: "",
+            title: "demo"
+        )
+        XCTAssertEqual(provisional.resolvedCorralID, "")
     }
 }

@@ -4,9 +4,12 @@ import Foundation
 /// (`layout.watch` and `layout` channel events). Phone clients never read it.
 nonisolated struct DesktopLayout: Decodable, Sendable, Equatable {
     var revision: Int
-    var groups: [DesktopGroup]
+    var groups: [DesktopGroup] {
+        didSet { groupIndexByMember = Self.index(groups: groups) }
+    }
     /// Independently pinned session keys → pin time (seconds since 1970).
     var pinnedSessions: [String: Double]
+    private var groupIndexByMember: [String: Int]
 
     static let empty = DesktopLayout(revision: 0, groups: [], pinnedSessions: [:])
 
@@ -14,6 +17,7 @@ nonisolated struct DesktopLayout: Decodable, Sendable, Equatable {
         self.revision = revision
         self.groups = groups
         self.pinnedSessions = pinnedSessions
+        self.groupIndexByMember = Self.index(groups: groups)
     }
 
     enum CodingKeys: String, CodingKey {
@@ -24,13 +28,31 @@ nonisolated struct DesktopLayout: Decodable, Sendable, Equatable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         revision = container.decodeFlexibleInt(forKey: .revision, default: 0)
-        groups = (try? container.decodeIfPresent([FailableDecodable<DesktopGroup>].self, forKey: .groups))?
+        let decodedGroups = (try? container.decodeIfPresent([FailableDecodable<DesktopGroup>].self, forKey: .groups))?
             .compactMap(\.value) ?? []
+        groups = decodedGroups
         pinnedSessions = (try? container.decodeIfPresent([String: Double].self, forKey: .pinnedSessions)) ?? [:]
+        groupIndexByMember = Self.index(groups: decodedGroups)
+    }
+
+    static func == (lhs: DesktopLayout, rhs: DesktopLayout) -> Bool {
+        lhs.revision == rhs.revision
+            && lhs.groups == rhs.groups
+            && lhs.pinnedSessions == rhs.pinnedSessions
+    }
+
+    private static func index(groups: [DesktopGroup]) -> [String: Int] {
+        var map: [String: Int] = [:]
+        for (idx, group) in groups.enumerated() {
+            for member in group.members where map[member] == nil {
+                map[member] = idx
+            }
+        }
+        return map
     }
 
     func group(containing key: String) -> DesktopGroup? {
-        groups.first { $0.members.contains(key) }
+        groupIndexByMember[key].map { groups[$0] }
     }
 
     /// TUI pin semantics: a visible split member is pinned with the whole
@@ -85,8 +107,8 @@ nonisolated struct DesktopGroup: Decodable, Sendable, Equatable, Identifiable {
         focus = container.decodeFlexibleString(forKey: .focus)
         collapsed = container.decodeFlexibleBool(forKey: .collapsed)
         pinned = container.decodeFlexibleBool(forKey: .pinned)
-        pinnedAt = (try? container.decodeIfPresent(Double.self, forKey: .pinnedAt)) ?? 0
-        updatedAt = (try? container.decodeIfPresent(Double.self, forKey: .updatedAt)) ?? 0
+        pinnedAt = container.decodeFlexibleDouble(forKey: .pinnedAt, default: 0)
+        updatedAt = container.decodeFlexibleDouble(forKey: .updatedAt, default: 0)
     }
 }
 

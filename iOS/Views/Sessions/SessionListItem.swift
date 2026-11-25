@@ -19,6 +19,7 @@ struct SessionListContextActions {
     var onHandoff: ((RuntimeEntry) -> Void)? = nil
     var onExport: (() -> Void)? = nil
     var onRestart: (() -> Void)? = nil
+    var onCopyCorralID: (() -> Void)? = nil
     var onCopyPath: (() -> Void)? = nil
 }
 
@@ -84,6 +85,7 @@ struct SessionListItem<Row: View>: View {
                         onExport: contextActions.onExport,
                         onRestart: contextActions.onRestart,
                         onStop: onStop,
+                        onCopyCorralID: contextActions.onCopyCorralID,
                         onCopyPath: contextActions.onCopyPath,
                         onRequestDelete: { confirmation.wrappedValue = true },
                         displayMode: contextActions.supportsTerminal && contextActions.onSelectMode != nil ? Binding(

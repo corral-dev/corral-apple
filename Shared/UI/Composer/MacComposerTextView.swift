@@ -75,7 +75,9 @@ enum ComposerPasteboard {
 final class ComposerNSTextView: NSTextView {
     var onTextChange: ((String) -> Void)?
     var onSubmit: (() -> Void)?
+    var onFollowUp: (() -> Void)?
     var onArrowHistory: ((_ isUp: Bool) -> Bool)?
+    var onRecallQueued: (() -> Bool)?
     var onPasteFileURLs: (([URL]) -> Void)?
     var onPasteImageData: ((Data) -> Void)?
     var onFocusChange: ((Bool) -> Void)?
@@ -270,11 +272,15 @@ final class ComposerNSTextView: NSTextView {
             super.keyDown(with: event)
             return
         }
-        // Return / Keypad Enter: Shift+Return inserts newline; plain Return submits.
+        // Return / Keypad Enter: Shift+Return inserts newline; Option+Return queues follow-up; plain Return submits.
         if event.keyCode == 36 || event.keyCode == 76 {
             let mods = event.modifierFlags.intersection([.shift, .command, .option, .control])
             if mods == .shift {
                 insertNewline(nil)
+                return
+            }
+            if mods == .option, let onFollowUp {
+                onFollowUp()
                 return
             }
             if mods.isEmpty {
@@ -288,6 +294,9 @@ final class ComposerNSTextView: NSTextView {
         }
         if event.keyCode == 126 || event.keyCode == 125 {
             let mods = event.modifierFlags.intersection([.shift, .command, .option, .control])
+            if mods == .option, event.keyCode == 126, onRecallQueued?() == true {
+                return
+            }
             if mods.isEmpty, onArrowHistory?(event.keyCode == 126) == true {
                 return
             }
@@ -344,7 +353,9 @@ struct MacComposerTextView: NSViewRepresentable {
     var focusTrigger: Int = 0
     var maxLines: Int = 6
     var onSubmit: () -> Void
+    var onFollowUp: (() -> Void)? = nil
     var onArrowHistory: ((_ isUp: Bool) -> Bool)?
+    var onRecallQueued: (() -> Bool)? = nil
     var onPasteFileURLs: ([URL]) -> Void
     var onPasteImageData: (Data) -> Void
     var onFocusChange: (Bool) -> Void
@@ -501,7 +512,9 @@ struct MacComposerTextView: NSViewRepresentable {
             }
         }
         textView.onSubmit = onSubmit
+        textView.onFollowUp = onFollowUp
         textView.onArrowHistory = onArrowHistory
+        textView.onRecallQueued = onRecallQueued
         textView.onPasteFileURLs = onPasteFileURLs
         textView.onPasteImageData = onPasteImageData
         textView.onFocusChange = onFocusChange

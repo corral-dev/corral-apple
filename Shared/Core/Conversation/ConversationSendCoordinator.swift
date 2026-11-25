@@ -108,6 +108,20 @@ struct TextSendPlan: Sendable {
     let operationID: UUID
 }
 
+/// Outcome of running a staged outbound send plan.
+enum ComposerSendOutcome: Equatable, Sendable {
+    case sent
+    case failed(String)
+}
+
+/// Result of attempting to dispatch a queued follow-up item without altering the live draft.
+enum QueuedComposerStart: Sendable {
+    case dispatched(ComposerSendPlan)
+    case blockedByQuestion
+    case rejected(String)
+    case deferred
+}
+
 /// Synchronous plan for one composer send (one bubble: its images, then its text).
 struct ComposerSendPlan: Sendable {
     let images: [StagedSendImage]
@@ -119,6 +133,7 @@ struct ComposerSendPlan: Sendable {
     /// correction 2026-11-15: one send is one bubble, never text + `[image]`).
     let echoSeq: Int?
     let operationID: UUID
+    let restoreDraftOnFailure: Bool
 
     /// Every receipt identity this send owns: its images, files, and its text.
     /// The outbound queue must not wait on its own optimistic bubble.
@@ -197,6 +212,73 @@ struct ConversationSendCoordinator: Sendable {
             )
             return nil
         }
+        return stageComposerSend(
+            store: store,
+            display: display,
+            trimmed: trimmed,
+            hasText: hasText,
+            images: images,
+            files: files,
+            isBusy: isBusy,
+            isHostReady: isHostReady,
+            clearDraftOnStart: true
+        )
+    }
+
+    func beginQueuedComposerSend(
+        store: (any ConversationSendStore)?,
+        display: any ConversationSendDisplay,
+        text: String,
+        images: [StagedSendImage],
+        files: [StagedSendFile] = [],
+        isBusy: Bool,
+        isHostReady: Bool
+    ) -> QueuedComposerStart {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasText = !trimmed.isEmpty
+        guard hasText || !images.isEmpty || !files.isEmpty,
+              ComposerSendPolicy.canSend(
+                text: text,
+                attachmentCount: images.count + files.count,
+                isBusy: isBusy
+              ),
+              isHostReady,
+              let store else {
+            return .deferred
+        }
+        if PendingQuestionGate.blocksInput(store.prompts, submission: store.questionSubmissionState) {
+            return .blockedByQuestion
+        }
+        if !files.isEmpty && !store.supportsInputFile {
+            return .rejected(String(localized: "composer.file_host_unsupported"))
+        }
+        guard let plan = stageComposerSend(
+            store: store,
+            display: display,
+            trimmed: trimmed,
+            hasText: hasText,
+            images: images,
+            files: files,
+            isBusy: isBusy,
+            isHostReady: isHostReady,
+            clearDraftOnStart: false
+        ) else {
+            return .deferred
+        }
+        return .dispatched(plan)
+    }
+
+    private func stageComposerSend(
+        store: any ConversationSendStore,
+        display: any ConversationSendDisplay,
+        trimmed: String,
+        hasText: Bool,
+        images: [StagedSendImage],
+        files: [StagedSendFile],
+        isBusy: Bool,
+        isHostReady: Bool,
+        clearDraftOnStart: Bool
+    ) -> ComposerSendPlan? {
         if images.isEmpty && files.isEmpty, hasText {
             return beginTextSend(
                 trimmed,
@@ -204,7 +286,7 @@ struct ConversationSendCoordinator: Sendable {
                 display: display,
                 reuseCommandID: nil,
                 reuseSeq: nil,
-                clearDraftOnStart: true,
+                clearDraftOnStart: clearDraftOnStart,
                 isBusy: isBusy,
                 isHostReady: isHostReady
             ).map { textPlan in
@@ -215,7 +297,8 @@ struct ConversationSendCoordinator: Sendable {
                     trimmedText: trimmed,
                     hasText: true,
                     echoSeq: textPlan.localSeq,
-                    operationID: textPlan.operationID
+                    operationID: textPlan.operationID,
+                    restoreDraftOnFailure: clearDraftOnStart
                 )
             }
         }
@@ -249,7 +332,8 @@ struct ConversationSendCoordinator: Sendable {
             clearDraftOnStart: false,
             operationID: operationID,
             images: payloads,
-            files: localFiles
+            files: localFiles,
+            restoreDraftOnFailure: clearDraftOnStart
         ) : nil
         let echoSeq = textPlan?.localSeq ?? stageAttachmentEcho(
             store: store,
@@ -275,7 +359,8 @@ struct ConversationSendCoordinator: Sendable {
             trimmedText: trimmed,
             hasText: hasText,
             echoSeq: echoSeq,
-            operationID: operationID
+            operationID: operationID,
+            restoreDraftOnFailure: clearDraftOnStart
         )
     }
 
@@ -298,14 +383,15 @@ struct ConversationSendCoordinator: Sendable {
         )
     }
 
+    @discardableResult
     func runComposerSend(
         _ plan: ComposerSendPlan,
         store: (any ConversationSendStore)?,
         display: any ConversationSendDisplay
-    ) async {
+    ) async -> ComposerSendOutcome {
         guard let store else {
             display.setSending(false)
-            return
+            return .failed(notConnectedMessage)
         }
         // The bubble and draft are already staged; the store queues the send behind
         // earlier ones, so the composer accepts the next message right away.
@@ -313,8 +399,7 @@ struct ConversationSendCoordinator: Sendable {
         // Text-only sends reuse the shared text path (same ordering, same
         // exclusion window, same error mapping as before the extraction).
         if plan.images.isEmpty && plan.files.isEmpty, let textPlan = plan.text {
-            await runTextSend(textPlan, store: store, display: display)
-            return
+            return await runTextSend(textPlan, store: store, display: display)
         }
         var sentImageCount = 0
         var sentFileCount = 0
@@ -355,35 +440,39 @@ struct ConversationSendCoordinator: Sendable {
                 )
             }
             display.clearError()
+            return .sent
         } catch {
-            let unsentImages = ComposerSendPolicy.unsentImageSuffix(images: plan.images, sentCount: sentImageCount)
-            if !unsentImages.isEmpty {
-                display.restoreImages(unsentImages)
-            }
-            let unsentFiles = ComposerSendPolicy.unsentImageSuffix(images: plan.files, sentCount: sentFileCount)
-            if !unsentFiles.isEmpty {
-                display.restoreFiles(unsentFiles)
+            if plan.restoreDraftOnFailure {
+                let unsentImages = ComposerSendPolicy.unsentImageSuffix(images: plan.images, sentCount: sentImageCount)
+                if !unsentImages.isEmpty {
+                    display.restoreImages(unsentImages)
+                }
+                let unsentFiles = ComposerSendPolicy.unsentImageSuffix(images: plan.files, sentCount: sentFileCount)
+                if !unsentFiles.isEmpty {
+                    display.restoreFiles(unsentFiles)
+                }
             }
             if let textPlan = plan.text {
-                handleOutboundFailure(
+                let detail = handleOutboundFailure(
                     error,
                     payload: textPlan.payload,
                     commandID: textPlan.commandID,
                     localSeq: textPlan.localSeq,
-                    restoreDraft: true,
+                    restoreDraft: plan.restoreDraftOnFailure,
                     store: store,
                     display: display,
                     operationID: plan.operationID,
                     wasSent: textSendStarted
                 )
+                return .failed(detail)
             } else {
-                if plan.hasText {
+                if plan.restoreDraftOnFailure, plan.hasText {
                     display.composerDraft = ComposerSendPolicy.restoredDraft(
                         failedText: plan.trimmedText,
                         currentDraft: display.composerDraft
                     )
                 }
-                handleOutboundFailure(
+                let detail = handleOutboundFailure(
                     error,
                     payload: nil,
                     commandID: nil,
@@ -393,6 +482,7 @@ struct ConversationSendCoordinator: Sendable {
                     display: display,
                     operationID: plan.operationID
                 )
+                return .failed(detail)
             }
         }
     }
@@ -447,22 +537,24 @@ struct ConversationSendCoordinator: Sendable {
         return plan
     }
 
+    @discardableResult
     func runTextSend(
         _ plan: TextSendPlan,
         store: (any ConversationSendStore)?,
         display: any ConversationSendDisplay
-    ) async {
+    ) async -> ComposerSendOutcome {
         guard let store else {
             display.setSending(false)
-            return
+            return .failed(notConnectedMessage)
         }
         // Staged and queued in the store's outgoing order: free the composer now.
         display.setSending(false)
         do {
             try await finishTextSend(plan, store: store)
             display.clearError()
+            return .sent
         } catch {
-            handleOutboundFailure(
+            let detail = handleOutboundFailure(
                 error,
                 payload: plan.payload,
                 commandID: plan.commandID,
@@ -474,6 +566,7 @@ struct ConversationSendCoordinator: Sendable {
                 display: display,
                 operationID: plan.operationID
             )
+            return .failed(detail)
         }
     }
 
@@ -486,7 +579,8 @@ struct ConversationSendCoordinator: Sendable {
         clearDraftOnStart: Bool,
         operationID: UUID,
         images: [Data] = [],
-        files: [LocalFileAttachment] = []
+        files: [LocalFileAttachment] = [],
+        restoreDraftOnFailure: Bool? = nil
     ) -> TextSendPlan {
         if clearDraftOnStart {
             display.composerDraft = ""
@@ -516,7 +610,7 @@ struct ConversationSendCoordinator: Sendable {
             commandID: commandID,
             localSeq: localSeq,
             useReceipts: useReceipts,
-            restoreDraftOnFailure: clearDraftOnStart,
+            restoreDraftOnFailure: restoreDraftOnFailure ?? clearDraftOnStart,
             operationID: operationID
         )
     }
@@ -588,6 +682,7 @@ struct ConversationSendCoordinator: Sendable {
 
     // MARK: - Failure mapping
 
+    @discardableResult
     private func handleOutboundFailure(
         _ error: Error,
         payload: String?,
@@ -598,7 +693,7 @@ struct ConversationSendCoordinator: Sendable {
         display: any ConversationSendDisplay,
         operationID: UUID,
         wasSent: Bool = true
-    ) {
+    ) -> String {
         let status = wasSent ? PendingCommandStore.hostStatusAfterSendFailure(error) : "rejected"
         let existing = store.messages.first(where: { message in
             if let localSeq { return message.seq == localSeq }
@@ -631,6 +726,7 @@ struct ConversationSendCoordinator: Sendable {
         } else {
             display.showError(detail, haptic: haptic, operationID: operationID)
         }
+        return detail
     }
 
     // MARK: - Native question submission

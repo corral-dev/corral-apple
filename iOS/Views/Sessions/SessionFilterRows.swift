@@ -85,6 +85,7 @@ struct SessionRuntimeFilterRow: View {
             sessions: sessions,
             selected: selected
         )
+        let quickCountText = quickFilter.count(sessions: sessions).formatted()
         SessionFilterScrollView { viewportWidth in
             AdaptiveFilterRowLayout(
                 viewportWidth: viewportWidth,
@@ -97,14 +98,14 @@ struct SessionRuntimeFilterRow: View {
                 // Its own dimension, intersected with the assistant choices.
                 SessionFilterChip(selected: quickFilter != .all) {
                     Text(LocalizedStringKey(quickFilter.titleKey))
-                    Text(verbatim: quickFilter.count(sessions: sessions).formatted())
+                    Text(verbatim: quickCountText)
                         .monospacedDigit()
                         .opacity(0.75)
                 } action: {
                     advanceQuickFilter()
                 }
                 .accessibilityLabel(Text(LocalizedStringKey(quickFilter.titleKey)))
-                .accessibilityValue(Text(verbatim: quickFilter.count(sessions: sessions).formatted()))
+                .accessibilityValue(Text(verbatim: quickCountText))
                 .accessibilityIdentifier("corral.filter.attention")
                 if !activeRuntimes.isEmpty {
                     // HStack gives SwiftUI Divider its vertical-hairline orientation inside a custom Layout.
@@ -380,11 +381,16 @@ struct SessionProjectPickerSheet: View {
     }
 }
 
+private nonisolated struct SessionFilterEdgeOverflow: Equatable, Sendable {
+    let leading: Bool
+    let trailing: Bool
+}
+
 /// Fade only edges with offscreen content. The alpha mask also confines chips
 /// to the viewport, so page padding belongs outside this view in both rows.
 private struct SessionFilterScrollView<Content: View>: View {
     @Namespace private var coordinateSpace
-    @State private var contentFrame: CGRect = .zero
+    @State private var edgeOverflow = SessionFilterEdgeOverflow(leading: false, trailing: false)
     @State private var viewportWidth: CGFloat = 0
     @ViewBuilder let content: (CGFloat) -> Content
 
@@ -396,18 +402,20 @@ private struct SessionFilterScrollView<Content: View>: View {
         self.content = { _ in content() }
     }
 
-    private var hiddenOnLeft: Bool { contentFrame.minX < -0.5 }
-    private var hiddenOnRight: Bool { contentFrame.maxX > viewportWidth + 0.5 }
-
     var body: some View {
         let space = coordinateSpace
+        let currentWidth = viewportWidth
         return ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 content(viewportWidth)
-                    .onGeometryChange(for: CGRect.self) { geometry in
-                        geometry.frame(in: .named(space))
-                    } action: { frame in
-                        contentFrame = frame
+                    .onGeometryChange(for: SessionFilterEdgeOverflow.self) { geometry in
+                        let frame = geometry.frame(in: .named(space))
+                        return SessionFilterEdgeOverflow(
+                            leading: frame.minX < -0.5,
+                            trailing: frame.maxX > currentWidth + 0.5
+                        )
+                    } action: { overflow in
+                        edgeOverflow = overflow
                     }
                     .id("filter-content")
             }
@@ -418,14 +426,14 @@ private struct SessionFilterScrollView<Content: View>: View {
             .mask {
                 HStack(spacing: 0) {
                     LinearGradient(
-                        colors: [hiddenOnLeft ? .clear : .white, .white],
+                        colors: [edgeOverflow.leading ? .clear : .white, .white],
                         startPoint: .leading,
                         endPoint: .trailing
                     )
                     .frame(width: SessionFilterStyle.edgeFadeWidth)
                     Rectangle().fill(.white)
                     LinearGradient(
-                        colors: [.white, hiddenOnRight ? .clear : .white],
+                        colors: [.white, edgeOverflow.trailing ? .clear : .white],
                         startPoint: .leading,
                         endPoint: .trailing
                     )

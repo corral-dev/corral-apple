@@ -23,10 +23,32 @@ final class ConversationStore {
         return forkMessages + messages.filter(\.isLocal)
     }
 
+    private(set) var streamingDrafts: [StreamingDraft] = [] {
+        didSet {
+            if oldValue != streamingDrafts {
+                refreshTimeline()
+            }
+        }
+    }
+    @ObservationIgnored private var nextStreamSeq = -1_000_000
+    @ObservationIgnored private var streamSeqByID: [String: Int] = [:]
+    @ObservationIgnored private var suppressTimelineRefresh = false
+
+    private func withBatchedTimelineUpdate(_ body: () -> Void) {
+        let wasSuppressed = suppressTimelineRefresh
+        suppressTimelineRefresh = true
+        body()
+        suppressTimelineRefresh = wasSuppressed
+        if !wasSuppressed {
+            refreshTimeline()
+        }
+    }
+
     private func refreshTimeline() {
+        guard !suppressTimelineRefresh else { return }
         userPromptsCacheSeqs = nil
         let next = ConversationMessagePolicy.timelineItems(
-            from: visibleMessages, preserving: timelineItems
+            from: visibleMessages, preserving: timelineItems, streamingDrafts: streamingDrafts
         )
         // Switching panes re-evaluates bodies without new data; assigning an
         // equal array still notifies Observation and rebuilds every row.
@@ -62,8 +84,8 @@ final class ConversationStore {
     private(set) var questionFailureIsUncertain = false
     /// Host `session.prompts` answered once: its native request identity wins over the
     /// rough message-derived fallback, so incoming messages never reset question drafts.
-    private var hostPromptsLoaded = false
-    private var retiredQuestionRequestIDs = Set<String>()
+    @ObservationIgnored private var hostPromptsLoaded = false
+    @ObservationIgnored private var retiredQuestionRequestIDs = Set<String>()
     private(set) var isLive = false
     private(set) var loadError: String?
     private(set) var isLoading = false
@@ -76,7 +98,7 @@ final class ConversationStore {
     /// Set the instant the user submits text (or the host hints the turn started);
     /// shows Working before the agent's transcript confirms it.
     private(set) var provisionalWorkingSince: Date?
-    private var provisionalExpiryTask: Task<Void, Never>?
+    @ObservationIgnored private var provisionalExpiryTask: Task<Void, Never>?
     /// Without confirmation the provisional cue disappears on its own.
     static let provisionalWorkingTimeout: Duration = .seconds(20)
     /// An idle signal this soon after submitting is the pre-send state still in flight.
@@ -95,34 +117,34 @@ final class ConversationStore {
 
     private let sessionKey: String
     private let hostID: String
-    private weak var client: RemoteClient?
+    @ObservationIgnored private weak var client: RemoteClient?
     /// The connection this store subscribes on (containers rebind on reconnect).
     var boundClient: RemoteClient? { client }
     /// Forwards host metadata (title) events into the shared session list store.
-    var onSessionMetadata: ((SessionSummary, UInt64?) -> Void)?
+    @ObservationIgnored var onSessionMetadata: ((SessionSummary, UInt64?) -> Void)?
     /// 本地气泡从 -1 递减，永不使用 0（merge 会与缺 seq 的解码默认值撞车）。
-    private var nextLocalSeq = -1
-    private var attentionRevision = 0
-    private var eventTask: Task<Void, Never>?
-    private var receiptPollTask: Task<Void, Never>?
-    private var readyHandlerID: UUID?
-    private var catchUpTask: Task<Void, Never>?
-    private var catchUpRequested = false
+    @ObservationIgnored private var nextLocalSeq = -1
+    @ObservationIgnored private var attentionRevision = 0
+    @ObservationIgnored private var eventTask: Task<Void, Never>?
+    @ObservationIgnored private var receiptPollTask: Task<Void, Never>?
+    @ObservationIgnored private var readyHandlerID: UUID?
+    @ObservationIgnored private var catchUpTask: Task<Void, Never>?
+    @ObservationIgnored private var catchUpRequested = false
     /// The next catch-up must not trust the local resume cursor (event gap).
-    private var catchUpFullSnapshot = false
-    private var snapshotRetryTask: Task<Void, Never>?
-    private var snapshotRetryAttempt = 0
+    @ObservationIgnored private var catchUpFullSnapshot = false
+    @ObservationIgnored private var snapshotRetryTask: Task<Void, Never>?
+    @ObservationIgnored private var snapshotRetryAttempt = 0
     /// 将一批实时增量收敛为一次提示选项查询，避免每条消息都占用同一条远程连接。
-    private var promptRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var promptRefreshTask: Task<Void, Never>?
     /// 上次成功应用到的历史代次；重连时带给开发机，对不上则改取尾部。
-    private var generation = 0
-    private var lifecycleRevision = 0
-    private var snapshotRevision = 0
-    private var promptRequestRevision = 0
-    private var hasStopped = false
+    @ObservationIgnored private var generation = 0
+    @ObservationIgnored private var lifecycleRevision = 0
+    @ObservationIgnored private var snapshotRevision = 0
+    @ObservationIgnored private var promptRequestRevision = 0
+    @ObservationIgnored private var hasStopped = false
     /// Tail of this conversation's outgoing order (owner requirement 2026-10-11): the
     /// client queues sends, so the host never sees a second input while one is confirming.
-    private var outboundTail: Task<Void, Never>?
+    @ObservationIgnored private var outboundTail: Task<Void, Never>?
     /// Sends handed to the outgoing order that have not finished their request yet.
     private(set) var queuedOutboundCount = 0
     /// Bounds startup, reconnect and receipt settlement before a later send leaves.
@@ -149,8 +171,8 @@ final class ConversationStore {
     private var sessionPrompts: [RichMessage] = [] {
         didSet { userPromptsCacheSeqs = nil }
     }
-    private var sessionPromptsGeneration = 0
-    private var sessionPromptsTask: Task<Void, Never>?
+    @ObservationIgnored private var sessionPromptsGeneration = 0
+    @ObservationIgnored private var sessionPromptsTask: Task<Void, Never>?
 
     /// Your prompts, oldest first: the host's full list merged with loaded
     /// messages (loaded text wins); only the loaded part on hosts without the list.
@@ -447,6 +469,7 @@ final class ConversationStore {
         snapshotRetryAttempt = 0
         eventTask?.cancel()
         eventTask = nil
+        clearStreamingDrafts()
         promptRefreshTask?.cancel()
         promptRefreshTask = nil
         sessionPromptsTask?.cancel()
@@ -985,38 +1008,48 @@ final class ConversationStore {
     }
 
     func applySnapshot(_ watch: SessionMessagesResponse) {
-        let applied = ConversationWatchApply.apply(
-            local: messages,
-            localOldest: oldestSequence,
-            localNewest: newestSequence,
-            localHasMore: hasMoreHistory,
-            localGeneration: generation,
-            incoming: watch.messages,
-            incomingOldest: watch.oldestSeq,
-            incomingNewest: watch.newestSeq,
-            incomingHasMore: watch.hasMore,
-            incomingGeneration: watch.generation,
-            resume: watch.resume
-        )
-        // Warm re-watch with identical tails must not invalidate rows: equal
-        // assignments still notify Observation and rebuild the timeline.
-        if applied.messages != messages {
-            messages = applied.messages
-        }
-        if applied.oldestSequence != oldestSequence {
-            oldestSequence = applied.oldestSequence
-        }
-        if applied.newestSequence != newestSequence {
-            newestSequence = applied.newestSequence
-        }
-        if applied.hasMoreHistory != hasMoreHistory {
-            hasMoreHistory = applied.hasMoreHistory
-        }
-        if applied.generation != generation {
-            generation = applied.generation
-        }
-        if forkMessages != nil, watch.messages.contains(where: { $0.seq > 0 }) {
-            forkMessages = nil
+        withBatchedTimelineUpdate {
+            let previousGeneration = generation
+            let applied = ConversationWatchApply.apply(
+                local: messages,
+                localOldest: oldestSequence,
+                localNewest: newestSequence,
+                localHasMore: hasMoreHistory,
+                localGeneration: generation,
+                incoming: watch.messages,
+                incomingOldest: watch.oldestSeq,
+                incomingNewest: watch.newestSeq,
+                incomingHasMore: watch.hasMore,
+                incomingGeneration: watch.generation,
+                resume: watch.resume
+            )
+            // Warm re-watch with identical tails must not invalidate rows: equal
+            // assignments still notify Observation and rebuild the timeline.
+            if applied.messages != messages {
+                messages = applied.messages
+            }
+            if applied.oldestSequence != oldestSequence {
+                oldestSequence = applied.oldestSequence
+            }
+            if applied.newestSequence != newestSequence {
+                newestSequence = applied.newestSequence
+            }
+            if applied.hasMoreHistory != hasMoreHistory {
+                hasMoreHistory = applied.hasMoreHistory
+            }
+            if applied.generation != generation {
+                generation = applied.generation
+            }
+            if forkMessages != nil, watch.messages.contains(where: { $0.seq > 0 }) {
+                forkMessages = nil
+            }
+            if watch.kind == "history_reset" || (watch.generation > 0 && watch.generation != previousGeneration) {
+                streamSeqByID.removeAll(keepingCapacity: true)
+            }
+            let nextDrafts = makeStreamingDrafts(from: watch.activeStreams, maxOfficialSeq: max(newestSequence, newestOfficialSeq))
+            if nextDrafts != streamingDrafts {
+                streamingDrafts = nextDrafts
+            }
         }
     }
 
@@ -1215,6 +1248,51 @@ final class ConversationStore {
 
     func handle(_ event: RemoteEvent) async {
         guard !hasStopped else { return }
+        if let raw = event.rawEnvelopeData {
+            let expectedSession = sessionKey
+            let decoded = await Self.decodeWireEvent(from: raw, expectedSession: expectedSession)
+            guard !hasStopped else { return }
+            switch decoded {
+            case .resync:
+                requestCatchUp(fullSnapshot: true)
+                return
+            case .ignored:
+                return
+            case let .historyReset(snapshot):
+                if snapshot.generation > generation {
+                    clearStreamingDrafts()
+                    applySnapshot(snapshot)
+                    if let client { refreshSessionPrompts(client) }
+                }
+                return
+            case let .metadata(summary, revision):
+                applyMetadata(summary: summary, revision: revision)
+                return
+            case let .stream(streamEvent):
+                applyStreamEvent(streamEvent)
+                return
+            case let .messages(incoming, fromSeq):
+                guard !incoming.isEmpty else { return }
+                if let fromSeq, newestSequence > 0, fromSeq > newestSequence + 1 {
+                    if let client {
+                        await pullSnapshot(client)
+                    }
+                    return
+                }
+                withBatchedTimelineUpdate {
+                    reconcileStreamingDrafts(with: incoming)
+                    merge(incoming)
+                }
+                if forkMessages != nil, let client {
+                    await pullSnapshot(client)
+                }
+                schedulePromptRefresh()
+                persistTail()
+                return
+            case .fallback:
+                break
+            }
+        }
         // A coalesced gap marker: the subscriber lost events, so pull the
         // authoritative tail instead of merging a partial sequence.
         if event.data["resync"] as? Bool == true {
@@ -1237,6 +1315,12 @@ final class ConversationStore {
             applyMetadata(from: event.data)
             return
         }
+        if kind == "stream" {
+            if let parsed = WireStreamEvent(from: event.data) {
+                applyStreamEvent(parsed)
+            }
+            return
+        }
         if kind == "echo" {
             applyEcho(from: event.data)
             persistTail()
@@ -1245,6 +1329,7 @@ final class ConversationStore {
         if kind == "history_reset" {
             if let snapshot = try? RemoteJSONDecoder.decode(SessionMessagesResponse.self, from: event.data),
                snapshot.generation > generation {
+                clearStreamingDrafts()
                 applySnapshot(snapshot)
                 if let client { refreshSessionPrompts(client) }
             }
@@ -1288,7 +1373,10 @@ final class ConversationStore {
             }
             return
         }
-        merge(incoming)
+        withBatchedTimelineUpdate {
+            reconcileStreamingDrafts(with: incoming)
+            merge(incoming)
+        }
         // Deltas use destination sequence numbers. Fetch its full current tail
         // before replacing source history, rather than merging unrelated seqs.
         if forkMessages != nil, let client {
@@ -1303,6 +1391,10 @@ final class ConversationStore {
         guard let summaryDict = data["summary"] as? [String: Any],
               let summary = try? RemoteJSONDecoder.decode(SessionSummary.self, from: summaryDict)
         else { return }
+        applyMetadata(summary: summary, revision: SessionListStore.revision(from: data))
+    }
+
+    private func applyMetadata(summary: SessionSummary, revision: UInt64?) {
         attentionRevision += 1
         let wasWorking = isAssistantWorking
         applyAuthoritativeAttention(summary.attention)
@@ -1310,7 +1402,7 @@ final class ConversationStore {
         if summary.live != isLive {
             isLive = summary.live
         }
-        onSessionMetadata?(summary, SessionListStore.revision(from: data))
+        onSessionMetadata?(summary, revision)
     }
 
     private func merge(_ incoming: [RichMessage]) {
@@ -1585,6 +1677,146 @@ final class ConversationStore {
         )
     }
 
+    private func allocateStreamSeq(for streamID: String) -> Int {
+        if let existing = streamSeqByID[streamID] {
+            return existing
+        }
+        let assigned = nextStreamSeq
+        if nextStreamSeq > Int.min {
+            nextStreamSeq -= 1
+        }
+        streamSeqByID[streamID] = assigned
+        return assigned
+    }
+
+    private func clearStreamingDrafts() {
+        streamSeqByID.removeAll(keepingCapacity: true)
+        if !streamingDrafts.isEmpty {
+            streamingDrafts = []
+        }
+    }
+
+    private func makeStreamingDrafts(
+        from snapshots: [WireStreamDraft]?,
+        maxOfficialSeq: Int
+    ) -> [StreamingDraft] {
+        guard let snapshots, !snapshots.isEmpty else { return [] }
+        var result: [StreamingDraft] = []
+        for snap in snapshots {
+            guard !snap.streamID.isEmpty,
+                  !snap.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+            if snap.complete && maxOfficialSeq > snap.afterSeq {
+                continue
+            }
+            result.append(StreamingDraft(
+                streamID: snap.streamID,
+                syntheticSeq: allocateStreamSeq(for: snap.streamID),
+                text: snap.text,
+                rev: snap.rev,
+                afterSeq: snap.afterSeq,
+                complete: snap.complete,
+                timestamp: snap.timestamp
+            ))
+        }
+        return result
+    }
+
+    private func applyStreamEvent(_ event: WireStreamEvent) {
+        let op = event.op.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch op {
+        case "clear":
+            guard let sid = event.streamID, !sid.isEmpty else {
+                clearStreamingDrafts()
+                return
+            }
+            streamingDrafts.removeAll { $0.streamID == sid }
+            streamSeqByID.removeValue(forKey: sid)
+        case "replace":
+            guard let sid = event.streamID, !sid.isEmpty else { return }
+            let nextText = event.text ?? ""
+            if let idx = streamingDrafts.firstIndex(where: { $0.streamID == sid }) {
+                guard event.rev >= streamingDrafts[idx].rev else { return }
+                var draft = streamingDrafts[idx]
+                draft.text = nextText
+                draft.rev = event.rev
+                if let afterSeq = event.afterSeq { draft.afterSeq = afterSeq }
+                draft.complete = draft.complete || event.complete
+                if let timestamp = event.timestamp { draft.timestamp = timestamp }
+                streamingDrafts[idx] = draft
+            } else {
+                guard !nextText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                let seq = allocateStreamSeq(for: sid)
+                streamingDrafts.append(StreamingDraft(
+                    streamID: sid,
+                    syntheticSeq: seq,
+                    text: nextText,
+                    rev: event.rev,
+                    afterSeq: event.afterSeq ?? newestOfficialSeq,
+                    complete: event.complete,
+                    timestamp: event.timestamp
+                ))
+            }
+        case "delta":
+            guard let sid = event.streamID, !sid.isEmpty else { return }
+            let chunk = event.delta ?? ""
+            if let idx = streamingDrafts.firstIndex(where: { $0.streamID == sid }) {
+                guard event.rev > streamingDrafts[idx].rev else { return }
+                var draft = streamingDrafts[idx]
+                if !chunk.isEmpty {
+                    draft.text += chunk
+                }
+                draft.rev = event.rev
+                if let afterSeq = event.afterSeq { draft.afterSeq = afterSeq }
+                draft.complete = draft.complete || event.complete
+                if let timestamp = event.timestamp { draft.timestamp = timestamp }
+                streamingDrafts[idx] = draft
+            } else if event.rev == 1 && !chunk.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                let seq = allocateStreamSeq(for: sid)
+                streamingDrafts.append(StreamingDraft(
+                    streamID: sid,
+                    syntheticSeq: seq,
+                    text: chunk,
+                    rev: event.rev,
+                    afterSeq: event.afterSeq ?? newestOfficialSeq,
+                    complete: event.complete,
+                    timestamp: event.timestamp
+                ))
+            }
+        default:
+            break
+        }
+    }
+
+    private func reconcileStreamingDrafts(with incoming: [RichMessage]) {
+        guard !streamingDrafts.isEmpty else { return }
+        let officialAssistants = incoming.filter {
+            $0.seq > 0 && $0.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "assistant"
+        }
+        guard !officialAssistants.isEmpty else { return }
+        let maxSeq = officialAssistants.map(\.seq).max() ?? 0
+        var kept: [StreamingDraft] = []
+        for draft in streamingDrafts {
+            let trimmed = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let bodyMatched = !trimmed.isEmpty && officialAssistants.contains { msg in
+                guard msg.seq > draft.afterSeq || draft.afterSeq == 0 else { return false }
+                let body = ConversationMessageMerge.normalizedText(msg.text)
+                guard !body.isEmpty else { return false }
+                return body == trimmed
+                    || body.hasPrefix(trimmed)
+                    || (trimmed.count >= 16 && body.contains(trimmed))
+            }
+            let completedSuperseded = draft.complete && maxSeq > draft.afterSeq
+            if bodyMatched || completedSuperseded {
+                streamSeqByID.removeValue(forKey: draft.streamID)
+            } else {
+                kept.append(draft)
+            }
+        }
+        if kept != streamingDrafts {
+            streamingDrafts = kept
+        }
+    }
+
     private func schedulePromptRefresh() {
         promptRefreshTask?.cancel()
         promptRefreshTask = Task { [weak self] in
@@ -1595,6 +1827,183 @@ final class ConversationStore {
             }
             guard !Task.isCancelled, let self else { return }
             await self.loadPrompts()
+        }
+    }
+}
+
+private nonisolated struct WireStreamEvent: Decodable, Sendable {
+    let streamID: String?
+    let op: String
+    let rev: Int
+    let text: String?
+    let delta: String?
+    let afterSeq: Int?
+    let complete: Bool
+    let timestamp: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case streamID = "stream_id"
+        case op, rev, text, delta, complete, timestamp
+        case afterSeq = "after_seq"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        streamID = container.decodeFlexibleOptionalString(forKey: .streamID)
+        op = container.decodeFlexibleString(forKey: .op, default: "")
+        rev = container.decodeFlexibleInt(forKey: .rev, default: 0)
+        text = container.decodeFlexibleOptionalString(forKey: .text)
+        delta = container.decodeFlexibleOptionalString(forKey: .delta)
+        afterSeq = container.contains(.afterSeq) ? container.decodeFlexibleInt(forKey: .afterSeq) : nil
+        complete = container.decodeFlexibleBool(forKey: .complete)
+        timestamp = container.contains(.timestamp) ? container.decodeFlexibleDouble(forKey: .timestamp) : nil
+    }
+
+    init?(from dict: [String: Any]) {
+        guard let op = dict["op"] as? String, !op.isEmpty else { return nil }
+        self.op = op
+        self.streamID = dict["stream_id"] as? String
+        if let rev = dict["rev"] as? Int {
+            self.rev = rev
+        } else if let rev = dict["rev"] as? Double {
+            self.rev = Int(rev)
+        } else {
+            self.rev = 0
+        }
+        self.text = dict["text"] as? String
+        self.delta = dict["delta"] as? String
+        if let after = dict["after_seq"] as? Int {
+            self.afterSeq = after
+        } else if let after = dict["after_seq"] as? Double {
+            self.afterSeq = Int(after)
+        } else {
+            self.afterSeq = nil
+        }
+        self.complete = (dict["complete"] as? Bool) ?? false
+        self.timestamp = dict["timestamp"] as? Double
+    }
+}
+
+private nonisolated enum DecodedConversationWireEvent: Sendable {
+    case resync
+    case ignored
+    case historyReset(SessionMessagesResponse)
+    case metadata(SessionSummary, UInt64?)
+    case stream(WireStreamEvent)
+    case messages([RichMessage], fromSeq: Int?)
+    case fallback
+}
+
+private nonisolated struct ConversationEventPayload: Decodable, Sendable {
+    let resync: Bool
+    let session: String?
+    let kind: String?
+    let summary: SessionSummary?
+    let revision: UInt64?
+    let fromSeq: Int?
+    let message: RichMessage?
+    let messages: [RichMessage]
+    let streamID: String?
+    let op: String?
+    let rev: Int?
+    let text: String?
+    let delta: String?
+    let afterSeq: Int?
+    let complete: Bool
+    let timestamp: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case resync, session, kind, summary, revision, epoch
+        case fromSeq = "from_seq"
+        case message, messages
+        case streamID = "stream_id"
+        case op, rev, text, delta, complete, timestamp
+        case afterSeq = "after_seq"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        resync = container.decodeFlexibleBool(forKey: .resync)
+        session = container.decodeFlexibleOptionalString(forKey: .session)
+        kind = container.decodeFlexibleOptionalString(forKey: .kind)
+        summary = try? container.decodeIfPresent(SessionSummary.self, forKey: .summary)
+        if container.contains(.revision) {
+            revision = UInt64(max(0, container.decodeFlexibleDouble(forKey: .revision)))
+        } else if container.contains(.epoch) {
+            revision = UInt64(max(0, container.decodeFlexibleDouble(forKey: .epoch)))
+        } else {
+            revision = nil
+        }
+        fromSeq = container.contains(.fromSeq) ? container.decodeFlexibleInt(forKey: .fromSeq) : nil
+        message = try? container.decodeIfPresent(RichMessage.self, forKey: .message)
+        if let wrapped = try? container.decodeIfPresent([FailableDecodable<RichMessage>].self, forKey: .messages) {
+            messages = wrapped.compactMap(\.value).filter { $0.seq > 0 }
+        } else {
+            messages = []
+        }
+        streamID = container.decodeFlexibleOptionalString(forKey: .streamID)
+        op = container.decodeFlexibleOptionalString(forKey: .op)
+        rev = container.contains(.rev) ? container.decodeFlexibleInt(forKey: .rev) : nil
+        text = container.decodeFlexibleOptionalString(forKey: .text)
+        delta = container.decodeFlexibleOptionalString(forKey: .delta)
+        afterSeq = container.contains(.afterSeq) ? container.decodeFlexibleInt(forKey: .afterSeq) : nil
+        complete = container.decodeFlexibleBool(forKey: .complete)
+        timestamp = container.contains(.timestamp) ? container.decodeFlexibleDouble(forKey: .timestamp) : nil
+    }
+
+    var streamEvent: WireStreamEvent? {
+        guard let op, !op.isEmpty else { return nil }
+        return WireStreamEvent(from: [
+            "op": op,
+            "stream_id": streamID as Any,
+            "rev": rev ?? 0,
+            "text": text as Any,
+            "delta": delta as Any,
+            "after_seq": afterSeq as Any,
+            "complete": complete,
+            "timestamp": timestamp as Any,
+        ].compactMapValues { value in
+            if case Optional<Any>.none = value { return nil }
+            return value
+        })
+    }
+}
+
+private extension ConversationStore {
+    @concurrent
+    static func decodeWireEvent(from rawEnvelope: Data, expectedSession: String) async -> DecodedConversationWireEvent {
+        guard let payload = try? RemoteJSONDecoder.decodeEnvelopeData(ConversationEventPayload.self, from: rawEnvelope) else {
+            return .fallback
+        }
+        if payload.resync { return .resync }
+        if let eventSession = payload.session, eventSession != expectedSession { return .ignored }
+        let kind = payload.kind?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        switch kind {
+        case "attention", "echo", "command", "command_status", "receipt":
+            return .fallback
+        case "stream":
+            if let stream = payload.streamEvent {
+                return .stream(stream)
+            }
+            return .ignored
+        case "history_reset":
+            if let snapshot = try? RemoteJSONDecoder.decodeEnvelopeData(SessionMessagesResponse.self, from: rawEnvelope) {
+                return .historyReset(snapshot)
+            }
+            return .ignored
+        case "metadata":
+            if let summary = payload.summary {
+                return .metadata(summary, payload.revision)
+            }
+            return .ignored
+        default:
+            if let single = payload.message, single.seq > 0 {
+                return .messages([single], fromSeq: payload.fromSeq)
+            }
+            if !payload.messages.isEmpty {
+                return .messages(payload.messages, fromSeq: payload.fromSeq)
+            }
+            return .ignored
         }
     }
 }

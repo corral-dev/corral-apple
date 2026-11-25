@@ -5,7 +5,7 @@ import UIKit
 /// SwiftTerm's UIKit terminal fed by a host shell or agent stream. The view's own grid
 /// (its frame at the phone font) is the size it votes; the host makes the
 /// latest active viewer's grid the shell's, so typing here sizes the shell to
-/// the phone. SwiftTerm's keyboard accessory supplies Esc, Ctrl, Tab and arrows.
+/// the phone. The terminal input accessory supplies Esc, Ctrl, Tab and arrows.
 struct ShellTerminalView: UIViewRepresentable {
     let stream: RemoteTerminalStream
     var isPresented = true
@@ -153,6 +153,7 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
         self.currentFontSize = clamped
         super.init(frame: frame, font: UIFont.monospacedSystemFont(ofSize: clamped, weight: .regular))
         terminalDelegate = self
+        inputAccessoryView = TerminalShortcutStrip(terminal: self)
         changeScrollback(10_000)
         touchInteraction = TerminalTouchInteraction(terminal: self)
         applyScheme()
@@ -526,7 +527,13 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
         feedingHost = true
         defer { feedingHost = false }
         feedPreservingSelection(data)
-        allowMouseReporting = !hasActiveSelection
+        updateMouseReportingForSelection(!hasActiveSelection)
+    }
+
+    private func updateMouseReportingForSelection(_ enabled: Bool) {
+        guard allowMouseReporting != enabled else { return }
+        allowMouseReporting = enabled
+        (inputAccessoryView as? TerminalShortcutStrip)?.refreshState()
     }
 
     /// Replies the emulator produces while drawing host output are dropped:
@@ -552,7 +559,7 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
         super.selectionChanged(source: source)
         Task { @MainActor [weak self] in
             guard let self else { return }
-            self.allowMouseReporting = !self.selectionActive
+            self.updateMouseReportingForSelection(!self.selectionActive)
         }
     }
 

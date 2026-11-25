@@ -15,7 +15,7 @@ struct MacSessionMenuItems: View {
     }
 
     private var connected: Bool { appModel.client?.state == .ready }
-    /// A read-only pairing still switches views, exports JSON and copies paths;
+    /// A read-only pairing still switches views, exports sessions and copies paths;
     /// mutating session actions are unavailable.
     private var readonly: Bool { SessionActionsMenu.isReadonly(access: appModel.connectedAccess) }
     private var canMutate: Bool { connected && !readonly }
@@ -109,6 +109,16 @@ struct MacSessionMenuItems: View {
             .disabled(!canMutate || workspace.isStopping(session.key))
         }
         Divider()
+        let corralID = session.resolvedCorralID
+        Button {
+            workspace.copyCorralID(corralID, key: session.key)
+        } label: {
+            Label("session.actions.copy_corral_id", systemImage: "doc.on.doc")
+            if !corralID.isEmpty {
+                Text(verbatim: corralID)
+            }
+        }
+        .disabled(corralID.isEmpty)
         Button {
             PlatformPasteboard.copy(SessionPresentation.fullWorkspacePath(from: session))
         } label: {
@@ -150,6 +160,13 @@ struct MacBatchSessionMenuItems: View {
             Label("mac.session.open_in_split", systemImage: "rectangle.split.2x1")
         }
         .disabled(!workspace.canOpenAsSplit(targets))
+        let corralIDs = batchCorralIDs(from: targets)
+        Button {
+            workspace.copyCorralIDs(corralIDs)
+        } label: {
+            Label("mac.sessions.copy_corral_ids", systemImage: "doc.on.doc")
+        }
+        .disabled(corralIDs.isEmpty)
         Button {
             var seen: Set<String> = []
             let paths = targets.map(SessionPresentation.fullWorkspacePath)
@@ -188,6 +205,12 @@ struct MacBatchSessionMenuItems: View {
             Label("mac.sessions.delete \(targets.count)", systemImage: "trash")
         }
         .disabled(!canMutate || busy)
+    }
+
+    private func batchCorralIDs(from targets: [SessionSummary]) -> [String] {
+        var seen: Set<String> = []
+        return targets.map(\.resolvedCorralID)
+            .filter { !$0.isEmpty && seen.insert($0).inserted }
     }
 
     /// TUI semantics: a split is one pin unit. A selection made entirely from

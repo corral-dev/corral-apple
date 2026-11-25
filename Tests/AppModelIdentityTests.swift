@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 @testable import Corral
 import XCTest
 
@@ -60,5 +61,59 @@ final class AppModelIdentityTests: XCTestCase {
         }
         XCTAssertEqual(model.connectedHostID, "host-a")
     }
+
+    func testSteadyReadyWatcherEmitsZeroObservationInvalidationsAndRespectsGrace() async throws {
+        let model = AppModel()
+        let client = RemoteClient(devicePrivateKey: Data(repeating: 1, count: 32))
+        defer {
+            model.disconnect()
+            client.disconnect()
+        }
+        client.setConnectionStateForTesting(.ready)
+        client.controlConfirmed = true
+        client.activeTransport = .local
+        model.observeConnectionForTesting(client, hostID: "host-steady")
+        XCTAssertEqual(model.connectionState, .connected)
+
+        let invalidations = ObservationCounter()
+        withObservationTracking {
+            _ = model.connectionState
+            _ = model.activeTransport
+            _ = model.connectedHostID
+            _ = model.connectedAccess
+            _ = model.connectedRuntimes
+        } onChange: {
+            invalidations.increment()
+        }
+        try await Task.sleep(for: .milliseconds(450))
+        XCTAssertEqual(invalidations.value, 0)
+
+        client.setConnectionStateForTesting(.ready)
+        client.controlConfirmed = true
+        client.activeTransport = .local
+        XCTAssertEqual(invalidations.value, 0)
+
+        client.controlConfirmed = false
+        client.setConnectionStateForTesting(.reconnecting)
+        XCTAssertEqual(model.connectionState, .connected)
+        try await Task.sleep(for: .seconds(TransientDropPolicy.presentationGrace + 0.15))
+        XCTAssertEqual(model.connectionState, .reconnecting)
+        XCTAssertGreaterThan(invalidations.value, 0)
+    }
 #endif
+}
+
+private final class ObservationCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
+    }
+    func increment() {
+        lock.lock()
+        count += 1
+        lock.unlock()
+    }
 }

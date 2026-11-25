@@ -30,6 +30,8 @@ final class AppModel {
     private(set) var client: RemoteClient?
     /// Restart feedback shared by the iPhone and Mac session surfaces.
     let restarts = SessionRestartTracker()
+    /// Follow-up prompt queue shared across active and background sessions.
+    let followUpQueue = FollowUpQueueStore()
     /// 开启时局域网与中继并发抢答；关闭时只走中继（写入 UserDefaults）。
     var preferDirectConnection: Bool {
         didSet {
@@ -83,15 +85,19 @@ final class AppModel {
         didSet { UserDefaults.standard.set(appAppearance.rawValue, forKey: AppAppearance.storageKey) }
     }
 
-    private let hostStore: HostStore
-    private var stateWatchTask: Task<Void, Never>?
-    private var pathMonitor: NWPathMonitor?
-    private var lastPathSignature: String?
-    private var deferredPathCheck = false
+    @ObservationIgnored private let hostStore: HostStore
+    @ObservationIgnored private var stateWatchTask: Task<Void, Never>?
+    @ObservationIgnored private var stateChangeHandlerID: UUID?
+    @ObservationIgnored private weak var stateChangeClient: RemoteClient?
+    @ObservationIgnored private var readyWatchHandlerID: UUID?
+    @ObservationIgnored private var transientDropAt: Date?
+    @ObservationIgnored private var pathMonitor: NWPathMonitor?
+    @ObservationIgnored private var lastPathSignature: String?
+    @ObservationIgnored private var deferredPathCheck = false
     /// 冷启动抢答期间忽略 path 回调，避免刚开跑就被强制重连掐死。
-    private var suppressPathReconnectUntil: Date?
+    @ObservationIgnored private var suppressPathReconnectUntil: Date?
     /// 同一台开发机正在连时，后来的调用等这一轮结束，不要再开一条。
-    private var inFlightHostID: String?
+    @ObservationIgnored private var inFlightHostID: String?
 
     init(hostStore: HostStore = .shared) {
         self.hostStore = hostStore
@@ -118,6 +124,7 @@ final class AppModel {
             stored: UserDefaults.standard.string(forKey: AppAppearance.storageKey)
         )
         startPathMonitor()
+        configureFollowUpQueue()
         ChatMarkdown.prewarm()
     }
 
@@ -195,16 +202,17 @@ final class AppModel {
         }
         #endif
         disconnect(clearSelection: false)
-        connectionState = .connecting
-        activeTransport = nil
-        selectedHostID = host.hostID
+        if connectionState != .connecting { connectionState = .connecting }
+        if activeTransport != nil { activeTransport = nil }
+        if selectedHostID != host.hostID { selectedHostID = host.hostID }
         suppressPathReconnectUntil = Date().addingTimeInterval(PathReconnectGate.suppressSeconds)
 
         let remote: RemoteClient
         do {
             remote = try RemoteClient(hostStore: hostStore)
         } catch {
-            connectionState = .failed(ConnectionFailureMessage.text(for: error))
+            let message = ConnectionFailureMessage.text(for: error)
+            if connectionState != .failed(message) { connectionState = .failed(message) }
             return
         }
         configureClientTheme(remote)
@@ -226,18 +234,22 @@ final class AppModel {
                 applyHelloRelayIfNeeded(hello, hostID: host.hostID)
                 applyHelloLocalHintsIfNeeded(hello, hostID: host.hostID)
                 applyHelloHostNameIfNeeded(hello, hostID: host.hostID)
-                connectedAccess = hello.access
-                connectedRuntimes = remote.hostRuntimes
-                connectedHostID = host.hostID
-                connectionState = .connected
-                activeTransport = remote.activeTransport
+                applyConnectionPresentation(
+                    state: .connected,
+                    transport: remote.activeTransport,
+                    hostID: host.hostID,
+                    access: hello.access,
+                    runtimes: remote.hostRuntimes
+                )
                 suppressPathReconnectUntil = nil
                 if deferredPathCheck { deferredPathCheck = false; handleSceneBecameActive() }
                 if preferDirectConnection, remote.activeTransport == .relay {
                     Task { [weak remote, weak self] in
                         await remote?.tryUpgradeToLocalIfNeeded()
                         guard let self, let remote, self.client === remote else { return }
-                        self.activeTransport = remote.activeTransport
+                        if self.activeTransport != remote.activeTransport {
+                            self.activeTransport = remote.activeTransport
+                        }
                     }
                 }
                 await requestPushAuthorizationIfNeeded()
@@ -253,22 +265,30 @@ final class AppModel {
         } catch is CancellationError {
             guard client === remote else { return }
             if remote.isUsable {
-                connectionState = .connected
-                connectedHostID = host.hostID
-                activeTransport = remote.activeTransport
+                applyConnectionPresentation(
+                    state: .connected,
+                    transport: remote.activeTransport,
+                    hostID: host.hostID,
+                    access: remote.confirmedAccess,
+                    runtimes: remote.hostRuntimes
+                )
                 return
             }
             if remote.state == .reconnecting || remote.state == .connecting {
-                connectionState = .reconnecting
+                if connectionState != .reconnecting { connectionState = .reconnecting }
                 return
             }
             failConnection(from: remote, message: String(localized: String.LocalizationValue("connection.failed")))
         } catch {
             guard client === remote else { return }
             if remote.isUsable {
-                connectionState = .connected
-                connectedHostID = host.hostID
-                activeTransport = remote.activeTransport
+                applyConnectionPresentation(
+                    state: .connected,
+                    transport: remote.activeTransport,
+                    hostID: host.hostID,
+                    access: remote.confirmedAccess,
+                    runtimes: remote.hostRuntimes
+                )
                 return
             }
             remote.recoverConnection(after: error)
@@ -278,27 +298,29 @@ final class AppModel {
 
     private func failConnection(from remote: RemoteClient, message: String) {
         guard client === remote else { return }
-        stateWatchTask?.cancel()
-        stateWatchTask = nil
+        stopWatchingClientState()
         remote.disconnect()
         client = nil
-        activeTransport = nil
-        connectedHostID = nil
-        connectedAccess = nil
-        connectedRuntimes = []
-        connectionState = .failed(message)
+        applyConnectionPresentation(
+            state: .failed(message),
+            transport: nil,
+            hostID: nil,
+            access: nil,
+            runtimes: []
+        )
     }
 
     func disconnect(clearSelection: Bool = true) {
-        stateWatchTask?.cancel()
-        stateWatchTask = nil
+        stopWatchingClientState()
         client?.disconnect()
         client = nil
-        activeTransport = nil
-        connectedHostID = nil
-        connectedAccess = nil
-        connectedRuntimes = []
-        connectionState = .disconnected
+        applyConnectionPresentation(
+            state: .disconnected,
+            transport: nil,
+            hostID: nil,
+            access: nil,
+            runtimes: []
+        )
         if clearSelection {
             selectedHostID = nil
         }
@@ -407,108 +429,165 @@ final class AppModel {
 
     /// 把底层连接状态同步到界面，避免重连中仍显示「已连接」。
     private func beginWatchingClientState(_ remote: RemoteClient, hostID: String) {
-        stateWatchTask?.cancel()
-        remote.addReadyHandler { [weak self, weak remote] in
+        stopWatchingClientState()
+        stateChangeClient = remote
+        readyWatchHandlerID = remote.addReadyHandler { [weak self, weak remote] in
             guard let self, let remote, self.client === remote, remote.isUsable else { return }
-            self.connectedHostID = hostID
-            self.connectedAccess = remote.confirmedAccess
-            self.connectedRuntimes = remote.hostRuntimes
-            self.connectionState = .connected
-            self.activeTransport = remote.activeTransport
+            self.applyConnectionPresentation(
+                state: .connected,
+                transport: remote.activeTransport,
+                hostID: hostID,
+                access: remote.confirmedAccess,
+                runtimes: remote.hostRuntimes
+            )
             if self.deferredPathCheck { self.deferredPathCheck = false; self.handleSceneBecameActive() }
         }
-        stateWatchTask = Task { [weak self] in
-            var last = remote.state
-            var lastTransport = remote.activeTransport
-            // When a connected client dropped; nil while ready.
-            var droppedAt: Date?
-            while !Task.isCancelled {
-                let current = remote.state
-                let transport = remote.activeTransport
-                let inGrace = droppedAt != nil && current != .ready && current != .disconnected
-                if current != last || transport != lastTransport || current == .ready || inGrace {
-                    last = current
-                    lastTransport = transport
-                    guard let self, self.client === remote else { return }
-                    switch current {
-                    case .ready:
-                        guard remote.controlConfirmed else {
-                            if self.connectionState == .connected {
-                                let since = droppedAt ?? Date()
-                                droppedAt = since
-                                if TransientDropPolicy.shouldShowReconnecting(droppedAt: since) {
-                                    self.connectionState = .reconnecting
-                                    self.activeTransport = nil
-                                }
-                            }
-                            try? await Task.sleep(for: .milliseconds(200))
-                            continue
-                        }
-                        droppedAt = nil
-                        self.connectedAccess = remote.confirmedAccess
-                        self.connectedRuntimes = remote.hostRuntimes
-                        self.activeTransport = transport
-                        self.connectionState = .connected
-                        self.connectedHostID = hostID
-                    case .connecting, .handshaking, .reconnecting:
-                        guard self.connectionState == .connected else {
-                            self.activeTransport = transport
-                            break
-                        }
-                        // The immediate reconnect usually lands within milliseconds;
-                        // keep the connected bar (and its transport) through the grace.
-                        let since = droppedAt ?? Date()
-                        droppedAt = since
-                        if TransientDropPolicy.shouldShowReconnecting(droppedAt: since) {
-                            droppedAt = nil
-                            self.activeTransport = transport
-                            self.connectionState = .reconnecting
-                        }
-                    case .disconnected:
-                        droppedAt = nil
-                        self.connectionState = remote.terminalConnectionError.map { .failed($0) } ?? .disconnected
-                        self.connectedAccess = nil
-                        self.connectedRuntimes = []
-                        self.connectedHostID = nil
-                        self.activeTransport = nil
-                    }
-                    if current == .ready { last = current }
-                }
-                try? await Task.sleep(for: .milliseconds(200))
-            }
+        stateChangeHandlerID = remote.addStateChangeHandler { [weak self, weak remote] in
+            guard let self, let remote else { return }
+            self.syncWatchedClient(remote, hostID: hostID)
         }
+        syncWatchedClient(remote, hostID: hostID)
+    }
+
+    private func stopWatchingClientState() {
+        stateWatchTask?.cancel()
+        stateWatchTask = nil
+        transientDropAt = nil
+        if let stateChangeHandlerID {
+            stateChangeClient?.removeStateChangeHandler(stateChangeHandlerID)
+        }
+        if let readyWatchHandlerID {
+            stateChangeClient?.removeReadyHandler(readyWatchHandlerID)
+        }
+        stateChangeHandlerID = nil
+        readyWatchHandlerID = nil
+        stateChangeClient = nil
+    }
+
+    private func syncWatchedClient(_ remote: RemoteClient, hostID: String) {
+        guard client === remote else {
+            stopWatchingClientState()
+            return
+        }
+        let current = remote.state
+        let transport = remote.activeTransport
+        switch current {
+        case .ready:
+            guard remote.controlConfirmed else {
+                handleTransientDrop(remote: remote, hostID: hostID, targetTransport: nil)
+                return
+            }
+            transientDropAt = nil
+            stateWatchTask?.cancel()
+            stateWatchTask = nil
+            applyConnectionPresentation(
+                state: .connected,
+                transport: transport,
+                hostID: hostID,
+                access: remote.confirmedAccess,
+                runtimes: remote.hostRuntimes
+            )
+        case .connecting, .handshaking, .reconnecting:
+            guard connectionState == .connected else {
+                transientDropAt = nil
+                stateWatchTask?.cancel()
+                stateWatchTask = nil
+                if activeTransport != transport { activeTransport = transport }
+                return
+            }
+            handleTransientDrop(remote: remote, hostID: hostID, targetTransport: transport)
+        case .disconnected:
+            transientDropAt = nil
+            stateWatchTask?.cancel()
+            stateWatchTask = nil
+            applyConnectionPresentation(
+                state: remote.terminalConnectionError.map { .failed($0) } ?? .disconnected,
+                transport: nil,
+                hostID: nil,
+                access: nil,
+                runtimes: []
+            )
+        }
+    }
+
+    private func handleTransientDrop(
+        remote: RemoteClient,
+        hostID: String,
+        targetTransport: ConnectionTransport?
+    ) {
+        // Immediate reconnects usually settle within milliseconds; keep the
+        // connected bar during grace and schedule one wake-up at expiry.
+        let since = transientDropAt ?? Date()
+        transientDropAt = since
+        if TransientDropPolicy.shouldShowReconnecting(droppedAt: since) {
+            transientDropAt = nil
+            stateWatchTask?.cancel()
+            stateWatchTask = nil
+            if activeTransport != targetTransport { activeTransport = targetTransport }
+            if connectionState != .reconnecting { connectionState = .reconnecting }
+            return
+        }
+        guard stateWatchTask == nil else { return }
+        let remaining = max(0.05, TransientDropPolicy.presentationGrace - Date().timeIntervalSince(since) + 0.02)
+        stateWatchTask = Task { [weak self, weak remote] in
+            try? await Task.sleep(for: .seconds(remaining))
+            guard !Task.isCancelled, let self, let remote else { return }
+            self.stateWatchTask = nil
+            self.syncWatchedClient(remote, hostID: hostID)
+        }
+    }
+
+    private func applyConnectionPresentation(
+        state: ConnectionState,
+        transport: ConnectionTransport?,
+        hostID: String?,
+        access: String?,
+        runtimes: [RuntimeEntry]
+    ) {
+        if connectedAccess != access { connectedAccess = access }
+        if connectedRuntimes != runtimes { connectedRuntimes = runtimes }
+        if activeTransport != transport { activeTransport = transport }
+        if connectionState != state { connectionState = state }
+        if connectedHostID != hostID { connectedHostID = hostID }
     }
 
     private func syncConnectionPresentation() {
         guard let client else { return }
-        activeTransport = client.activeTransport
+        if activeTransport != client.activeTransport { activeTransport = client.activeTransport }
         switch client.state {
         case .ready:
             if client.controlConfirmed {
-                connectionState = .connected
-                connectedAccess = client.confirmedAccess
-                connectedRuntimes = client.hostRuntimes
-                connectedHostID = client.reconnectHost?.hostID
+                applyConnectionPresentation(
+                    state: .connected,
+                    transport: client.activeTransport,
+                    hostID: client.reconnectHost?.hostID,
+                    access: client.confirmedAccess,
+                    runtimes: client.hostRuntimes
+                )
             } else {
-                connectionState = .connecting
+                if connectionState != .connecting { connectionState = .connecting }
             }
         case .connecting, .handshaking, .reconnecting:
             // A connected bar is left to the state watcher, which applies the
             // transient-drop grace; flipping here would flash Reconnecting on
             // every return to the foreground even when the reconnect is instant.
-            if !TransientDropPolicy.syncKeepsConnectedBar(isConnectedBar: connectionState == .connected) {
+            if !TransientDropPolicy.syncKeepsConnectedBar(isConnectedBar: connectionState == .connected),
+               connectionState != .reconnecting {
                 connectionState = .reconnecting
             }
         case .disconnected:
-            connectionState = client.terminalConnectionError.map { .failed($0) } ?? .disconnected
-            connectedAccess = nil
-            connectedRuntimes = []
-            connectedHostID = nil
-            activeTransport = nil
+            applyConnectionPresentation(
+                state: client.terminalConnectionError.map { .failed($0) } ?? .disconnected,
+                transport: nil,
+                hostID: nil,
+                access: nil,
+                runtimes: []
+            )
         }
     }
 
     func removeHost(_ host: HostInfo) {
+        followUpQueue.clearHost(hostID: host.hostID)
         ChatDiagramRenderer.shared.forget(host: host.hostID)
         hostStore.removeHost(hostID: host.hostID)
         refreshHosts()
@@ -681,4 +760,128 @@ nonisolated enum HostConnectionDecision: Sendable {
 extension AppModel {
     /// Identity of the live client, so views restart host subscriptions when it is replaced.
     var clientIdentity: ObjectIdentifier? { client.map(ObjectIdentifier.init) }
+
+    func syncFollowUpQueueFromSessionList(_ sessions: [SessionSummary], hostID: String) {
+        let isReady = connectedHostID == hostID && connectionState == .connected && client?.state == .ready
+        followUpQueue.syncUnmountedSessions(sessions, hostID: hostID, isHostReady: isReady)
+    }
+
+    private func configureFollowUpQueue() {
+        followUpQueue.backgroundDispatcher = { [weak self] target, item in
+            guard let self else { return .deferred }
+            return await self.dispatchFollowUpInBackground(target: target, item: item)
+        }
+    }
+
+    private func dispatchFollowUpInBackground(
+        target: FollowUpTarget,
+        item: FollowUpItem
+    ) async -> FollowUpDispatchResult {
+        #if DEBUG
+        guard !ProcessInfo.processInfo.arguments.contains("-CorralInspectFollowUpQueue") else {
+            return .deferred
+        }
+        #endif
+        guard connectedHostID == target.hostID,
+              connectionState == .connected,
+              let client,
+              client.state == .ready else {
+            return .deferred
+        }
+        if !item.files.isEmpty && !client.supportsInputFile {
+            return .failed(String(localized: "composer.file_host_unsupported"))
+        }
+        do {
+            for image in item.images {
+                let commandID = image.commandID ?? UUID().uuidString
+                let payload = try await client.call(
+                    WireProtocol.mInputImage,
+                    params: [
+                        "key": target.sessionKey,
+                        "data": image.base64,
+                        "command_id": commandID,
+                    ]
+                )
+                try validateFollowUpReceipt(payload: payload)
+            }
+            for file in item.files {
+                try await sendQueuedFile(file, sessionKey: target.sessionKey, client: client)
+            }
+            let textCommandID = UUID().uuidString
+            let payload = try await client.call(
+                WireProtocol.mInputText,
+                params: [
+                    "key": target.sessionKey,
+                    "text": item.text,
+                    "submit": true,
+                    "command_id": textCommandID,
+                    "lease_sec": 90,
+                ]
+            )
+            try validateFollowUpReceipt(payload: payload)
+            return .sent
+        } catch {
+            let message = (error as? RemoteCallError)?.message ?? error.localizedDescription
+            return .failed(message)
+        }
+    }
+
+    private func sendQueuedFile(
+        _ file: StagedSendFile,
+        sessionKey: String,
+        client: RemoteClient
+    ) async throws {
+        guard !file.data.isEmpty, file.data.count <= ComposerSendPolicy.maxFileAttachmentBytes else {
+            throw CommandDeliveryError.rejected(String(localized: "composer.file_too_large"))
+        }
+        let commandID = file.commandID ?? UUID().uuidString
+        let chunkSize = ComposerSendPolicy.fileChunkRawBytes
+        let chunkCount = max(1, (file.data.count + chunkSize - 1) / chunkSize)
+        if chunkCount == 1 {
+            let payload = try await client.call(
+                WireProtocol.mInputFile,
+                params: [
+                    "key": sessionKey,
+                    "filename": file.name,
+                    "data": file.data.base64EncodedString(),
+                    "command_id": commandID,
+                ]
+            )
+            try validateFollowUpReceipt(payload: payload)
+            return
+        }
+        let uploadID = UUID().uuidString
+        var lastPayload: Any = [:]
+        for index in 0..<chunkCount {
+            let start = index * chunkSize
+            let end = min(file.data.count, start + chunkSize)
+            let chunk = file.data[start..<end]
+            var params: [String: Any] = [
+                "key": sessionKey,
+                "filename": file.name,
+                "data": chunk.base64EncodedString(),
+                "upload_id": uploadID,
+                "chunk_index": index,
+                "chunk_count": chunkCount,
+            ]
+            if index == chunkCount - 1 {
+                params["command_id"] = commandID
+            }
+            lastPayload = try await client.call(WireProtocol.mInputFile, params: params)
+        }
+        try validateFollowUpReceipt(payload: lastPayload)
+    }
+
+    private func validateFollowUpReceipt(payload: Any) throws {
+        guard let receipt = CommandStatusResponse.receipt(from: payload),
+              let status = receipt.status else { return }
+        switch PendingCommandStore.delivery(fromHostStatus: status) {
+        case .failed:
+            throw CommandDeliveryError.rejected(receipt.detail ?? String(localized: "chat.delivery.no_reason"))
+        case .needsReview:
+            throw CommandDeliveryError.unconfirmed(receipt.detail ?? String(localized: "chat.delivery.unknown"))
+        default:
+            break
+        }
+    }
 }

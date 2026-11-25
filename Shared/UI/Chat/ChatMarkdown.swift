@@ -48,22 +48,69 @@ nonisolated enum ChatMarkdown: Sendable {
     /// Bubble text without leading or trailing blanks (spaces, blank lines,
     /// and newlines the structure pass inserts); inner blank lines stay.
     static func attributed(_ source: String) -> AttributedString {
-        let source = source.trimmingCharacters(in: .whitespacesAndNewlines)
-        if source.utf8.count > maxInlineMarkdownUTF8Count {
-            return AttributedString(source)
+        attributed(source, cache: true, streaming: false)
+    }
+
+    static func attributed(_ source: String, cache useCache: Bool, streaming: Bool = false) -> AttributedString {
+        let trimmedSource = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedSource.utf8.count > maxInlineMarkdownUTF8Count {
+            return AttributedString(trimmedSource)
         }
 
-        let key = source as NSString
-        if let cached = cache.object(forKey: key) {
+        if useCache, let cached = cache.object(forKey: trimmedSource as NSString) {
             return cached.value
         }
 
-        let parsed = parse(source)
+        let effective = streaming ? stabilizeStreamingMarkdown(trimmedSource) : trimmedSource
+        let parsed = parse(effective)
         let result = trimmed(style(parsed))
-        let diagrams = ChatDiagramBlock.candidates(source: source, parsed: parsed)
-        // Four bytes per source byte is a conservative rendered-size estimate.
-        cache.setObject(CacheBox(result, diagrams: diagrams), forKey: key, cost: max(64, source.utf8.count * 4))
+        if useCache {
+            let diagrams = ChatDiagramBlock.candidates(source: trimmedSource, parsed: parsed)
+            // Four bytes per source byte is a conservative rendered-size estimate.
+            cache.setObject(
+                CacheBox(result, diagrams: diagrams),
+                forKey: trimmedSource as NSString,
+                cost: max(64, trimmedSource.utf8.count * 4)
+            )
+        }
         return result
+    }
+
+    /// Close any dangling triple-backtick or tilde fence at the end of a partial
+    /// streaming reply so code blocks render stably without flashing as plain text.
+    static func stabilizeStreamingMarkdown(_ raw: String) -> String {
+        var openChar: Character?
+        var openCount = 0
+        for rawLine in raw.split(separator: "\n", omittingEmptySubsequences: false) {
+            var idx = rawLine.startIndex
+            var spaces = 0
+            while idx < rawLine.endIndex, rawLine[idx] == " ", spaces < 3 {
+                idx = rawLine.index(after: idx)
+                spaces += 1
+            }
+            guard idx < rawLine.endIndex else { continue }
+            let first = rawLine[idx]
+            guard first == "`" || first == "~" else { continue }
+            var runEnd = idx
+            var count = 0
+            while runEnd < rawLine.endIndex, rawLine[runEnd] == first {
+                runEnd = rawLine.index(after: runEnd)
+                count += 1
+            }
+            guard count >= 3 else { continue }
+            let rest = rawLine[runEnd...]
+            if openChar == nil {
+                if first == "`", rest.contains("`") { continue }
+                openChar = first
+                openCount = count
+            } else if first == openChar, count >= openCount,
+                      rest.allSatisfy({ $0 == " " || $0 == "\t" || $0 == "\r" }) {
+                openChar = nil
+                openCount = 0
+            }
+        }
+        guard let fenceChar = openChar else { return raw }
+        return raw + "\n" + String(repeating: fenceChar, count: openCount)
     }
 
     static func diagrams(in source: String) -> [ChatDiagramBlock] {

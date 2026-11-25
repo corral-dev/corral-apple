@@ -550,8 +550,13 @@ struct MacSidebar: View {
     private var sidebarSections: [DesktopSidebarProjection.Section] {
         orderBox.projection.sections(
             hostID: feed.host.hostID,
-            sessions: filteredSessions, layout: sidebarLayout, filter: filter, order: &orderBox.order,
-            now: feed.listStore.presentationDate, calendar: feed.listStore.presentationCalendar
+            sessions: filteredSessions,
+            sessionsRevision: !hasActiveScope ? feed.listStore.windowRevision : nil,
+            layout: sidebarLayout,
+            filter: filter,
+            order: &orderBox.order,
+            now: feed.listStore.presentationDate,
+            calendar: feed.listStore.presentationCalendar
         )
     }
 

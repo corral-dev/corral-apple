@@ -214,11 +214,62 @@ nonisolated struct ScreenWatchResponse: Codable, Sendable {
 
 struct RemoteEvent: Sendable {
     let channel: String
-    let data: [String: Any]
+    let rawEnvelopeData: Data?
+    let wireByteSize: Int?
+    private let storage: PayloadStorage
+
+    var data: [String: Any] { storage.data() }
 
     init(channel: String, data: [String: Any]) {
         self.channel = channel
-        self.data = data
+        self.rawEnvelopeData = nil
+        self.wireByteSize = nil
+        self.storage = PayloadStorage(data: data)
+    }
+
+    init(channel: String, rawEnvelopeData: Data) {
+        self.channel = channel
+        self.rawEnvelopeData = rawEnvelopeData
+        self.wireByteSize = rawEnvelopeData.count
+        self.storage = PayloadStorage(rawEnvelopeData: rawEnvelopeData)
+    }
+
+    private final class PayloadStorage: @unchecked Sendable {
+        private let lock = NSLock()
+        private let rawEnvelopeData: Data?
+        private var decoded: [String: Any]?
+
+        init(data: [String: Any]) {
+            self.rawEnvelopeData = nil
+            self.decoded = data
+        }
+
+        init(rawEnvelopeData: Data) {
+            self.rawEnvelopeData = rawEnvelopeData
+            self.decoded = nil
+        }
+
+        func data() -> [String: Any] {
+            lock.lock()
+            defer { lock.unlock() }
+            if let decoded { return decoded }
+            guard let rawEnvelopeData,
+                  let message = try? WireMessage.loads(rawEnvelopeData) else {
+                let empty: [String: Any] = [:]
+                decoded = empty
+                return empty
+            }
+            let result: [String: Any]
+            if let dict = message["d"] as? [String: Any] {
+                result = dict
+            } else if let value = message["d"] {
+                result = ["value": value]
+            } else {
+                result = [:]
+            }
+            decoded = result
+            return result
+        }
     }
 }
 
@@ -235,6 +286,6 @@ nonisolated struct SessionUserPromptsResponse: Codable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let wrapped = try? container.decodeIfPresent([FailableDecodable<RichMessage>].self, forKey: .prompts)
         prompts = (wrapped ?? []).compactMap(\.value).filter { $0.seq > 0 && $0.role == "user" }
-        generation = (try? container.decodeIfPresent(Int.self, forKey: .generation)) ?? 0
+        generation = container.decodeFlexibleInt(forKey: .generation, default: 0)
     }
 }

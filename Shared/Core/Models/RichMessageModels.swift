@@ -189,6 +189,57 @@ nonisolated struct LocalFileAttachment: Equatable, Hashable, Sendable {
     let byteCount: Int
 }
 
+nonisolated struct WireStreamDraft: Codable, Equatable, Sendable {
+    let streamID: String
+    let rev: Int
+    let text: String
+    let afterSeq: Int
+    let complete: Bool
+    let timestamp: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case streamID = "stream_id"
+        case rev, text, complete, timestamp
+        case afterSeq = "after_seq"
+    }
+
+    init(
+        streamID: String,
+        rev: Int = 1,
+        text: String,
+        afterSeq: Int = 0,
+        complete: Bool = false,
+        timestamp: Double? = nil
+    ) {
+        self.streamID = streamID
+        self.rev = rev
+        self.text = text
+        self.afterSeq = afterSeq
+        self.complete = complete
+        self.timestamp = timestamp
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        streamID = container.decodeFlexibleString(forKey: .streamID)
+        rev = container.decodeFlexibleInt(forKey: .rev, default: 1)
+        text = container.decodeFlexibleString(forKey: .text)
+        afterSeq = container.decodeFlexibleInt(forKey: .afterSeq, default: 0)
+        complete = container.decodeFlexibleBool(forKey: .complete)
+        timestamp = container.contains(.timestamp) ? container.decodeFlexibleDouble(forKey: .timestamp) : nil
+    }
+}
+
+nonisolated struct StreamingDraft: Equatable, Sendable {
+    let streamID: String
+    let syntheticSeq: Int
+    var text: String
+    var rev: Int
+    var afterSeq: Int
+    var complete: Bool
+    var timestamp: Double?
+}
+
 nonisolated struct RichMessage: Codable, Sendable, Identifiable, Equatable {
     let seq: Int
     let role: String
@@ -211,6 +262,8 @@ nonisolated struct RichMessage: Codable, Sendable, Identifiable, Equatable {
     var localImageData: [Data] = []
     /// Local-only optimistic non-image attachments staged with this pending send.
     var localFiles: [LocalFileAttachment] = []
+    /// Ephemeral live stream draft marker (never encoded to persistence or wire).
+    var isStreaming: Bool = false
 
     var id: Int { seq }
 
@@ -229,7 +282,7 @@ nonisolated struct RichMessage: Codable, Sendable, Identifiable, Equatable {
     }
 
     /// 本地回显用唯一负序号，避免与远端 seq=0 / seq>0 撞车。
-    nonisolated var isLocal: Bool { seq < 0 }
+    nonisolated var isLocal: Bool { seq < 0 && !isStreaming }
 
     init(
         seq: Int,
@@ -242,7 +295,8 @@ nonisolated struct RichMessage: Codable, Sendable, Identifiable, Equatable {
         failureDetail: String? = nil,
         localAfterSeq: Int? = nil,
         localImageData: [Data] = [],
-        localFiles: [LocalFileAttachment] = []
+        localFiles: [LocalFileAttachment] = [],
+        isStreaming: Bool = false
     ) {
         self.seq = seq
         self.role = role
@@ -255,6 +309,7 @@ nonisolated struct RichMessage: Codable, Sendable, Identifiable, Equatable {
         self.localAfterSeq = localAfterSeq
         self.localImageData = localImageData
         self.localFiles = localFiles
+        self.isStreaming = isStreaming
     }
 
     enum CodingKeys: String, CodingKey {
