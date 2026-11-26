@@ -4,13 +4,13 @@
 <h1 align="center">Corral for iPhone and Mac</h1>
 <p align="center"><strong>Keep your coding agents moving, wherever you are.</strong></p>
 
-Read replies, answer questions, and send the next instruction to Claude Code, Codex, OpenCode, Cursor, or Pi from a native Apple client. Your agents run on a [Corral host](https://github.com/corral-dev/corral) on macOS or Linux.
+Read live replies, answer agent questions, and send the next instruction to Claude Code, Codex, OpenCode, Cursor, Pi, or Antigravity from a native Apple client. Your agents run on a [Corral host](https://github.com/corral-dev/corral) on macOS or Linux.
 
-- **See who needs you.** Follow all five assistants in one session list.
+- **See who needs you.** Follow all six assistants in one session list.
 - **Work across sessions.** Open up to four panes side by side on Mac.
-- **Choose your view.** Switch each Mac pane between chat and the agent's terminal.
-- **Find your work.** Filter by project and search conversation text.
-- **Keep typing.** Use keyboard shortcuts on Mac, or reply from your iPhone.
+- **Choose your view.** Switch each Mac pane between live chat and the agent's terminal.
+- **Find your work.** Filter by assistant or project, and search conversation text.
+- **Keep typing.** Use keyboard shortcuts on Mac, queue follow-ups, or reply from your iPhone.
 
 <p align="center">
   <picture>
@@ -32,50 +32,61 @@ Read replies, answer questions, and send the next instruction to Claude Code, Co
 
 ## Install
 
-The **Mac app** is a signed download. The **iPhone app** is a source beta: build it with Xcode. Public App Store and TestFlight downloads are not available yet.
+The **Mac app** is available via Homebrew Cask or as a signed DMG download. The **iPhone app** is a source beta built with Xcode; public App Store and TestFlight downloads are not available yet.
 
 | Client | Requirements |
 | --- | --- |
 | Mac | macOS 26+ (building from source also needs Xcode with the macOS 26 SDK) |
-| iPhone | iOS 17+, Xcode, your own signing team and a physical iPhone |
-| Host | [Corral CLI](https://github.com/corral-dev/corral#install) on macOS or Linux, with an installed coding assistant |
+| iPhone | iOS 17+, Xcode, your own signing team, and a physical iPhone |
+| Host | [Corral CLI](https://github.com/corral-dev/corral#install) on macOS or Linux, with at least one installed coding assistant |
 
 ### Mac
 
-Install the signed Mac app with Homebrew (which also installs the matching `corral` CLI formula dependency):
+Install the signed Mac app with Homebrew (this also installs the matching `corral` CLI):
 
 ```bash
 brew install --cask x0c/tap/corral-mac
 ```
 
-Already installed the official DMG? Register it with Homebrew:
+Or download the [signed Mac DMG](https://github.com/corral-dev/corral-apple/releases/latest) and drag Corral to Applications.
+
+The Mac app and CLI share synchronized version numbers: on launch and after in-app updates, Corral keeps the matching CLI installed and up to date (developer source checkouts are never overwritten), and `corral update` keeps `/Applications/Corral.app` synchronized. The built-in updater checks hourly, downloads in the background, and installs when you quit.
+
+<details>
+<summary>Already installed via DMG, or updating with Homebrew</summary>
+
+Register an existing `/Applications/Corral.app` with Homebrew:
 
 ```bash
 brew install --cask --adopt x0c/tap/corral-mac
 ```
 
-Open Corral from Applications. Once registered, update with:
+Update registered installs with:
 
 ```bash
-brew update
-brew upgrade --cask x0c/tap/corral-mac
+brew update && brew upgrade --cask x0c/tap/corral-mac
 ```
 
-The built-in updater remains available. Current Homebrew can recognize an app newer than its installation record, so an older recorded version alone does not mean an update failed. An “already an App” install error means the destination is occupied; use the appropriate adoption or update command above. Do not use `--force` as a routine fix: it can replace a newer app with an older tap version. Pairing and settings are preserved. [How Homebrew handles self-updating apps](https://docs.brew.sh/FAQ#how-does-brew-upgrade-handle-apps-that-update-themselves).
+The built-in updater remains active alongside Homebrew. If Homebrew shows an older recorded version after an in-app update, that is expected; avoid `--force` as a routine fix so it does not downgrade a newer app. Pairing and settings are preserved. See [how Homebrew handles self-updating apps](https://docs.brew.sh/FAQ#how-does-brew-upgrade-handle-apps-that-update-themselves).
 
-Download the [signed Mac DMG](https://github.com/corral-dev/corral-apple/releases/latest) and drag Corral to Applications. The Mac app and CLI share synchronized version numbers: on launch and in-app Sparkle updates, the non-sandboxed app automatically installs or updates the matching Corral CLI (leaving developer source checkouts untouched), and updating via `corral update` keeps `/Applications/Corral.app` synchronized. The built-in updater checks hourly, downloads in the background and installs when you quit.
+</details>
 
-To build from source instead, with Xcode and its command-line tools installed:
+<details>
+<summary>Build from source</summary>
+
+With Xcode and its command-line tools installed:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/corral-dev/corral-apple/main/install.sh | bash
 ```
 
-Open Corral from `~/Applications`. To choose another installation directory, set `CORRAL_APP_DIR` when running the installer.
+Open Corral from `~/Applications`. Set `CORRAL_APP_DIR` to install into another directory.
+
+</details>
 
 ### iPhone
 
-Install [XcodeGen](https://github.com/yonaskolb/XcodeGen), then clone the source and generate the Xcode project:
+Install [XcodeGen](https://github.com/yonaskolb/XcodeGen), clone the source, and generate the Xcode project:
 
 ```bash
 git clone https://github.com/corral-dev/corral-apple.git
@@ -83,30 +94,30 @@ cd corral-apple
 xcodegen generate
 ```
 
-Open `Corral.xcodeproj`, choose your own team and unique bundle identifiers, and build for your iPhone. Follow the [build and signing guide](docs/PUBLIC_BUILD_GUIDE.md) for the shared Keychain group and notification extension. Push notifications require an Apple Developer membership.
+Open `Corral.xcodeproj`, select your signing team and unique bundle identifiers, and build for your iPhone. Follow the [build and signing guide](docs/PUBLIC_BUILD_GUIDE.md) for the shared Keychain group and notification extension. Push notifications require an Apple Developer membership.
 
 ## Pair with your host
 
-On the machine that runs your agents:
+On the machine running your agents:
 
 ```bash
 brew install x0c/tap/corral
 corral remote pair
 ```
 
-If Corral is already installed, run only the second command. [Other CLI installation options](https://github.com/corral-dev/corral#install) are available.
+If Corral is already installed, just run `corral remote pair`. [Other CLI installation options](https://github.com/corral-dev/corral#install) are available.
 
-On the same local network, open the Apple client and scan or paste the pairing code. Pairing lets the client read and act on your host's sessions; use `corral remote pair --readonly` for viewing only. Keep the code private. The host must remain awake for agents and remote access to keep working.
+On the same local network, open the Apple client and scan or paste the pairing code. Pairing lets the client read and act on your host's sessions; use `corral remote pair --readonly` for viewing only. Keep the code private. The host must stay awake for agents and remote access to keep running.
 
 ## Access from another network
 
-Run your own [Corral relay](https://github.com/corral-dev/corral-relay#quick-start) and configure its `wss://` address on the host. Same-network access works directly. Open-source clients use your configured relay; a shared hosted relay is not included.
+Run your own [Corral relay](https://github.com/corral-dev/corral-relay#quick-start) and configure its `wss://` address on the host. Same-network access works directly without a relay. Open-source clients use your configured relay; a shared hosted relay is not included.
 
-For iPhone notifications, configure APNs on that relay with credentials matching your own app identity. Without APNs, conversations still update while the client is open.
+For iPhone push notifications, configure APNs on that relay with credentials matching your app identity. Without APNs, conversations still update live while the client is open.
 
 ## Privacy
 
-Session traffic and notification text are end-to-end encrypted. The relay sees routing identities, connection timing and byte counts. Device keys are stored in Keychain; conversations can be cached on the client for reopening history. See [PRIVACY.md](PRIVACY.md).
+Session traffic and notification text are end-to-end encrypted. The relay sees only routing identities, connection timing, and byte counts. Device keys are stored in Keychain; conversations can be cached locally for reopening history. See [PRIVACY.md](PRIVACY.md).
 
 ## Help and contribute
 
@@ -114,7 +125,18 @@ Session traffic and notification text are end-to-end encrypted. The relay sees r
 - [Report a bug or request a feature](https://github.com/corral-dev/corral-apple/issues/new/choose)
 - [Contributing](CONTRIBUTING.md) and the [contributor agreement](CLA.md)
 
-Remove private conversations, machine addresses and pairing credentials from public reports. For vulnerabilities, use [private security reporting](https://github.com/corral-dev/corral-apple/security/advisories/new).
+Remove private conversations, machine addresses, and pairing credentials from public reports. For vulnerabilities, use [private security reporting](https://github.com/corral-dev/corral-apple/security/advisories/new).
+
+## Related Tools
+
+| Repository | Description |
+| :--- | :--- |
+| **[corral](https://github.com/corral-dev/corral)** | Local-first terminal workspace and host CLI for Claude Code, Codex, OpenCode, Cursor, Pi, and Antigravity. |
+| **[corral-relay](https://github.com/corral-dev/corral-relay)** | Self-hosted, end-to-end encrypted relay and APNs bridge for connecting Corral across networks. |
+| **[subswap](https://github.com/x0c/subswap)** | Check remaining quota and switch Claude Code, Codex, Cursor, Kimi Code, and OpenCode accounts without logging out. |
+| **[agentsync](https://github.com/x0c/agentsync)** | Sync `AGENTS.md`, `CLAUDE.md`, skills, and MCP configs across coding agents from one local source of truth. |
+| **[agent-doc-skills](https://github.com/x0c/agent-doc-skills)** | Navigable project knowledge base skills (`doc-init`, `doc-update`, `doc-compact`) so coding agents do not rediscover your repo every session. |
+| **[sesskit](https://github.com/x0c/sesskit)** | Parse and export local session transcripts from Claude Code, Codex, OpenCode, Cursor, Pi, and Antigravity. |
 
 ## License
 
