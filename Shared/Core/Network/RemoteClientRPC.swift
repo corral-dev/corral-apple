@@ -188,6 +188,9 @@ import Foundation
         if !caps.chatStreaming, WireProtocol.supportsChatStreaming(fromHelloPayload: payload) {
             caps.chatStreaming = true
         }
+        if !caps.quotas, WireProtocol.supportsQuotas(fromHelloPayload: payload) {
+            caps.quotas = true
+        }
         hostCapabilities = caps
         if let runtimes = hello.runtimes {
             hostRuntimes = runtimes
@@ -213,5 +216,19 @@ import Foundation
         }
         guard isCurrentPlane(source, isControl: true), !Task.isCancelled else { throw CancellationError() }
         return hello
+    }
+
+    func quotasSnapshot(refresh: Bool = false) async throws -> HostQuotaResponse {
+        let payload = try await call(WireProtocol.mQuotasSnapshot, params: ["refresh": refresh])
+        return try HostQuotaResponse.decode(from: payload)
+    }
+
+    func quotasWatch() async throws -> HostQuotaResponse {
+        let payload = try await call(WireProtocol.mQuotasWatch, params: [:])
+        return try HostQuotaResponse.decode(from: payload)
+    }
+
+    func quotasUnwatch() async throws {
+        _ = try await call(WireProtocol.mQuotasUnwatch, params: [:])
     }
 }

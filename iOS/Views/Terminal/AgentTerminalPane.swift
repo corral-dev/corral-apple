@@ -18,10 +18,6 @@ struct AgentTerminalPane: View {
     var onBackgroundColorChange: (TerminalRGB?) -> Void = { _ in }
 
     @State private var sampledBackground: TerminalRGB?
-    @State private var isResuming = false
-    @State private var startAttempted = false
-    @State private var resumed = false
-    @State private var resumeTask: Task<Void, Never>?
     @State private var handledPromptRequest: UUID?
 
     private var terminal: MobileTerminalSessions.Terminal? {
@@ -31,6 +27,10 @@ struct AgentTerminalPane: View {
     private var stream: RemoteTerminalStream? { terminal?.stream }
     private var sawLive: Bool { stream?.hasBeenLive ?? false }
     private var hasScreen: Bool { sawLive || terminal?.view.hasScreen == true }
+    private var isResuming: Bool { terminals.isResuming(session.key, client: appModel.client) }
+    private var resumed: Bool { terminals.hasResumed(session.key, client: appModel.client) }
+    private var startFailed: Bool { terminals.hasFailedStart(session.key, client: appModel.client) }
+    private var startAttempted: Bool { resumed || startFailed }
 
     var body: some View {
         ZStack {
@@ -70,8 +70,6 @@ struct AgentTerminalPane: View {
         }
         .task(id: isActive && isReady && !isReadonly && needsStart) {
             guard isActive, isReady, !isReadonly, needsStart else { return }
-            // resume owns an unstructured task: changing startAttempted must
-            // not cancel the very request it just started.
             resume()
         }
         .task(id: ConnectionKey(client: appModel.clientIdentity, active: isActive && isReady,
@@ -84,17 +82,9 @@ struct AgentTerminalPane: View {
             }
         }
         .onChange(of: isPresented) { _, presented in
-            if !presented {
-                cancelResume()
-            } else {
+            if presented {
                 syncCachedBackground()
             }
-        }
-        .onChange(of: scenePhase) { _, phase in
-            if phase != .active { cancelResume() }
-        }
-        .onChange(of: isReady) { _, ready in
-            if !ready { cancelResume() }
         }
         .onChange(of: colorScheme) { _, _ in
             if stream == nil {
@@ -113,9 +103,6 @@ struct AgentTerminalPane: View {
                                                       text: request.text)
             if !Task.isCancelled { handledPromptRequest = request.id }
             onPromptOutcome(request.id, outcome)
-        }
-        .onDisappear {
-            cancelResume()
         }
     }
 
@@ -203,56 +190,14 @@ struct AgentTerminalPane: View {
         .background(.regularMaterial, in: .rect(cornerRadius: Radius.lg))
     }
 
-    private func cancelResume() {
-        resumeTask?.cancel()
-        resumeTask = nil
-    }
-
     private func resume(force: Bool = false) {
         guard isActive, isReady, !isReadonly, !isResuming, let client = appModel.client else { return }
-        if force { startAttempted = false }
-        startAttempted = true
-        isResuming = true
-        resumeTask?.cancel()
-        resumeTask = Task {
-            defer {
-                isResuming = false
-                resumeTask = nil
-                openTerminal()
-            }
-            var attempt = 0
-            while !Task.isCancelled, isActive, isReady, !isReadonly, appModel.client === client {
-                if !force && ((session.hosted && stream?.phase != .ended) || resumed) {
-                    return
-                }
-                do {
-                    _ = try await client.call(WireProtocol.mSessionResume, params: ["key": session.key])
-                    guard !Task.isCancelled, isActive, isReady, appModel.client === client else {
-                        startAttempted = false
-                        return
-                    }
-                    resumed = true
-                    terminals.restart(session.key, client: client)
-                    return
-                } catch {
-                    guard !Task.isCancelled, isActive, isReady, !isReadonly, appModel.client === client else {
-                        startAttempted = false
-                        return
-                    }
-                    switch RemoteRecoveryPolicy.classify(error) {
-                    case .retryable:
-                        let delay = RemoteRecoveryPolicy.backoffDuration(attempt: attempt)
-                        attempt += 1
-                        try? await Task.sleep(for: delay)
-                        continue
-                    case .notFound, .permanent:
-                        startAttempted = false
-                        return
-                    }
-                }
-            }
-            startAttempted = false
-        }
+        terminals.resume(
+            session.key,
+            client: client,
+            fontSize: CGFloat(appModel.mobileTerminalFontSize),
+            force: force
+        )
     }
 
     private var background: Color {

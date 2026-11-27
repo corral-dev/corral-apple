@@ -104,4 +104,33 @@ final class ChatImageReferenceTests: XCTestCase {
         XCTAssertLessThan(ChatImageTier.low.maxPixels, ChatImageTier.medium.maxPixels)
         XCTAssertLessThan(ChatImageTier.high.maxPixels, ChatImageTier.full.maxPixels)
     }
+
+    func testMarkdownImageLinkIsExplicitAndDoesNotDuplicateAsMention() {
+        let path = "file:///Users/example/beautified-home-light.png"
+        let text = """
+        Here is the capture: [beautified-home-light.png](\(path)) and mentioned again \(path).
+        ```md
+        [ignored.png](file:///Users/example/ignored.png)
+        ```
+        """
+        let refs = ChatImageReference.references(in: text)
+        XCTAssertEqual(refs.count, 1)
+        XCTAssertEqual(refs.first?.ref, path)
+        XCTAssertEqual(refs.first?.kind, .explicit)
+        XCTAssertEqual(refs.first?.alt, "beautified-home-light.png")
+
+        let mentionFirst = "Mentioned earlier \(path) and linked later [home](\(path))."
+        let mentionFirstRefs = ChatImageReference.references(in: mentionFirst)
+        XCTAssertEqual(mentionFirstRefs.count, 1)
+        XCTAssertEqual(mentionFirstRefs.first?.kind, .explicit)
+        XCTAssertEqual(mentionFirstRefs.first?.alt, "home")
+    }
+
+    func testIsImageURLHandlesSchemesQueriesAndFragments() {
+        XCTAssertTrue(ChatImageReference.isImageURL(URL(string: "file:///tmp/AppIcon-1024.png")!))
+        XCTAssertTrue(ChatImageReference.isImageURL(URL(string: "https://example.com/shot.webp?w=800#preview")!))
+        XCTAssertTrue(ChatImageReference.isImageURL(URL(string: "images/chart.jpeg?v=2")!))
+        XCTAssertFalse(ChatImageReference.isImageURL(URL(string: "file:///tmp/HomeView.swift")!))
+        XCTAssertFalse(ChatImageReference.isImageURL(URL(string: "mailto:user@example.com/icon.png")!))
+    }
 }

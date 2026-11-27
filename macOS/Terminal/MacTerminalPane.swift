@@ -127,8 +127,11 @@ struct MacTerminalPane: View {
     /// stays mounted (it reports its grid while attaching), whatever the
     /// possibly stale list summary says.
     private var showsRestartPrompt: Bool {
-        guard !isStarting, let stream, stream.phase == .ended else { return false }
-        return sawLive || startAttempted
+        guard !isStarting else { return false }
+        if let stream, stream.phase == .ended {
+            return sawLive || startAttempted
+        }
+        return stream == nil && !session.hosted && !session.live && startAttempted
     }
 
     /// Everything but a stopped/external pane draws into the emulator, including
@@ -256,7 +259,6 @@ struct MacTerminalPane: View {
                     try? await Task.sleep(for: delay)
                     continue
                 case .notFound, .permanent:
-                    startAttempted = false
                     return
                 }
             }

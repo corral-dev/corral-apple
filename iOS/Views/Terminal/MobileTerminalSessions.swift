@@ -47,6 +47,11 @@ final class MobileTerminalSessions {
     static let capacity = 16
 
     private var terminals: [String: Terminal] = [:]
+    private var resumeClients: [String: ObjectIdentifier] = [:]
+    private var resumingKeys: Set<String> = []
+    private var resumedKeys: Set<String> = []
+    private var failedStartKeys: Set<String> = []
+    @ObservationIgnored private var resumeTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var clock: UInt64 = 0
 
     /// Returns the live retained terminal for `key` on `client`, without creating one.
@@ -54,6 +59,85 @@ final class MobileTerminalSessions {
         guard let client, let terminal = terminals[key],
               terminal.stream.clientIdentity == ObjectIdentifier(client) else { return nil }
         return terminal
+    }
+
+    func isResuming(_ key: String, client: RemoteClient?) -> Bool {
+        guard let client else { return false }
+        return resumingKeys.contains(key) && resumeClients[key] == ObjectIdentifier(client)
+    }
+
+    func hasResumed(_ key: String, client: RemoteClient?) -> Bool {
+        guard let client else { return false }
+        return resumedKeys.contains(key) && resumeClients[key] == ObjectIdentifier(client)
+    }
+
+    func hasFailedStart(_ key: String, client: RemoteClient?) -> Bool {
+        guard let client else { return false }
+        return failedStartKeys.contains(key) && resumeClients[key] == ObjectIdentifier(client)
+    }
+
+    /// Starts (or joins) a host-side `session.resume` owned by this pool so
+    /// transient `NavigationSplitView` compact push `.onDisappear` events never
+    /// cancel an in-flight resume and strand the terminal on `连接中...`.
+    func resume(
+        _ key: String,
+        client: RemoteClient,
+        fontSize: CGFloat = ShellTerminalHost.fontSize,
+        force: Bool = false
+    ) {
+        let clientID = ObjectIdentifier(client)
+        if resumingKeys.contains(key), resumeClients[key] == clientID {
+            return
+        }
+        if !force, resumedKeys.contains(key), resumeClients[key] == clientID {
+            return
+        }
+        resumeTasks.removeValue(forKey: key)?.cancel()
+        resumeClients[key] = clientID
+        resumingKeys.insert(key)
+        failedStartKeys.remove(key)
+        if force {
+            resumedKeys.remove(key)
+        }
+        resumeTasks[key] = Task { @MainActor [weak self, weak client] in
+            defer {
+                if let self, self.resumeClients[key] == clientID {
+                    self.resumingKeys.remove(key)
+                    self.resumeTasks[key] = nil
+                }
+            }
+            var attempt = 0
+            while !Task.isCancelled, let self, let client,
+                  self.resumeClients[key] == clientID, client.state != .disconnected {
+                if !force, let existing = self.terminals[key],
+                   existing.stream.clientIdentity == clientID,
+                   existing.stream.phase != .ended {
+                    self.resumedKeys.insert(key)
+                    return
+                }
+                do {
+                    _ = try await client.call(WireProtocol.mSessionResume, params: ["key": key])
+                    guard !Task.isCancelled, self.resumeClients[key] == clientID else { return }
+                    self.resumedKeys.insert(key)
+                    self.failedStartKeys.remove(key)
+                    self.restart(key, client: client, fontSize: fontSize)
+                    return
+                } catch {
+                    guard !Task.isCancelled, self.resumeClients[key] == clientID,
+                          client.state != .disconnected else { return }
+                    switch RemoteRecoveryPolicy.classify(error) {
+                    case .retryable:
+                        let delay = RemoteRecoveryPolicy.backoffDuration(attempt: attempt)
+                        attempt += 1
+                        try? await Task.sleep(for: delay)
+                        continue
+                    case .notFound, .permanent:
+                        self.failedStartKeys.insert(key)
+                        return
+                    }
+                }
+            }
+        }
     }
 
     /// Returns (or opens) the retained terminal for `key` and marks it most recently shown.
@@ -76,8 +160,8 @@ final class MobileTerminalSessions {
 
     /// Replaces the stream on an existing retained terminal after an explicit restart/resume.
     @discardableResult
-    func restart(_ key: String, client: RemoteClient) -> Terminal {
-        guard let terminal = terminals[key] else { return open(key, client: client) }
+    func restart(_ key: String, client: RemoteClient, fontSize: CGFloat = ShellTerminalHost.fontSize) -> Terminal {
+        guard let terminal = terminals[key] else { return open(key, client: client, fontSize: fontSize) }
         clock &+= 1
         terminal.lastShown = clock
         terminal.replaceStream(client: client)
@@ -85,12 +169,33 @@ final class MobileTerminalSessions {
     }
 
     func close(_ key: String) {
+        resumeTasks.removeValue(forKey: key)?.cancel()
+        resumeClients.removeValue(forKey: key)
+        resumingKeys.remove(key)
+        resumedKeys.remove(key)
+        failedStartKeys.remove(key)
         terminals.removeValue(forKey: key)?.close()
     }
 
     /// Follows provisional-to-canonical key promotion without opening a second stream.
     func migrate(from oldKey: String, to newKey: String) {
-        guard oldKey != newKey, let terminal = terminals.removeValue(forKey: oldKey) else { return }
+        guard oldKey != newKey else { return }
+        if let oldClient = resumeClients.removeValue(forKey: oldKey) {
+            if resumeClients[newKey] == nil {
+                resumeClients[newKey] = oldClient
+            }
+        }
+        if let oldTask = resumeTasks.removeValue(forKey: oldKey) {
+            if resumeTasks[newKey] == nil {
+                resumeTasks[newKey] = oldTask
+            } else {
+                oldTask.cancel()
+            }
+        }
+        if resumingKeys.remove(oldKey) != nil { resumingKeys.insert(newKey) }
+        if resumedKeys.remove(oldKey) != nil { resumedKeys.insert(newKey) }
+        if failedStartKeys.remove(oldKey) != nil { failedStartKeys.insert(newKey) }
+        guard let terminal = terminals.removeValue(forKey: oldKey) else { return }
         if terminals[newKey] != nil {
             terminal.close()
             return
@@ -110,6 +215,12 @@ final class MobileTerminalSessions {
 
     /// Drops every terminal when leaving or switching paired hosts.
     func reset() {
+        for task in resumeTasks.values { task.cancel() }
+        resumeTasks.removeAll()
+        resumeClients.removeAll()
+        resumingKeys.removeAll()
+        resumedKeys.removeAll()
+        failedStartKeys.removeAll()
         for terminal in terminals.values { terminal.close() }
         terminals.removeAll()
     }

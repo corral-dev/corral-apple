@@ -6,17 +6,24 @@ import SwiftUI
 struct RemoteCallError: Error { let message: String; var code = "" }
 
 @Observable final class RemoteClient {
+    enum State { case disconnected, connecting, handshaking, ready, reconnecting }
     enum ConnectionError: Error {
         case notConnected, handshakeFailed(String), sendFailed(String), timeout, invalidResponse, pairingRequired
     }
+    var state = State.ready
     var calls = 0
     var completed = 0
     var fails = false
+    var permanentFailure = false
     var running = false
     var awaitingSnapshot = false
+    var resumeDelayMs = 50
     func call(_ method: String, params: [String: String]) async throws -> Bool {
         calls += 1
-        try await Task.sleep(for: .milliseconds(50))
+        try await Task.sleep(for: .milliseconds(resumeDelayMs))
+        if permanentFailure {
+            throw RemoteCallError(message: "Session cannot be resumed.", code: "usage_error")
+        }
         if fails {
             throw RemoteCallError(message: "The development machine is still starting up.", code: "unavailable")
         }
@@ -150,11 +157,77 @@ struct TerminalColorScheme {
         }
     }
     var terminals: [String: Terminal] = [:]
+    private var resumeClients: [String: ObjectIdentifier] = [:]
+    private var resumingKeys: Set<String> = []
+    private var resumedKeys: Set<String> = []
+    private var failedStartKeys: Set<String> = []
+    @ObservationIgnored private var resumeTasks: [String: Task<Void, Never>] = [:]
     private var clock: UInt64 = 0
     func terminal(for key: String, client: RemoteClient?) -> Terminal? {
         guard let client, let terminal = terminals[key],
               terminal.stream.clientIdentity == ObjectIdentifier(client) else { return nil }
         return terminal
+    }
+    func isResuming(_ key: String, client: RemoteClient?) -> Bool {
+        guard let client else { return false }
+        return resumingKeys.contains(key) && resumeClients[key] == ObjectIdentifier(client)
+    }
+    func hasResumed(_ key: String, client: RemoteClient?) -> Bool {
+        guard let client else { return false }
+        return resumedKeys.contains(key) && resumeClients[key] == ObjectIdentifier(client)
+    }
+    func hasFailedStart(_ key: String, client: RemoteClient?) -> Bool {
+        guard let client else { return false }
+        return failedStartKeys.contains(key) && resumeClients[key] == ObjectIdentifier(client)
+    }
+    func resume(_ key: String, client: RemoteClient, fontSize: CGFloat = ShellTerminalHost.fontSize, force: Bool = false) {
+        let clientID = ObjectIdentifier(client)
+        if resumingKeys.contains(key), resumeClients[key] == clientID { return }
+        if !force, resumedKeys.contains(key), resumeClients[key] == clientID { return }
+        resumeTasks.removeValue(forKey: key)?.cancel()
+        resumeClients[key] = clientID
+        resumingKeys.insert(key)
+        failedStartKeys.remove(key)
+        if force { resumedKeys.remove(key) }
+        resumeTasks[key] = Task { @MainActor [weak self, weak client] in
+            defer {
+                if let self, self.resumeClients[key] == clientID {
+                    self.resumingKeys.remove(key)
+                    self.resumeTasks[key] = nil
+                }
+            }
+            var attempt = 0
+            while !Task.isCancelled, let self, let client,
+                  self.resumeClients[key] == clientID, client.state != .disconnected {
+                if !force, let existing = self.terminals[key],
+                   existing.stream.clientIdentity == clientID,
+                   existing.stream.phase != .ended {
+                    self.resumedKeys.insert(key)
+                    return
+                }
+                do {
+                    _ = try await client.call(WireProtocol.mSessionResume, params: ["key": key])
+                    guard !Task.isCancelled, self.resumeClients[key] == clientID else { return }
+                    self.resumedKeys.insert(key)
+                    self.failedStartKeys.remove(key)
+                    self.restart(key, client: client, fontSize: fontSize)
+                    return
+                } catch {
+                    guard !Task.isCancelled, self.resumeClients[key] == clientID,
+                          client.state != .disconnected else { return }
+                    switch RemoteRecoveryPolicy.classify(error) {
+                    case .retryable:
+                        let delay = RemoteRecoveryPolicy.backoffDuration(attempt: attempt)
+                        attempt += 1
+                        try? await Task.sleep(for: delay)
+                        continue
+                    case .notFound, .permanent:
+                        self.failedStartKeys.insert(key)
+                        return
+                    }
+                }
+            }
+        }
     }
     @discardableResult
     func open(_ key: String, client: RemoteClient, fontSize: CGFloat = ShellTerminalHost.fontSize) -> Terminal {
@@ -172,16 +245,33 @@ struct TerminalColorScheme {
         return terminal
     }
     @discardableResult
-    func restart(_ key: String, client: RemoteClient) -> Terminal {
-        guard let terminal = terminals[key] else { return open(key, client: client) }
+    func restart(_ key: String, client: RemoteClient, fontSize: CGFloat = ShellTerminalHost.fontSize) -> Terminal {
+        guard let terminal = terminals[key] else { return open(key, client: client, fontSize: fontSize) }
         clock &+= 1
         terminal.lastShown = clock
         terminal.replaceStream(client: client)
         return terminal
     }
-    func close(_ key: String) { terminals.removeValue(forKey: key)?.close() }
+    func close(_ key: String) {
+        resumeTasks.removeValue(forKey: key)?.cancel()
+        resumeClients.removeValue(forKey: key)
+        resumingKeys.remove(key)
+        resumedKeys.remove(key)
+        failedStartKeys.remove(key)
+        terminals.removeValue(forKey: key)?.close()
+    }
     func migrate(from oldKey: String, to newKey: String) {
-        guard oldKey != newKey, let terminal = terminals.removeValue(forKey: oldKey) else { return }
+        guard oldKey != newKey else { return }
+        if let oldClient = resumeClients.removeValue(forKey: oldKey), resumeClients[newKey] == nil {
+            resumeClients[newKey] = oldClient
+        }
+        if let oldTask = resumeTasks.removeValue(forKey: oldKey) {
+            if resumeTasks[newKey] == nil { resumeTasks[newKey] = oldTask } else { oldTask.cancel() }
+        }
+        if resumingKeys.remove(oldKey) != nil { resumingKeys.insert(newKey) }
+        if resumedKeys.remove(oldKey) != nil { resumedKeys.insert(newKey) }
+        if failedStartKeys.remove(oldKey) != nil { failedStartKeys.insert(newKey) }
+        guard let terminal = terminals.removeValue(forKey: oldKey) else { return }
         if terminals[newKey] != nil { terminal.close(); return }
         terminal.key = newKey
         terminals[newKey] = terminal
@@ -422,6 +512,28 @@ struct Fixture: View {
             check(model.mobileTerminalFontSize == 19.0, "session B updates shared AppModel font size")
             p.sessionKey = "zoom-a"; settle()
             check(termA?.view.appliedFontSize == 19.0, "returning to retained session A applies updated shared font size")
+        }
+        scenario("stopped entry survives split-column relocation", session: SessionSummary(key: "stopped-relocate", hosted: false), configure: { model, _, _ in
+            model.client?.resumeDelayMs = 150
+        }) { model, terminals, p in
+            // Initial settle already ran 350ms, so verify with a second session that relocates mid-resume.
+            p.sessionKey = "stopped-relocate-2"
+            settle(0.04)
+            p.mounted = false; settle(0.03)
+            p.mounted = true; settle(0.25)
+            check(model.client?.calls == 2 && model.client?.completed == 2,
+                  "split-column relocation does not cancel or duplicate stopped-session resume")
+            let stream = terminals.terminal(for: "stopped-relocate-2", client: model.client)?.stream
+            check(stream?.phase == .live, "relocated stopped session reaches live terminal")
+        }
+        scenario("permanent resume failure does not loop", session: SessionSummary(key: "perm-fail", hosted: false), configure: { model, _, _ in
+            model.client?.permanentFailure = true
+        }) { model, terminals, _ in
+            settle(0.3)
+            check(model.client?.calls == 1 && model.client?.completed == 0,
+                  "permanent resume failure attempts once without looping")
+            check(terminals.hasFailedStart("perm-fail", client: model.client),
+                  "permanent resume failure records failed start for restart prompt")
         }
     }
 }

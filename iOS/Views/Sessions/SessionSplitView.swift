@@ -52,6 +52,7 @@ private struct SessionSplitView: View {
     @State private var modeRequestCounter = 0
     @State private var requestedMode: SessionModeRequest?
     @State private var showSettings = false
+    @State private var showQuotas = false
     @State private var newSessionRequest = 0
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     private let modeStore = SessionDetailModeStore.shared
@@ -73,9 +74,11 @@ private struct SessionSplitView: View {
                         set: { select($0, focusComposer: false) }
                     ),
                     open: { select($0, focusComposer: $1) },
+                    openCreated: { select($0, focusComposer: true, isCreated: true) },
                     openMode: { select($0, focusComposer: false, initialMode: $1) },
                     showSettings: { showSettings = true },
                     showPairing: onPair,
+                    showQuotas: { showQuotas = true },
                     newSessionRequest: newSessionRequest,
                     isCollapsed: horizontalSizeClass != .regular
                 )
@@ -113,17 +116,54 @@ private struct SessionSplitView: View {
                     }
             }
         }
+        .sheet(isPresented: $showQuotas) {
+            IOSQuotasSheet(host: host)
+        }
+        .focusedSceneValue(\.corralShowQuotas, CorralCommandAction(id: "quotas-\(host.hostID)") { showQuotas = true })
     }
 
-    private func select(_ route: SessionRoute?, focusComposer: Bool, initialMode: SessionDetailMode? = nil) {
-        autoFocusKey = focusComposer ? route?.key : nil
+    private func select(
+        _ route: SessionRoute?,
+        focusComposer: Bool,
+        isCreated: Bool = false,
+        initialMode: SessionDetailMode? = nil
+    ) {
+        var resolvedMode: SessionDetailMode = .chat
         if let initialMode, let route {
             recordMode(initialMode, for: route.key)
             modeRequestCounter &+= 1
             requestedMode = SessionModeRequest(id: modeRequestCounter, mode: initialMode)
-        } else if selection?.key != route?.key {
+            resolvedMode = initialMode
+        } else if let route, selection?.key != route.key {
             requestedMode = nil
+            let canonicalKey = canonicalSessionKey(for: route.key)
+            if isCreated {
+                resolvedMode = modeStore.applyDefaultModeForCreatedSession(
+                    sessionKey: canonicalKey,
+                    hostID: host.hostID
+                )
+            } else {
+                let session = feed.listStore.session(for: route.key)
+                let runsElsewhere = (session?.live == true) && (session?.hosted == false)
+                resolvedMode = modeStore.adoptDefaultModeIfUnset(
+                    for: canonicalKey,
+                    hostID: host.hostID,
+                    runsElsewhere: runsElsewhere
+                )
+            }
+        } else {
+            if selection?.key != route?.key {
+                requestedMode = nil
+            }
+            if let route {
+                resolvedMode = rememberedMode(for: route.key)
+            }
         }
+        let terminalAvailable = ProductFeatures.terminalPaneEnabled
+            && appModel.client?.hostCapabilities.terminalStream == true
+        autoFocusKey = (focusComposer && !(resolvedMode == .terminal && terminalAvailable))
+            ? route?.key
+            : nil
         selection = route
         prepareSelectedConversation()
     }
@@ -174,7 +214,7 @@ private struct SessionSplitView: View {
                 onDidCreateSession: { created in
                     feed.listStore.patchSession(created)
                     feed.listStore.rememberOpened(created)
-                    select(SessionRoute(key: created.key), focusComposer: true)
+                    select(SessionRoute(key: created.key), focusComposer: true, isCreated: true)
                 },
                 onPin: { Task { try? await feed.togglePin(session) } },
                 onStop: { _ = try await feed.stop(session) },
@@ -282,6 +322,7 @@ struct CorralIOSCommands: Commands {
     @FocusedValue(\.corralSearchSessions) private var searchSessions
     @FocusedValue(\.corralToggleSessionMode) private var toggleSessionMode
     @FocusedValue(\.corralFocusedSessionMode) private var focusedSessionMode
+    @FocusedValue(\.corralShowQuotas) private var showQuotas
 
     private var toggleViewTitle: LocalizedStringKey {
         switch focusedSessionMode {
@@ -311,6 +352,10 @@ struct CorralIOSCommands: Commands {
             Button(toggleViewTitle) { toggleSessionMode?() }
                 .keyboardShortcut("e", modifiers: .command)
                 .disabled(toggleSessionMode == nil)
+            Divider()
+            Button("quotas.title") { showQuotas?() }
+                .keyboardShortcut("u", modifiers: [.command, .shift])
+                .disabled(showQuotas == nil)
         }
         SidebarCommands()
     }
@@ -334,5 +379,6 @@ extension FocusedValues {
     @Entry var corralSearchSessions: CorralCommandAction?
     @Entry var corralToggleSessionMode: CorralCommandAction?
     @Entry var corralFocusedSessionMode: SessionDetailMode?
+    @Entry var corralShowQuotas: CorralCommandAction?
 }
 #endif

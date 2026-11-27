@@ -1,6 +1,8 @@
 import Foundation
 #if canImport(AppKit)
 import AppKit
+#elseif canImport(UIKit)
+import UIKit
 #endif
 
 /// Path mentions in message text become Finder links (owner request
@@ -24,13 +26,14 @@ enum MacPathLinks {
     )
 
     static func apply(to mutable: NSMutableAttributedString, workingDirectory: String?) {
-        guard let regex = pathRegex else { return }
         let string = mutable.string as NSString
         let full = NSRange(location: 0, length: string.length)
         guard full.length > 0, full.length < 32_768 else { return }
+        let base = workingDirectory.flatMap { $0.isEmpty ? nil : ($0 as NSString).expandingTildeInPath }
+        normalizeExplicitLinks(in: mutable, full: full, base: base)
+        guard let regex = pathRegex else { return }
         let matches = regex.matches(in: mutable.string, options: [], range: full)
         guard !matches.isEmpty else { return }
-        let base = workingDirectory.flatMap { $0.isEmpty ? nil : ($0 as NSString).expandingTildeInPath }
         // Walk backwards so earlier ranges stay valid as we add attributes.
         for match in matches.reversed() {
             var range = trimmed(match.range, in: string)
@@ -46,23 +49,122 @@ enum MacPathLinks {
         }
     }
 
-    /// Opens a path link in Finder; false for any other link. macOS-only by
+    enum LinkAction: Equatable {
+        /// External URL with a non-file scheme (http, https, mailto, corral, ...):
+        /// leave to the system handler.
+        case external
+        /// Existing local file: reveal selected in Finder.
+        case revealFile(URL)
+        /// Existing local directory: open in Finder.
+        case openDirectory(URL)
+        /// Local or scheme-less link that does not exist on this Mac (or pure
+        /// `#anchor`): swallow instead of letting AppKit pass it to
+        /// `NSWorkspace.shared.open`, which fails with LaunchServices `-50`/`-43`.
+        case unresolvableLocal
+    }
+
+    /// Classifies any `NSTextView` `.link` value into a safe local Finder action
+    /// or `.external` for non-file URL schemes.
+    static func classify(_ link: Any, workingDirectory: String? = nil) -> LinkAction {
+        let base = workingDirectory.flatMap { $0.isEmpty ? nil : ($0 as NSString).expandingTildeInPath }
+        if let url = link as? URL ?? (link as? String).flatMap(URL.init(string:)) {
+            if url.isFileURL {
+                guard let resolved = target(for: url.path, base: base) else {
+                    return .unresolvableLocal
+                }
+                return resolved.hasDirectoryPath ? .openDirectory(resolved) : .revealFile(resolved)
+            }
+            if let barePath = bareFileLinePath(from: url) {
+                guard let resolved = target(for: barePath, base: base) else {
+                    return .unresolvableLocal
+                }
+                return resolved.hasDirectoryPath ? .openDirectory(resolved) : .revealFile(resolved)
+            }
+            if let scheme = url.scheme?.trimmingCharacters(in: .whitespacesAndNewlines), !scheme.isEmpty {
+                return .external
+            }
+            let raw = url.absoluteString.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !raw.hasPrefix("#"), !url.path.isEmpty else {
+                return .unresolvableLocal
+            }
+            guard let resolved = target(for: url.path, base: base) else {
+                return .unresolvableLocal
+            }
+            return resolved.hasDirectoryPath ? .openDirectory(resolved) : .revealFile(resolved)
+        }
+        if let rawString = link as? String {
+            let trimmed = rawString.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.contains("://") { return .external }
+            guard !trimmed.isEmpty, !trimmed.hasPrefix("#") else { return .unresolvableLocal }
+            let path = stripFragment(from: trimmed)
+            guard let resolved = target(for: path, base: base) else { return .unresolvableLocal }
+            return resolved.hasDirectoryPath ? .openDirectory(resolved) : .revealFile(resolved)
+        }
+        return .external
+    }
+
+    /// Opens a path link in Finder; false for any external link. macOS-only by
     /// nature (iOS has no path links), and the class is shared with the iOS
     /// target, so the Finder side is compiled out rather than left unguarded.
     @discardableResult
-    static func open(_ link: Any) -> Bool {
-        guard let url = link as? URL ?? (link as? String).flatMap(URL.init(string:)), url.isFileURL else {
+    static func open(_ link: Any, workingDirectory: String? = nil) -> Bool {
+        switch classify(link, workingDirectory: workingDirectory) {
+        case .external:
             return false
-        }
-        #if os(macOS)
-        var isDirectory: ObjCBool = false
-        if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), !isDirectory.boolValue {
+        case .revealFile(let url):
+            #if os(macOS)
             NSWorkspace.shared.activateFileViewerSelecting([url])
-        } else {
+            #endif
+            return true
+        case .openDirectory(let url):
+            #if os(macOS)
             NSWorkspace.shared.open(url)
+            #endif
+            return true
+        case .unresolvableLocal:
+            return true
         }
-        #endif
-        return true
+    }
+
+    /// Rewrites explicit Markdown file links (`file://` or scheme-less local
+    /// paths, with optional `:line` or `#fragment`) to clean local `file://`
+    /// URLs while leaving external links (`http`, `https`, `mailto`, ...) intact.
+    private static func normalizeExplicitLinks(
+        in mutable: NSMutableAttributedString,
+        full: NSRange,
+        base: String?
+    ) {
+        var replacements: [(NSRange, URL)] = []
+        mutable.enumerateAttribute(.link, in: full, options: []) { value, range, _ in
+            guard let value else { return }
+            switch classify(value, workingDirectory: base) {
+            case .revealFile(let url), .openDirectory(let url):
+                replacements.append((range, url))
+            case .external, .unresolvableLocal:
+                break
+            }
+        }
+        for (range, url) in replacements {
+            mutable.addAttribute(.link, value: url, range: range)
+        }
+    }
+
+    private static func stripFragment(from raw: String) -> String {
+        guard let hash = raw.firstIndex(of: "#") else { return raw }
+        return String(raw[..<hash])
+    }
+
+    /// Foundation's `URL(string: "AGENTS.md:10")` parses `AGENTS.md` as an RFC 3986
+    /// scheme when there is no leading slash; recognize bare `file.ext:line[:col]`
+    /// so it resolves as a project-relative path instead of failing in LaunchServices.
+    private static func bareFileLinePath(from url: URL) -> String? {
+        let raw = url.absoluteString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.contains("://"),
+              let scheme = url.scheme, scheme.contains("."),
+              locationSuffix?.firstMatch(in: raw, range: NSRange(location: 0, length: (raw as NSString).length)) != nil else {
+            return nil
+        }
+        return raw.removingPercentEncoding ?? raw
     }
 
     /// The file URL a mention points to: the path itself when it exists,

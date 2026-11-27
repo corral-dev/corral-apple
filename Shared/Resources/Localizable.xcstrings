@@ -99,7 +99,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已拷贝"
+            "value" : "已复制"
           }
         }
       }
@@ -116,7 +116,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "拷贝"
+            "value" : "复制"
           }
         }
       }
@@ -388,7 +388,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已拷贝"
+            "value" : "已复制"
           }
         }
       }
@@ -405,7 +405,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "拷贝 Markdown"
+            "value" : "复制 Markdown"
           }
         }
       }
@@ -1042,7 +1042,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "结果不明，点按检查后重新发送"
+            "value" : "发送状态不明，点按查看并重发"
           }
         }
       }
@@ -1076,7 +1076,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "先回答这道提问，你写的消息会留在下面的输入框里。"
+            "value" : "先回答这个问题，你输入的消息会留在下面的输入框里。"
           }
         }
       }
@@ -1274,13 +1274,13 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "This question is no longer current. Your draft is kept until the refreshed request arrives."
+            "value" : "This question is outdated. Your draft is kept until the new question loads."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "此问题已过期。刷新到最新提问前会保留当前草稿。"
+            "value" : "此问题已过期，刷新到新问题前会保留你的草稿。"
           }
         }
       }
@@ -2329,7 +2329,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "给这台开发机起个名"
+            "value" : "输入开发机名称"
           }
         }
       }
@@ -2784,7 +2784,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Homebrew 已完成，但找不到 corral 命令。"
+            "value" : "Homebrew 安装已完成，但未找到 corral 命令。"
           }
         }
       }
@@ -4536,7 +4536,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "配对链接已损坏，请在电脑上重新出码。"
+            "value" : "配对链接已损坏，请在电脑上重新生成配对码。"
           }
         }
       }
@@ -4553,7 +4553,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "配对链接不完整（缺少 %@），请在电脑上重新出码。"
+            "value" : "配对链接不完整（缺少 %@），请在电脑上重新生成配对码。"
           }
         }
       }
@@ -4570,7 +4570,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "那台电脑上的 Corral 版本过旧，请升级后重新出码。"
+            "value" : "那台电脑上的 Corral 版本过旧，请升级后重新生成配对码。"
           }
         }
       }
@@ -4996,7 +4996,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Kimi 将以 -p 方式运行，跑完即退出；后续请回电脑用 kimi -c 继续，不支持持续交互。"
+            "value" : "Kimi 将以 -p 方式运行，完成后自动退出；后续请在电脑上用 kimi -c 继续，不支持持续交互。"
           }
         }
       }
@@ -5087,7 +5087,7 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Restart · Update host required"
+            "value" : "Restart · Host update required"
           }
         },
         "zh-Hans" : {
@@ -6402,7 +6402,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "这条会话已经不在列表里了"
+            "value" : "该会话已不在列表中"
           }
         }
       }
@@ -6436,7 +6436,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "工作区未知"
+            "value" : "未知工作区"
           }
         }
       }
@@ -6878,7 +6878,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "通知已关闭。可在系统设置中开启，以便助手等你时提醒。"
+            "value" : "通知已关闭。请在系统设置中开启，以便在助手需要你时收到提醒。"
           }
         }
       }
@@ -7507,7 +7507,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "按回车在这里重新启动，继续在助手自己的界面里操作。"
+            "value" : "按回车在此重新启动，继续在助手的终端界面中操作。"
           }
         }
       }
@@ -7524,7 +7524,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "这个会话没有在运行"
+            "value" : "此会话未在运行"
           }
         }
       }
@@ -7694,7 +7694,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在个人文件夹打开"
+            "value" : "在主目录打开"
           }
         }
       }
@@ -7847,7 +7847,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "这里看不到它的实时画面，聊天视图会持续更新。"
+            "value" : "这里看不到它的实时画面，对话视图会持续更新。"
           }
         }
       }
@@ -7882,6 +7882,198 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "无法启动这个会话"
+          }
+        }
+      }
+    },
+    "quotas.empty.body" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sign in to Claude, Codex, OpenCode, Antigravity, or Pi on this machine, then refresh."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在此主机登录 Claude、Codex、OpenCode、Antigravity 或 Pi 后刷新即可查看。"
+          }
+        }
+      }
+    },
+    "quotas.empty.title" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Runtime Accounts"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无运行时账号"
+          }
+        }
+      }
+    },
+    "quotas.error.host_disconnected" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connect to this machine to check agent runtime quotas."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接这台主机后即可查看 Agent 运行时配额。"
+          }
+        }
+      }
+    },
+    "quotas.error.load_failed" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unable to read quota status from this host."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法从该主机读取配额状态。"
+          }
+        }
+      }
+    },
+    "quotas.error.title" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn’t Load Quotas"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法加载余量"
+          }
+        }
+      }
+    },
+    "quotas.not_installed.body" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Install Subswap on this machine to inspect local agent runtime balances here."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在此主机安装 Subswap 后即可查看本机 Agent 运行时余量。"
+          }
+        }
+      }
+    },
+    "quotas.not_installed.copied" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copied"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已复制"
+          }
+        }
+      }
+    },
+    "quotas.not_installed.title" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Subswap Not Installed"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未安装 Subswap"
+          }
+        }
+      }
+    },
+    "quotas.refresh" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Refresh Quotas"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "刷新余量"
+          }
+        }
+      }
+    },
+    "quotas.title" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Account Quotas"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "账号余量"
+          }
+        }
+      }
+    },
+    "quotas.unsupported.body" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Update Corral on this machine to view agent runtime quotas."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请升级这台主机上的 Corral 以查看 Agent 运行时配额。"
+          }
+        }
+      }
+    },
+    "quotas.unsupported.title" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Host Update Required"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "需要更新主机端"
           }
         }
       }

@@ -52,6 +52,16 @@ nonisolated struct ChatImageReference: Hashable, Sendable {
         }
 
         let fencedRanges = fencedCodeRanges(in: text)
+        for match in text.matches(of: markdownLink) {
+            let range = match.range
+            if range.lowerBound > text.startIndex, text[text.index(before: range.lowerBound)] == "!" {
+                continue
+            }
+            guard !claimed.contains(where: { $0.overlaps(range) }) else { continue }
+            guard !fencedRanges.contains(where: { $0.overlaps(range) }) else { continue }
+            let alt = String(match.output.1).trimmingCharacters(in: .whitespaces)
+            add(String(match.output.2), kind: .explicit, alt: alt.isEmpty ? nil : alt, at: range)
+        }
         for match in text.matches(of: bareReference) {
             let range = match.range
             guard !claimed.contains(where: { $0.overlaps(range) }) else { continue }
@@ -59,13 +69,25 @@ nonisolated struct ChatImageReference: Hashable, Sendable {
             add(String(match.output), kind: .mention, alt: nil, at: range)
         }
 
+        let explicitRefs = Set(found.compactMap { $0.reference.kind == .explicit ? $0.reference.ref : nil })
         var seen = Set<String>()
         return found
+            .filter { $0.reference.kind == .explicit || !explicitRefs.contains($0.reference.ref) }
             .sorted { $0.offset < $1.offset }
             .map(\.reference)
             .filter { seen.insert($0.ref).inserted }
             .prefix(maxPerMessage)
             .map { $0 }
+    }
+
+    static func isImageURL(_ url: URL) -> Bool {
+        if let scheme = url.scheme?.lowercased(),
+           scheme != "http", scheme != "https", scheme != "file" {
+            return false
+        }
+        let ext = url.pathExtension.lowercased()
+        if imageExtensions.contains(ext) { return true }
+        return hasImageExtension(url.absoluteString)
     }
 
     // MARK: - Parsing helpers
@@ -78,8 +100,11 @@ nonisolated struct ChatImageReference: Hashable, Sendable {
     private static func hasImageExtension(_ ref: String) -> Bool {
         var path = ref
         if let url = URL(string: ref), let scheme = url.scheme?.lowercased(),
-           scheme == "http" || scheme == "https" {
+           scheme == "http" || scheme == "https" || scheme == "file" {
             path = url.path
+        } else {
+            if let q = path.firstIndex(of: "?") { path = String(path[..<q]) }
+            if let h = path.firstIndex(of: "#") { path = String(path[..<h]) }
         }
         let ext = (path as NSString).pathExtension.lowercased()
         return imageExtensions.contains(ext)
@@ -115,6 +140,9 @@ nonisolated struct ChatImageReference: Hashable, Sendable {
 
     private nonisolated(unsafe) static let markdownImage =
         /!\[([^\]\n]*)\]\(\s*(<[^>\n]+>|[^)\s]+)(?:\s+"[^"\n]*")?\s*\)/
+
+    private nonisolated(unsafe) static let markdownLink =
+        /\[([^\]\n]+)\]\(\s*(<[^>\n]+>|[^)\s]+)(?:\s+"[^"\n]*")?\s*\)/
 
     private nonisolated(unsafe) static let htmlImage =
         /<img\b[^>]*?\bsrc\s*=\s*["']([^"'\n]+)["'][^>]*>/.ignoresCase()

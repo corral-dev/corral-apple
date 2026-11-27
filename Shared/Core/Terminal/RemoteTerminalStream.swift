@@ -99,6 +99,7 @@ final class RemoteTerminalStream {
     /// retaining every byte produced while the pane was hidden.
     static let backlogByteLimit = 4 * 1024 * 1024
     @ObservationIgnored private var attached = false
+    @ObservationIgnored private var pendingRevealRecover = false
     @ObservationIgnored private var attachGeneration: UUID?
     @ObservationIgnored private var attachTask: Task<Void, Never>?
     @ObservationIgnored private var generation = UUID()
@@ -121,6 +122,7 @@ final class RemoteTerminalStream {
     }
 
     var clientIdentity: ObjectIdentifier? { client.map(ObjectIdentifier.init) }
+    var needsRevealRecover: Bool { pendingRevealRecover }
 
     #if DEBUG
     static weak var inspectionStream: RemoteTerminalStream?
@@ -176,6 +178,7 @@ final class RemoteTerminalStream {
         resizeTask = nil
         attachGeneration = nil
         attached = false
+        pendingRevealRecover = false
         synced = false
         backlog = nil
         backlogBytes = 0
@@ -192,6 +195,12 @@ final class RemoteTerminalStream {
     }
 
     func updateFit(_ grid: TerminalGrid) {
+        if pendingRevealRecover && isInFront() {
+            wanted = grid
+            pendingRevealRecover = false
+            recover()
+            return
+        }
         guard wanted != grid else {
             if attached, grid != sentGrid, resizeTask == nil { scheduleResize() }
             return
@@ -199,7 +208,7 @@ final class RemoteTerminalStream {
         wanted = grid
         if attached {
             if grid != sentGrid { scheduleResize() }
-        } else {
+        } else if !pendingRevealRecover {
             attachIfReady()
         }
     }
@@ -332,6 +341,11 @@ final class RemoteTerminalStream {
     /// The user came back to this view (its window became key): the host pane
     /// takes this view's grid again. Typing claims it on the host by itself.
     func claimSize() {
+        if pendingRevealRecover {
+            pendingRevealRecover = false
+            recover()
+            return
+        }
         guard attached, let grid = wanted ?? sentGrid, let client else { return }
         let mine = generation
         var request = params(grid)
@@ -402,6 +416,13 @@ final class RemoteTerminalStream {
         backlog = nil
         backlogBytes = 0
         backlogNeedsResync = false
+        if hasBeenLive && !isInFront() {
+            // Hidden retained terminals defer re-attach until revealed so
+            // foreground/reconnect never storms all pooled emulators on MainActor.
+            pendingRevealRecover = true
+            return
+        }
+        pendingRevealRecover = false
         phase = .connecting
         attachIfReady()
     }

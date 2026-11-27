@@ -13,9 +13,15 @@ let package = Package(
     products: [
         .library(name: "Corral", targets: ["Corral"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/x0c/subswap-kit-swift.git", from: "0.1.0"),
+    ],
     targets: [
         .target(
             name: "Corral",
+            dependencies: [
+                .product(name: "SubswapQuotaCore", package: "subswap-kit-swift"),
+            ],
             // Shared/Core is the Foundation-only layer compiled into every Apple
             // client (iOS and macOS app targets); SwiftUI shells and views stay on
             // the Xcode path (project.yml).
@@ -27,7 +33,10 @@ let package = Package(
         ),
         .testTarget(
             name: "CorralTests",
-            dependencies: ["Corral"],
+            dependencies: [
+                "Corral",
+                .product(name: "SubswapQuotaCore", package: "subswap-kit-swift"),
+            ],
             path: "Tests",
             exclude: [
                 // Xcode-only tests (UIKit/SwiftUI/AppModel/iOS-gated sources).
@@ -73,6 +82,7 @@ let package = Package(
                 "DataReviewSafetyTests.swift",
                 "HandshakeRaceTests.swift",
                 "HostCustomNameTests.swift",
+                "HostQuotaTests.swift",
                 "LanDiscoveryTests.swift",
                 "NativeQuestionTests.swift",
                 "NotificationLedgerTests.swift",

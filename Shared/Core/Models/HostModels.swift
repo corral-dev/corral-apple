@@ -221,6 +221,8 @@ nonisolated struct HostCapabilities: Codable, Sendable, Equatable {
     var inputFile: Bool = false
     /// Host emits ephemeral live chat streaming frames (`kind: "stream"`).
     var chatStreaming: Bool = false
+    /// Host serves read-only agent runtime quota snapshots (`quotas.*`).
+    var quotas: Bool = false
 
     static let empty = HostCapabilities(commandReceipts: false, toolDetail: false)
 
@@ -241,6 +243,7 @@ nonisolated struct HostCapabilities: Codable, Sendable, Equatable {
         case sessionExport = "session_export"
         case inputFile = "input_file"
         case chatStreaming = "chat_streaming"
+        case quotas
     }
 
     init(commandReceipts: Bool, toolDetail: Bool = false, sessionRestart: Bool = false) {
@@ -265,6 +268,7 @@ nonisolated struct HostCapabilities: Codable, Sendable, Equatable {
         sessionExport = (try? container.decode(Bool.self, forKey: .sessionExport)) ?? features.contains("session_export")
         inputFile = (try? container.decode(Bool.self, forKey: .inputFile)) ?? features.contains("input_file")
         chatStreaming = (try? container.decode(Bool.self, forKey: .chatStreaming)) ?? features.contains("chat_streaming")
+        quotas = (try? container.decode(Bool.self, forKey: .quotas)) ?? features.contains("quotas")
         if container.contains(.commandReceipts) {
             if let flag = try? container.decode(Bool.self, forKey: .commandReceipts) {
                 commandReceipts = flag
@@ -305,6 +309,7 @@ nonisolated struct HostCapabilities: Codable, Sendable, Equatable {
         try container.encode(sessionExport, forKey: .sessionExport)
         try container.encode(inputFile, forKey: .inputFile)
         try container.encode(chatStreaming, forKey: .chatStreaming)
+        try container.encode(quotas, forKey: .quotas)
     }
 }
 

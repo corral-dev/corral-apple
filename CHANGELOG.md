@@ -6,6 +6,38 @@ next version's section. A `Release: minor` or `Release: major` line requests a
 larger version step; `Release: hold <reason>` keeps the changes unreleased until
 the named acceptance is done.
 
+## Mac 1.0.5 (199)
+
+### English
+
+- Mac: fix clicking explicit Markdown file links in agent messages (absolute, relative, `~/`, `file://`, and `:line`/`#L...` targets) so local files reveal in Finder instead of failing with macOS error `-50`.
+- Mac: open a read-only view of agent usage limits where your host supports it, show linked Markdown images inline below surrounding paragraphs, lists, or tables, and resume stopped sessions cleanly after host relocation without terminal reconnect freezes.
+
+### 简体中文
+
+- Mac：修复点击助手消息中显式 Markdown 文件链接（绝对路径、相对路径、`~/`、`file://` 及带 `:line`/`#L...` 后缀）时报 macOS `-50` 错误的问题，现在会直接在 Finder 中定位打开。
+- Mac：连接支持此功能的主机时可查看助手用量与限额，在段落、列表或表格下方直接内联展示 Markdown 图片链接，并修复主机迁移后恢复已停止会话及重连终端卡住的问题。
+
+## Mac 1.0.4 (198) / iPhone 1.0.228 (249)
+
+Mac 1.0.4 was not published publicly; its Mac changes ship in Mac 1.0.5. iPhone 1.0.228 (249) shipped on AppShelf.
+
+### English
+
+- iPhone and iPad: paste copied images and files directly into the chat composer. Review or remove them before sending, without losing the text already in your draft.
+- Mac, iPhone, and iPad: open a read-only view of agent usage limits where your host supports it.
+- Mac, iPhone, and iPad: show linked Markdown images inline below their surrounding paragraphs, lists, or tables.
+- Mac, iPhone, and iPad: resume stopped sessions after host relocation and avoid terminal freezes during reconnect.
+- iPhone and iPad: choose whether agent sessions open in Chat or Terminal by default.
+
+### 简体中文
+
+- iPhone 和 iPad：将复制的图片和文件直接粘贴到聊天输入框。发送前可以预览或移除附件，已有草稿文字会保留。
+- Mac、iPhone 和 iPad：连接支持此功能的主机时，可以查看助手用量和限额。
+- Mac、iPhone 和 iPad：Markdown 中的图片链接会在对应段落、列表或表格下方直接显示图片。
+- Mac、iPhone 和 iPad：修复主机迁移后无法恢复已停止会话的问题，并避免重连时终端卡住。
+- iPhone 和 iPad：可选择进入助手会话时默认打开聊天或终端。
+
 ## Mac 1.0.3 (197) / iPhone 1.0.227 (248)
 
 ### English

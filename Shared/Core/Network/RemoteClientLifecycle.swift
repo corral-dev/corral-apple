@@ -5,10 +5,6 @@ import Foundation
         diagnose(.socketTeardown)
         controlConfirmed = false
         confirmedAccess = nil
-        hostCapabilities = .empty
-        supportsMediaImage = false
-        supportsMediaFile = false
-        supportsInputFile = false
         dataBindingTask?.cancel()
         dataBindingTask = nil
         upgradeTask?.cancel()
@@ -51,6 +47,10 @@ import Foundation
         pendingRequests.removeAll()
 
         if !keepSubscriptions {
+            hostCapabilities = .empty
+            supportsMediaImage = false
+            supportsMediaFile = false
+            supportsInputFile = false
             for (_, buckets) in channelSubscribers {
                 for (_, subscriber) in buckets {
                     subscriber.finish()

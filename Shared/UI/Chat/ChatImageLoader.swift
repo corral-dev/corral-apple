@@ -84,6 +84,15 @@ final class ChatImageLoader {
     /// Inspection-only local bitmap for the production chat path; Release and
     /// ordinary conversations never set it.
     var localPreview: PlatformImage?
+
+    /// Pre-populate cached previews in unit/layout tests for real URL refs without host IPC.
+    func seedDebugPreview(_ image: PlatformImage, seq: Int, ref: String) {
+        let cost = Self.cost(of: image)
+        for tier in ChatImageTier.allCases {
+            Self.memory.setObject(image, forKey: cacheKey(seq: seq, ref: ref, tier: tier) as NSString, cost: cost)
+        }
+        revision &+= 1
+    }
     #endif
 
     init(client: RemoteClient?, hostID: String, sessionKey: String) {
@@ -171,50 +180,194 @@ final class ChatImageLoader {
     /// Reading `revision` here registers Observation for image completion.
     func rendered(text: String, dark: Bool, seq: Int) -> AttributedString {
         _ = revision
-        return inlineImages(in: diagrams.attributed(text: text, dark: dark), seq: seq)
+        return inlineImages(in: diagrams.attributed(text: text, dark: dark), source: text, seq: seq)
     }
 
-    /// Start inline previews for every explicit Markdown image in the message.
+    /// Start inline previews for every explicit Markdown image or image link in the message.
     func prepareImages(in text: String, seq: Int) async {
-        for run in ChatMarkdown.attributed(text).runs {
-            guard let url = run.imageURL else { continue }
-            _ = await load(seq: seq, ref: url.absoluteString, tier: inlineTier())
+        var requested = Set<String>()
+        for candidate in inlineCandidates(in: ChatMarkdown.attributed(text), source: text) {
+            guard requested.insert(candidate.ref).inserted else { continue }
+            _ = await load(seq: seq, ref: candidate.ref, tier: inlineTier())
+            if requested.count >= ChatImageReference.maxPerMessage { break }
         }
     }
 
-    /// Replace each Markdown image run with a block attachment after its alt
-    /// text, so the image sits in the message's reading order instead of a
-    /// fixed strip at the bottom.
-    private func inlineImages(in base: AttributedString, seq: Int) -> AttributedString {
-        let images = base.runs.compactMap { run -> (Range<AttributedString.Index>, URL, String)? in
-            guard let url = run.imageURL else { return nil }
-            return (run.range, url, String(base[run.range].characters))
+    private struct InlineImageCandidate {
+        enum SourceKind {
+            case image
+            case link
         }
-        guard !images.isEmpty else { return base }
-        let output = NSMutableAttributedString(attributedString: NSAttributedString(base))
-        for (range, url, alt) in images.reversed() {
-            let ref = url.absoluteString
-            guard !failedRefs.contains("\(seq)|\(ref)") else { continue }
-            let nsRange = NSRange(range, in: base)
-            let hit = cachedImage(seq: seq, ref: ref, tier: inlineTier())
+
+        let ref: String
+        let alt: String
+        let insertionAt: Int
+        let kind: SourceKind
+    }
+
+    /// Collect inline image declarations (`![alt](url)`) and non-code Markdown image
+    /// links (`[label](image-url)`), resolving link insertion points to the end of the
+    /// enclosing paragraph, heading, list item, or Markdown table so mid-sentence prose
+    /// never splits across an attachment.
+    private func inlineCandidates(in base: AttributedString, source: String) -> [InlineImageCandidate] {
+        let runs = Array(base.runs)
+        let tableLayouts = MarkdownTableProjection.layouts(in: base)
+        var candidates: [InlineImageCandidate] = []
+        var seenAtRef = Set<String>()
+
+        for (idx, run) in runs.enumerated() {
+            if let url = run.imageURL {
+                let nsRange = NSRange(run.range, in: base)
+                let alt = String(base[run.range].characters)
+                let ref = resolveRef(url, in: source)
+                let at = NSMaxRange(nsRange)
+                if seenAtRef.insert("\(at)|\(ref)").inserted {
+                    candidates.append(InlineImageCandidate(ref: ref, alt: alt, insertionAt: at, kind: .image))
+                }
+                continue
+            }
+            guard let url = run.link, ChatImageReference.isImageURL(url) else { continue }
+            guard !Self.isCodeRun(run) else { continue }
+            let nsRange = NSRange(run.range, in: base)
+            let ref = resolveRef(url, in: source)
+            let at = Self.linkInsertionOffset(
+                forRunAt: idx,
+                nsRange: nsRange,
+                in: base,
+                runs: runs,
+                tableLayouts: tableLayouts
+            )
+            guard seenAtRef.insert("\(at)|\(ref)").inserted else { continue }
+            let alt = String(base[run.range].characters).trimmingCharacters(in: .whitespacesAndNewlines)
+            candidates.append(InlineImageCandidate(ref: ref, alt: alt, insertionAt: at, kind: .link))
+        }
+        return Array(candidates.prefix(ChatImageReference.maxPerMessage))
+    }
+
+    private static func isCodeRun(_ run: AttributedString.Runs.Run) -> Bool {
+        if run.inlinePresentationIntent?.contains(.code) == true { return true }
+        return run.presentationIntent?.components.contains {
+            if case .codeBlock = $0.kind { return true }
+            return false
+        } ?? false
+    }
+
+    private static func linkInsertionOffset(
+        forRunAt index: Int,
+        nsRange: NSRange,
+        in base: AttributedString,
+        runs: [AttributedString.Runs.Run],
+        tableLayouts: [MarkdownTableProjection.Layout]
+    ) -> Int {
+        if let table = tableLayouts.first(where: { NSLocationInRange(nsRange.location, $0.range) }) {
+            return NSMaxRange(table.range)
+        }
+        if let blockID = enclosingBlockIdentity(in: runs[index].presentationIntent) {
+            var endUpper = runs[index].range.upperBound
+            if index + 1 < runs.count {
+                for nextRun in runs[(index + 1)...] {
+                    guard nextRun.presentationIntent?.components.contains(where: { $0.identity == blockID }) == true else {
+                        break
+                    }
+                    endUpper = nextRun.range.upperBound
+                }
+            }
+            return NSMaxRange(NSRange(runs[index].range.lowerBound..<endUpper, in: base))
+        }
+        return NSMaxRange(nsRange)
+    }
+
+    private static func enclosingBlockIdentity(in intent: PresentationIntent?) -> Int? {
+        guard let components = intent?.components else { return nil }
+        for component in components {
+            switch component.kind {
+            case .paragraph, .header, .listItem:
+                return component.identity
+            default:
+                continue
+            }
+        }
+        return nil
+    }
+
+    /// Map a Foundation Markdown URL back to the exact verbatim substring expected by the host preview RPC.
+    private func resolveRef(_ url: URL, in source: String) -> String {
+        let raw = url.absoluteString
+        if source.contains(raw) { return raw }
+        let parsed = ChatImageReferenceCache.references(in: source)
+        let standardized = url.standardized
+        let decodedRaw = raw.removingPercentEncoding
+        if let match = parsed.first(where: { item in
+            if item.ref == raw { return true }
+            if let decodedRaw, item.ref.removingPercentEncoding == decodedRaw { return true }
+            if let itemURL = URL(string: item.ref), itemURL.standardized == standardized { return true }
+            return item.ref == url.path
+        }) {
+            return match.ref
+        }
+        return raw
+    }
+
+    /// Replace each Markdown image run or inline image link with a block attachment
+    /// in reading order, keeping surrounding paragraphs and tables intact.
+    private func inlineImages(in base: AttributedString, source: String, seq: Int) -> AttributedString {
+        let candidates = inlineCandidates(in: base, source: source)
+        guard !candidates.isEmpty else { return base }
+        let tier = inlineTier()
+        let available = isAvailable
+
+        var grouped: [Int: [ChatImageAttachment]] = [:]
+        var insertionOffsets: [Int] = []
+        for candidate in candidates {
+            guard !failedRefs.contains("\(seq)|\(candidate.ref)") else { continue }
+            let hit = cachedImage(seq: seq, ref: candidate.ref, tier: tier)
+            if candidate.kind == .link, hit == nil, !available {
+                continue
+            }
             let attachment = ChatImageAttachment(
-                ref: ref, alt: alt,
+                ref: candidate.ref,
+                alt: candidate.alt,
                 image: hit,
                 displayScale: Self.displayScale
             ) { [weak self] in
-                self?.openFullImage(seq: seq, ref: ref, name: alt.isEmpty ? (ref as NSString).lastPathComponent : alt)
+                let fallback = (candidate.ref as NSString).lastPathComponent
+                let name = candidate.alt.isEmpty ? fallback : candidate.alt
+                self?.openFullImage(seq: seq, ref: candidate.ref, name: name)
             }
+            if grouped[candidate.insertionAt] == nil {
+                insertionOffsets.append(candidate.insertionAt)
+            }
+            grouped[candidate.insertionAt, default: []].append(attachment)
+        }
+        guard !insertionOffsets.isEmpty else { return base }
+
+        let output = NSMutableAttributedString(attributedString: NSAttributedString(base))
+        let blockStyle = NSMutableParagraphStyle()
+        blockStyle.firstLineHeadIndent = 0
+        blockStyle.headIndent = 0
+        blockStyle.paragraphSpacingBefore = 6
+        blockStyle.paragraphSpacing = 6
+
+        for at in insertionOffsets.sorted(by: >) {
+            guard let attachments = grouped[at], !attachments.isEmpty else { continue }
             let insertion = NSMutableAttributedString()
             let string = output.string as NSString
-            let at = NSMaxRange(nsRange)
-            if at > 0, string.substring(with: NSRange(location: at - 1, length: 1)) != "\n" {
+            let safeAt = min(at, string.length)
+            if safeAt > 0, string.substring(with: NSRange(location: safeAt - 1, length: 1)) != "\n" {
                 insertion.append(NSAttributedString(string: "\n"))
             }
-            insertion.append(NSAttributedString(attachment: attachment))
-            if at < string.length, string.substring(with: NSRange(location: at, length: 1)) != "\n" {
+            for (offset, attachment) in attachments.enumerated() {
+                if offset > 0 {
+                    insertion.append(NSAttributedString(string: "\n"))
+                }
+                let item = NSMutableAttributedString(attachment: attachment)
+                item.addAttribute(.paragraphStyle, value: blockStyle, range: NSRange(location: 0, length: item.length))
+                insertion.append(item)
+            }
+            if safeAt < string.length, string.substring(with: NSRange(location: safeAt, length: 1)) != "\n" {
                 insertion.append(NSAttributedString(string: "\n"))
             }
-            output.insert(insertion, at: at)
+            output.insert(insertion, at: safeAt)
         }
         return AttributedString(output)
     }

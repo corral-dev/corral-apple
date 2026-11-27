@@ -64,7 +64,11 @@ nonisolated final class ChatImageAttachment: NSTextAttachment, ChatSourceAttachm
     #endif
 
     private static func bounds(for natural: CGSize, available: CGFloat) -> CGRect {
+        #if os(iOS)
+        let maxHeight: CGFloat = 280
+        #else
         let maxHeight: CGFloat = 420
+        #endif
         let scale = min(1, available / max(natural.width, 1), maxHeight / max(natural.height, 1))
         return CGRect(x: 0, y: 0, width: (natural.width * scale).rounded(), height: (natural.height * scale).rounded())
     }

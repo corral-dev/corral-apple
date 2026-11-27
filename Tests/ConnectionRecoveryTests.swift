@@ -297,6 +297,60 @@ final class ConnectionRecoveryTests: XCTestCase {
         XCTAssertTrue(notified)
         XCTAssertTrue(client.isUsable)
     }
+
+    func testSameHostReconnectTeardownPreservesHostCapabilitiesWhileDisconnectClearsThem() {
+        let client = RemoteClient(devicePrivateKey: RemoteCryptoKeys.generatePrivateKey())
+        client.hostCapabilities.terminalStream = true
+        client.supportsMediaImage = true
+        client.supportsMediaFile = true
+        client.supportsInputFile = true
+
+        client.teardownSocket(keepSubscriptions: true)
+        XCTAssertTrue(client.hostCapabilities.terminalStream)
+        XCTAssertTrue(client.supportsMediaImage)
+        XCTAssertTrue(client.supportsMediaFile)
+        XCTAssertTrue(client.supportsInputFile)
+
+        client.disconnect()
+        XCTAssertFalse(client.hostCapabilities.terminalStream)
+        XCTAssertFalse(client.supportsMediaImage)
+        XCTAssertFalse(client.supportsMediaFile)
+        XCTAssertFalse(client.supportsInputFile)
+    }
+
+    func testHiddenRetainedTerminalDefersRecoverUntilRevealed() async {
+        @MainActor final class InFrontFlag { var value = true }
+        let client = RemoteClient(devicePrivateKey: RemoteCryptoKeys.generatePrivateKey())
+        _ = client.installPlaneForTesting(isControl: true)
+        let inFront = InFrontFlag()
+        let stream = RemoteTerminalStream(sessionKey: "hidden-recover-test", client: client)
+        stream.isInFront = { inFront.value }
+        stream.start()
+        stream.updateFit(TerminalGrid(cols: 80, rows: 24))
+        stream.inspectionHandle([
+            "kind": "snapshot",
+            "seq": 1,
+            "cols": 80,
+            "rows": 24,
+            "data": Data("ok".utf8).base64EncodedString(),
+        ])
+        XCTAssertTrue(stream.hasBeenLive)
+        XCTAssertEqual(stream.phase, .live)
+        XCTAssertFalse(stream.needsRevealRecover)
+
+        inFront.value = false
+        client.notifyReadyHandlers()
+        XCTAssertTrue(stream.needsRevealRecover)
+        XCTAssertEqual(stream.phase, .live)
+
+        inFront.value = true
+        stream.claimSize()
+        XCTAssertFalse(stream.needsRevealRecover)
+        XCTAssertEqual(stream.phase, .connecting)
+
+        stream.stop()
+        client.disconnect()
+    }
 }
 
 /// Real WebSocket and encrypted Corral frames, isolated from pairing/user data.

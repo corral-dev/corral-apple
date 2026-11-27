@@ -147,6 +147,7 @@ final class MacCommandCenter {
     var newTerminalTabRequest = 0
     var openInSplitRequest = 0
     var restartRequest = 0
+    var showQuotasRequest = 0
     /// The sidebar's single selection; Session ▸ Open in Split acts on it.
     var sidebarSelection: String?
     var canOpenInSplit = false
@@ -156,6 +157,7 @@ final class MacCommandCenter {
     var canUseTerminal = false
     /// Whether the main window currently has a connected, writable machine.
     var canCreateSession = false
+    var canShowQuotas = false
     var hasFocusedPane = false
     var focusedPaneMode: MacWorkspace.PaneMode?
     var focusedSessionPinned = false
@@ -233,6 +235,10 @@ struct MacCommands: Commands {
             Button("terminal.pane.new") { center.newTerminalTabRequest += 1 }
                 .keyboardShortcut("t", modifiers: [.command, .option])
                 .disabled(!center.canUseTerminal)
+            Divider()
+            Button("quotas.title") { center.showQuotasRequest += 1 }
+                .keyboardShortcut("u", modifiers: [.command, .shift])
+                .disabled(!center.canShowQuotas)
         }
         SidebarCommands()
     }

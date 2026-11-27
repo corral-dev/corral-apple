@@ -16,10 +16,14 @@ struct SessionSplitContext {
     var selection: Binding<SessionRoute?>
     /// Selects a conversation; `focusComposer` opens it ready for typing.
     var open: (_ route: SessionRoute, _ focusComposer: Bool) -> Void
+    /// Opens a newly created session (New Session / Fork / Continue with…),
+    /// applying the configured default display mode.
+    var openCreated: (_ route: SessionRoute) -> Void = { _ in }
     /// Opens a conversation directly in the requested mode (e.g. Agent Terminal).
     var openMode: (_ route: SessionRoute, _ mode: SessionDetailMode) -> Void = { _, _ in }
     var showSettings: () -> Void
     var showPairing: () -> Void
+    var showQuotas: () -> Void
     /// Bumped by the empty detail column's New Session action.
     var newSessionRequest: Int
     /// The split is collapsed to one stack (compact window width). Read
@@ -330,6 +334,11 @@ struct SessionListView: View {
             )
         }
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button(action: split.showQuotas) {
+                    Label("quotas.title", systemImage: "gauge.with.dots.needle.67percent")
+                }
+            }
             ToolbarItem(placement: .principal) {
                 SessionMachineSwitcher(host: host, onPair: split.showPairing)
             }
@@ -583,7 +592,7 @@ struct SessionListView: View {
         // Sheet dismiss animation first, then push chat so focus sticks.
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(120))
-            split.open(SessionRoute(key: key), true)
+            split.openCreated(SessionRoute(key: key))
         }
     }
 
@@ -1000,7 +1009,11 @@ struct SessionListView: View {
         let caps = appModel.client?.hostCapabilities
         let supportsTerminal = ProductFeatures.terminalPaneEnabled && caps?.terminalStream == true
         let canonicalKey = listStore.resolvedKey(session.key)
-        let rememberedMode = SessionDetailModeStore.shared.effectiveMode(for: canonicalKey, hostID: host.hostID)
+        let rememberedMode = SessionDetailModeStore.shared.effectiveOpenMode(
+            for: canonicalKey,
+            hostID: host.hostID,
+            runsElsewhere: session.live && !session.hosted
+        )
         return SessionListContextActions(
             runtimes: runtimeCatalog.runtimes,
             runtimesLoaded: runtimeCatalog.isLoaded,
@@ -1047,7 +1060,7 @@ struct SessionListView: View {
             listStore.patchSession(created)
             listStore.rememberOpened(created)
             HapticFeedback.shared.emit(.success, operationID: operationID, scope: hapticScope)
-            split.open(SessionRoute(key: created.key), true)
+            split.openCreated(SessionRoute(key: created.key))
         } catch {
             HapticFeedback.shared.failure(error, operationID: operationID, scope: hapticScope)
             contextActionError = SessionActionsMenu.failureMessage(for: error)
@@ -1071,7 +1084,7 @@ struct SessionListView: View {
             listStore.patchSession(created)
             listStore.rememberOpened(created)
             HapticFeedback.shared.emit(.success, operationID: operationID, scope: hapticScope)
-            split.open(SessionRoute(key: created.key), true)
+            split.openCreated(SessionRoute(key: created.key))
         } catch {
             HapticFeedback.shared.failure(error, operationID: operationID, scope: hapticScope)
             contextActionError = SessionActionsMenu.failureMessage(for: error)

@@ -209,7 +209,7 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
         isHidden = !presented
         accessibilityElementsHidden = !presented
         if !presented {
-            _ = resignFirstResponder()
+            if isFirstResponder { _ = resignFirstResponder() }
             touchInteraction?.reset()
             cancelPendingFit()
             cancelPendingSurfaceBackgroundSample()
@@ -233,7 +233,7 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
         self.allowsInput = allowsInput
         self.isAgent = isAgent
         setPresented(presented)
-        if !allowsInput { _ = resignFirstResponder() }
+        if !allowsInput && isFirstResponder { _ = resignFirstResponder() }
 
         let targetFontSize = CGFloat(MobileZoomPreferences.clampTerminalFontSize(Double(fontSize)))
         var didChangeFont = false
@@ -250,17 +250,20 @@ final class ShellTerminalHost: SwiftTerm.TerminalView, TerminalStreamSink, Termi
 
         if revealed {
             setNeedsDisplay()
-            if hasScreen && stream?.phase == .live && isInFront {
+            if hasScreen && isInFront && (stream?.phase == .live || stream?.needsRevealRecover == true) {
                 stream?.claimSize()
             }
             if !didChangeFont || pendingFontHostReconcile {
                 scheduleFit()
             }
             if let cachedBg = lastReportedBackground {
-                onBackgroundColorChange?(cachedBg)
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.presented else { return }
+                    self.onBackgroundColorChange?(cachedBg)
+                }
             }
             scheduleSurfaceBackgroundSample(immediate: true)
-        } else if !wasInFront && isInFront && hasScreen && stream?.phase == .live {
+        } else if !wasInFront && isInFront && hasScreen && (stream?.phase == .live || stream?.needsRevealRecover == true) {
             stream?.claimSize()
         } else if presented && lastReportedBackground == nil {
             scheduleSurfaceBackgroundSample(immediate: true)

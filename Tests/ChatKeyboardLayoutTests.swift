@@ -2,6 +2,7 @@
 import Observation
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 import XCTest
 @testable import Corral
 
@@ -10,6 +11,102 @@ import XCTest
 @MainActor
 final class ChatKeyboardLayoutTests: XCTestCase {
     private let keyboard = TestKeyboardObserver()
+
+    func testNativePasteStagesImageAndFileWithoutReplacingDraftSelection() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previousWindow = scene.windows.first(where: \.isKeyWindow)
+        let fixture = KeyboardFixture()
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = UIHostingController(rootView: KeyboardFixtureView(fixture: fixture))
+        window.makeKeyAndVisible()
+        let pasteboard = UIPasteboard.general
+        let originalItems = pasteboard.items
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID())/paste-check.txt")
+        let data = Data("file bytes".utf8)
+        defer {
+            pasteboard.items = originalItems
+            try? FileManager.default.removeItem(at: file.deletingLastPathComponent())
+            window.endEditing(true)
+            window.isHidden = true
+            window.rootViewController = nil
+            previousWindow?.makeKeyAndVisible()
+        }
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: file)
+        try await waitUntil { self.editableInput(in: window) != nil }
+        let editor = try XCTUnwrap(editableInput(in: window) as? UITextView)
+        XCTAssertTrue(editor.becomeFirstResponder())
+        editor.insertText("Draft remains")
+        try await waitUntil { fixture.text == "Draft remains" }
+        let selection = NSRange(location: 6, length: 7)
+        editor.selectedRange = selection
+        let restingComposerHeight = composerSurfaceRect(from: editor, in: window).height
+
+        let action = #selector(UIResponderStandardEditActions.paste(_:))
+        func paste() {
+            XCTAssertTrue(editor.canPerformAction(action, withSender: nil), "Paste must be enabled for the clipboard type")
+            XCTAssertTrue(UIApplication.shared.sendAction(action, to: nil, from: nil, for: nil), "Paste must reach the focused editor")
+        }
+        pasteboard.image = UIGraphicsImageRenderer(size: CGSize(width: 12, height: 8)).image { context in
+            UIColor.red.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 12, height: 8))
+        }
+        paste()
+        try await waitUntil { fixture.attachments.count == 1 }
+        XCTAssertEqual(editor.selectedRange, selection)
+        XCTAssertEqual(fixture.text, "Draft remains")
+
+        pasteboard.setObjects([file as NSURL])
+        paste()
+        try await waitUntil { fixture.fileAttachments.count == 1 }
+        XCTAssertEqual(fixture.fileAttachments.first?.name, "paste-check.txt")
+        XCTAssertEqual(fixture.fileAttachments.first?.data, data)
+        XCTAssertEqual(editor.selectedRange, selection)
+        XCTAssertEqual(fixture.text, "Draft remains")
+
+        let pdf = Data("%PDF-1.4\nAttachment fixture".utf8)
+        let provider = NSItemProvider()
+        provider.suggestedName = "spec.pdf"
+        provider.registerDataRepresentation(for: .pdf, visibility: .all) { completion in
+            completion(pdf, nil)
+            return nil
+        }
+        pasteboard.setItemProviders([provider], localOnly: true, expirationDate: nil)
+        paste()
+        try await waitUntil { fixture.fileAttachments.count == 2 }
+        XCTAssertEqual(fixture.fileAttachments.last?.name, "spec.pdf")
+        XCTAssertEqual(fixture.fileAttachments.last?.data, pdf)
+        XCTAssertEqual(editor.selectedRange, selection)
+
+        pasteboard.string = "still here"
+        paste()
+        try await waitUntil { fixture.text == "Draft still here" }
+        XCTAssertEqual(fixture.attachments.count, 1)
+        XCTAssertEqual(fixture.fileAttachments.count, 2)
+        XCTAssertTrue(editor.isFirstResponder)
+        XCTAssertTrue(fixture.store.messages.isEmpty)
+        try await waitUntil { self.composerSurfaceRect(from: editor, in: window).height > restingComposerHeight + 30 }
+        try await settle()
+        capture(window, name: "composer-native-paste-attachments", afterScreenUpdates: true)
+
+        editor.selectAll(nil)
+        pasteboard.url = try XCTUnwrap(URL(string: "https://example.com/notes"))
+        paste()
+        try await waitUntil { fixture.text == "https://example.com/notes" }
+        editor.selectAll(nil)
+        let plain = "Plain text from a rich copy"
+        pasteboard.items = [[
+            UTType.utf8PlainText.identifier: plain,
+            UTType.rtf.identifier: Data("{\\rtf1\\ansi \\b Plain text from a rich copy}".utf8),
+        ]]
+        paste()
+        try await waitUntil { fixture.text == plain }
+        XCTAssertEqual(editor.textStorage.attribute(.font, at: 0, effectiveRange: nil) as? UIFont, editor.font)
+        XCTAssertEqual(fixture.attachments.count, 1)
+        XCTAssertEqual(fixture.fileAttachments.count, 2)
+        XCTAssertTrue(editor.resignFirstResponder())
+        XCTAssertFalse(editor.pasteDelegate is NativeComposerPasteAnchorView)
+    }
 
     func testSendKeepsNativeEditorAndKeyboardContinuous() async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
@@ -436,9 +533,9 @@ final class ChatKeyboardLayoutTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(500))
     }
 
-    private func capture(_ window: UIWindow, name: String) {
+    private func capture(_ window: UIWindow, name: String, afterScreenUpdates: Bool = false) {
         let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
-            window.drawHierarchy(in: window.bounds, afterScreenUpdates: false)
+            window.drawHierarchy(in: window.bounds, afterScreenUpdates: afterScreenUpdates)
         }
         let attachment = XCTAttachment(image: image)
         attachment.name = name

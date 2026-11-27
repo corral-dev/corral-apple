@@ -73,6 +73,7 @@ final class HostStore {
         try? PendingSessionCreationStore.removeAll(hostID: hostID)
         SessionListCache.removeAll(hostID: hostID)
         ComposerDraftStore.removeAll(hostID: hostID)
+        HostQuotaCache.removeAll(hostID: hostID)
         RecentSessionComboStore.removeAll(hostID: hostID)
         SessionDetailModeStore.shared.removeAll(hostID: hostID)
         saveHosts()

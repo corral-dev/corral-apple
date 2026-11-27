@@ -37,6 +37,16 @@ struct HostSettingsView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                if ProductFeatures.terminalPaneEnabled {
+                    Picker("mac.settings.new_session_view", selection: Binding(
+                        get: { SessionDetailModeStore.shared.defaultMode },
+                        set: { SessionDetailModeStore.shared.defaultMode = $0 }
+                    )) {
+                        ForEach(SessionDetailMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                }
             }
 
             Section("settings.notifications") {

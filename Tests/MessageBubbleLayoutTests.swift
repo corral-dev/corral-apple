@@ -200,6 +200,129 @@ final class MessageBubbleLayoutTests: XCTestCase {
         XCTAssertFalse(ChatTextPresentation.matches(value(), value(foreground: .systemRed)))
     }
 
+    func testMarkdownImageLinksRenderInlineAfterParagraphWithoutBottomPileAndPreserveBubbleCap() async throws {
+        let homeRef = "file:///tmp/corral-test/beautified-home-light.png"
+        let failureRef = "file:///tmp/corral-test/beautified-failure-dark.png"
+        let iconRef = "file:///tmp/corral-test/AppIcon-1024.png"
+        let markdown = """
+        已完成视觉与交互重构验证，对照如下：
+
+        | 场景 | 截图 | 说明 |
+        |---|---|---|
+        | 主页浅色 | [beautified-home-light.png](\(homeRef)) | 暖白工艺画布 |
+        | 失败深色 | [beautified-failure-dark.png](\(failureRef)) | 中文诊断文案 |
+
+        默认系统蓝与经典图标 ([AppIcon-1024.png](\(iconRef))) 毫无呼应；解锁页更是空旷。
+
+        **重设计思路**：
+        - 去掉多余的复数列表外壳。
+        """
+
+        let refs = ChatImageReference.references(in: markdown)
+        XCTAssertEqual(refs.filter { $0.kind == .explicit }.count, 3)
+        XCTAssertTrue(refs.filter { $0.kind == .mention }.isEmpty)
+
+        func makeShot(size: CGSize, bg: UIColor, accent: UIColor) -> UIImage {
+            UIGraphicsImageRenderer(size: size).image { ctx in
+                bg.setFill()
+                ctx.fill(CGRect(origin: .zero, size: size))
+                accent.setFill()
+                ctx.fill(CGRect(x: 24, y: 24, width: size.width - 48, height: 64))
+            }
+        }
+
+        let loader = ChatImageLoader(client: nil, hostID: "inline-link-test", sessionKey: "s-inline")
+        loader.seedDebugPreview(makeShot(size: CGSize(width: 400, height: 860), bg: .systemGray6, accent: .systemOrange), seq: 1, ref: homeRef)
+        loader.seedDebugPreview(makeShot(size: CGSize(width: 400, height: 860), bg: .darkGray, accent: .systemTeal), seq: 1, ref: failureRef)
+        loader.seedDebugPreview(makeShot(size: CGSize(width: 512, height: 512), bg: .systemBrown, accent: .systemYellow), seq: 1, ref: iconRef)
+
+        let renderedNS = NSAttributedString(loader.rendered(text: markdown, dark: false, seq: 1))
+        var preAttachments: [ChatImageAttachment] = []
+        var attachmentLocations: [Int] = []
+        renderedNS.enumerateAttribute(.attachment, in: NSRange(location: 0, length: renderedNS.length)) { value, range, _ in
+            if let attachment = value as? ChatImageAttachment {
+                preAttachments.append(attachment)
+                attachmentLocations.append(range.location)
+            }
+        }
+        XCTAssertEqual(preAttachments.count, 3, "Expected all 3 Markdown image links to render as inline attachments")
+        XCTAssertTrue(preAttachments.allSatisfy { $0.image != nil })
+        XCTAssertTrue(preAttachments.allSatisfy { $0.bounds.height > 40 && $0.bounds.height <= 280 })
+
+        let plain = renderedNS.string as NSString
+        let splitGuard = plain.range(of: "AppIcon-1024.png)")
+        let afterProse = plain.range(of: "毫无呼应；解锁页更是空旷。")
+        let nextHeading = plain.range(of: "重设计思路")
+        XCTAssertNotEqual(splitGuard.location, NSNotFound)
+        XCTAssertNotEqual(afterProse.location, NSNotFound)
+        XCTAssertNotEqual(nextHeading.location, NSNotFound)
+        XCTAssertEqual(NSMaxRange(splitGuard) + 1, afterProse.location, "Mid-sentence prose after image link must stay contiguous")
+        XCTAssertGreaterThan(attachmentLocations[2], afterProse.location)
+        XCTAssertLessThan(attachmentLocations[2], nextHeading.location)
+
+        let scene = try XCTUnwrap(
+            UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        )
+        let previousWindow = scene.windows.first(where: \.isKeyWindow)
+        defer { previousWindow?.makeKeyAndVisible() }
+
+        let message = RichMessage(seq: 1, role: "assistant", text: markdown)
+
+        let cappedHost = UIHostingController(
+            rootView: MessageBubbleView(message: message)
+                .environment(\.chatImageLoader, loader)
+                .frame(width: 358, alignment: .leading)
+                .background(Color(uiColor: .systemGroupedBackground))
+        )
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 393, height: 1400)
+        window.rootViewController = cappedHost
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+
+        let cappedSize = cappedHost.sizeThatFits(in: CGSize(width: 358, height: 2000))
+        let liveCap = MessageBubbleLayout.maxTextHeight() + MessageBubbleLayout.bubbleVerticalPadding
+        XCTAssertLessThanOrEqual(cappedSize.height, liveCap + 2, "Inlined images must respect the 50% screen height bubble cap")
+
+        cappedHost.view.frame = CGRect(origin: .zero, size: CGSize(width: 358, height: cappedSize.height))
+        cappedHost.view.setNeedsLayout()
+        cappedHost.view.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(100))
+        cappedHost.view.layoutIfNeeded()
+
+        let cappedTV = try XCTUnwrap(Self.descendants(of: cappedHost.view).compactMap { $0 as? UITextView }.first)
+        var mountedAttachments: [ChatImageAttachment] = []
+        cappedTV.attributedText.enumerateAttribute(.attachment, in: NSRange(location: 0, length: cappedTV.attributedText.length)) { value, _, _ in
+            if let attachment = value as? ChatImageAttachment {
+                mountedAttachments.append(attachment)
+            }
+        }
+        XCTAssertEqual(mountedAttachments.count, 3)
+
+        let fullHost = UIHostingController(
+            rootView: MessageBubbleView(message: message, bubbleTextCap: nil)
+                .environment(\.chatImageLoader, loader)
+                .frame(width: 358, alignment: .leading)
+                .padding(8)
+                .background(Color(uiColor: .systemGroupedBackground))
+        )
+        window.rootViewController = fullHost
+        let fullSize = fullHost.sizeThatFits(in: CGSize(width: 374, height: 3000))
+        fullHost.view.frame = CGRect(origin: .zero, size: CGSize(width: 374, height: fullSize.height))
+        fullHost.view.setNeedsLayout()
+        fullHost.view.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(100))
+        fullHost.view.layoutIfNeeded()
+
+        let fullImage = UIGraphicsImageRenderer(size: fullHost.view.bounds.size).image { _ in
+            fullHost.view.drawHierarchy(in: fullHost.view.bounds, afterScreenUpdates: true)
+        }
+        let attachment = XCTAttachment(image: fullImage)
+        attachment.name = "inline-markdown-image-links-bubble"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
     func testSameCharactersUpdateNativeLinkAttributes() throws {
         let text = "Unchanged words with new link"
         let host = UIHostingController(rootView: SelectableAttributedText(attributed: AttributedString(text)))

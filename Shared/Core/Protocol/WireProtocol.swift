@@ -70,6 +70,8 @@ nonisolated enum WireProtocol {
     static let capabilityInputFile = "input_file"
     /// Host supports ephemeral live assistant streaming frames (`kind: "stream"`).
     static let capabilityChatStreaming = "chat_streaming"
+    /// Host serves read-only agent runtime quota snapshots (`quotas.*`).
+    static let capabilityQuotas = "quotas"
 
     static let mSessionNew = "session.new"
     static let mSessionResume = "session.resume"
@@ -110,9 +112,13 @@ nonisolated enum WireProtocol {
     /// Conversation-body search with hit lines (desktop clients).
     static let mSearchFulltext = "search.fulltext"
     static let mRuntimesList = "runtimes.list"
+    static let mQuotasSnapshot = "quotas.snapshot"
+    static let mQuotasWatch = "quotas.watch"
+    static let mQuotasUnwatch = "quotas.unwatch"
 
     static let chSessions = "sessions"
     static let chLayout = "layout"
+    static let chQuotas = "quotas"
 
     static func screenChannel(sessionKey: String) -> String { "screen:\(sessionKey)" }
     static func sessionChannel(sessionKey: String) -> String { "session:\(sessionKey)" }
@@ -245,6 +251,11 @@ nonisolated enum WireProtocol {
     /// Whether hello advertised ephemeral live chat streaming (`chat_streaming`).
     static func supportsChatStreaming(fromHelloPayload payload: Any) -> Bool {
         capabilityFlag(capabilityChatStreaming, fromHelloPayload: payload)
+    }
+
+    /// Whether hello advertised read-only runtime quota snapshots (`quotas`).
+    static func supportsQuotas(fromHelloPayload payload: Any) -> Bool {
+        capabilityFlag(capabilityQuotas, fromHelloPayload: payload)
     }
 
     private static func capabilityFlag(_ name: String, fromHelloPayload payload: Any) -> Bool {

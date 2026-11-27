@@ -23,6 +23,7 @@ struct MacRootView: View {
     @State private var showNewSession = false
     @State private var showPairing = false
     @State private var showSearch = false
+    @State private var showQuotas = false
     @State private var pairingError: String?
     @SceneStorage("corral.mac.panesByHost") private var restoredPanesByHost = ""
     /// A manual sidebar choice survives relaunches. Automatic collapse is kept
@@ -110,6 +111,7 @@ struct MacRootView: View {
             showNewSession = false
             showPairing = false
             showSearch = false
+            showQuotas = false
             NSApp.activate(ignoringOtherApps: true)
         }
         .onChange(of: commands.pairRequest) { _, _ in showPairing = true }
@@ -297,6 +299,14 @@ struct MacRootView: View {
             guard canUseTerminal else { return }
             Task { await workspace.newTerminal(project: focusedProject) }
         }
+        .onChange(of: commands.showQuotasRequest) { _, _ in
+            guard appModel.selectedHost != nil else { return }
+            showQuotas = true
+        }
+        .onChange(of: appModel.selectedHost?.hostID, initial: true) { _, hostID in
+            let available = hostID != nil
+            if commands.canShowQuotas != available { commands.canShowQuotas = available }
+        }
         .onChange(of: appModel.connectionState, initial: true) { _, state in
             guard state == .connected, let client = appModel.client else { return }
             let supported = client.hostCapabilities.projectShell
@@ -331,6 +341,11 @@ struct MacRootView: View {
                 try await workspace.openSearchResult(key)
             }, state: workspace.navigation.host.search)
             .modifier(MacZoomContent())
+        }
+        .sheet(isPresented: $showQuotas) {
+            if let host = appModel.selectedHost {
+                MacQuotasSheet(host: host)
+            }
         }
     }
 
@@ -563,6 +578,13 @@ struct MacRootView: View {
                 Label("mac.search.title", systemImage: "magnifyingglass")
             }
             .help(Text("mac.search.title"))
+            Button {
+                showQuotas = true
+            } label: {
+                Label("quotas.title", systemImage: "gauge.with.dots.needle.67percent")
+            }
+            .help(Text("quotas.title"))
+            .disabled(appModel.selectedHost == nil)
         }
     }
 

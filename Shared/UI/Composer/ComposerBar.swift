@@ -283,6 +283,7 @@ struct ComposerBar: View {
                 return recallHistory(older: true)
             }
             .onKeyPress(.downArrow, phases: .down) { _ in recallHistory(older: false) }
+            .background { NativeComposerPasteAnchor { provider in addAttachments(from: [provider]) } }
         #endif
     }
 
@@ -690,23 +691,38 @@ struct ComposerBar: View {
     #endif
 
     private func addAttachments(from providers: [NSItemProvider]) {
-        for provider in providers {
-            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+        for provider in providers.prefix(max(0, Self.maxAttachments - totalAttachmentCount)) {
+            guard canAttachMore else { break }
+            switch ComposerAttachmentSource(provider: provider) {
+            case .fileURL:
                 _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                    guard let url else { return }
+                    guard let url, url.isFileURL else { return }
                     Task { @MainActor in addFileURLs([url]) }
                 }
-            } else if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
+            case .image:
                 _ = provider.loadDataRepresentation(for: .image) { data, _ in
                     guard let data else { return }
                     Task { @MainActor in addImageData([data]) }
                 }
-            } else if provider.hasItemConformingToTypeIdentifier(UTType.item.identifier) {
-                _ = provider.loadFileRepresentation(forTypeIdentifier: UTType.item.identifier) { url, _ in
-                    guard let url, let data = try? Data(contentsOf: url) else { return }
-                    let name = url.lastPathComponent
+            case .file(let type):
+                let suggestedName = provider.suggestedName
+                let maxFileBytes = ComposerSendPolicy.maxFileAttachmentBytes
+                _ = provider.loadFileRepresentation(forTypeIdentifier: type.identifier) { url, _ in
+                    guard let url else { return }
+                    let name = suggestedName.flatMap { ($0 as NSString).pathExtension.isEmpty ? nil : $0 }
+                        ?? url.lastPathComponent
+                    // The system may remove a provider's temporary file as soon as this callback returns.
+                    let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize
+                    guard let size else { return }
+                    if size > maxFileBytes {
+                        Task { @MainActor in attachmentError = String(localized: "composer.file_too_large") }
+                        return
+                    }
+                    guard let data = try? Data(contentsOf: url), !data.isEmpty else { return }
                     Task { @MainActor in ingestLoadedFile(name: name, data: data, isExplicitImage: false) }
                 }
+            case nil:
+                continue
             }
         }
     }
@@ -756,6 +772,40 @@ struct ComposerBar: View {
                   let encoded = ImageAttachmentEncoder.encode(data) else { continue }
             attachments.append(DraftImageAttachment(id: UUID(), base64: encoded.base64, preview: encoded.preview))
         }
+    }
+}
+
+/// A provider can advertise multiple representations of the same clipboard item.
+/// Prefer a real file URL to its thumbnail, and leave text and web links to the editor.
+enum ComposerAttachmentSource {
+    case fileURL, image, file(UTType)
+
+    init?(provider: NSItemProvider) {
+        let types = provider.registeredTypeIdentifiers.compactMap { UTType($0) }
+        if types.contains(where: { $0.conforms(to: .fileURL) }) {
+            self = .fileURL
+            return
+        }
+        let hasText = types.contains(where: { $0.conforms(to: .plainText) })
+        let hasRichText = Self.hasRichText(provider)
+        if types.contains(where: { $0.conforms(to: .image) }), !(hasText && hasRichText) {
+            self = .image
+            return
+        }
+        guard !types.contains(where: { $0.conforms(to: .url) }) else { return nil }
+        if let name = provider.suggestedName, let declaredType = UTType(filenameExtension: (name as NSString).pathExtension),
+           let representation = types.first(where: { $0.conforms(to: declaredType) && $0.conforms(to: .data) }) {
+            self = .file(representation)
+        } else if !hasText, !hasRichText,
+                  let type = types.first(where: { $0.conforms(to: .data) && !$0.conforms(to: .text) }) {
+            self = .file(type)
+        } else {
+            return nil
+        }
+    }
+
+    static func hasRichText(_ provider: NSItemProvider) -> Bool {
+        [UTType.rtf, .rtfd, .html].contains { provider.hasItemConformingToTypeIdentifier($0.identifier) }
     }
 }
 

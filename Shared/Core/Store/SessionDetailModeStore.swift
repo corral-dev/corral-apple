@@ -23,25 +23,34 @@ nonisolated enum SessionDetailMode: String, Codable, Sendable, CaseIterable, Ide
 final class SessionDetailModeStore {
     static let shared = SessionDetailModeStore()
     static let defaultsKey = "corral.ios.sessionDetailModes"
+    static let defaultModeKey = "corral.ios.defaultSessionMode"
     static let defaultLimit = 500
 
     private let defaults: UserDefaults
     private let writes: Bool
     private let key: String
+    private let defaultKey: String
     private let limit: Int
     private var entries: [String: ModeCell]
     private var order: [String]
+    private let defaultModeCell: DefaultModeCell
 
     init(
         defaults: UserDefaults = .standard,
         persists: Bool? = nil,
         key: String = SessionDetailModeStore.defaultsKey,
+        defaultKey: String = SessionDetailModeStore.defaultModeKey,
         limit: Int = SessionDetailModeStore.defaultLimit
     ) {
         self.defaults = defaults
         writes = persists ?? Self.writesAllowed
         self.key = key
+        self.defaultKey = defaultKey
         self.limit = max(limit, 0)
+
+        let storedDefault = defaults.string(forKey: defaultKey)
+            .flatMap(SessionDetailMode.init(rawValue:)) ?? .chat
+        defaultModeCell = DefaultModeCell(storedDefault)
 
         let raw = defaults.dictionary(forKey: key) ?? [:]
         let loaded: [String: ModeCell] = raw.compactMapValues { value in
@@ -68,6 +77,17 @@ final class SessionDetailModeStore {
         #endif
     }
 
+    var defaultMode: SessionDetailMode {
+        get { defaultModeCell.value }
+        set {
+            guard defaultModeCell.value != newValue else { return }
+            defaultModeCell.value = newValue
+            if writes {
+                defaults.set(newValue.rawValue, forKey: defaultKey)
+            }
+        }
+    }
+
     func mode(for sessionKey: String, hostID: String) -> SessionDetailMode? {
         guard !hostID.isEmpty, !sessionKey.isEmpty else { return nil }
         return entry(Self.storageKey(hostID: hostID, sessionKey: sessionKey)).value
@@ -75,6 +95,53 @@ final class SessionDetailModeStore {
 
     func effectiveMode(for sessionKey: String, hostID: String) -> SessionDetailMode {
         mode(for: sessionKey, hostID: hostID) ?? .chat
+    }
+
+    /// Preview of what a deliberate open will use (explicit choice wins; unseen
+    /// sessions running in an external terminal stay in Chat View).
+    func effectiveOpenMode(
+        for sessionKey: String,
+        hostID: String,
+        runsElsewhere: Bool = false
+    ) -> SessionDetailMode {
+        if let stored = mode(for: sessionKey, hostID: hostID) {
+            return stored
+        }
+        return runsElsewhere ? .chat : defaultMode
+    }
+
+    /// Record the configured default mode for a session created by this client.
+    /// Only non-`.chat` choices write a per-session entry, matching `MacWorkspace`.
+    @discardableResult
+    func applyDefaultModeForCreatedSession(sessionKey: String, hostID: String) -> SessionDetailMode {
+        guard !hostID.isEmpty, !sessionKey.isEmpty else { return .chat }
+        let preferred = defaultMode
+        if preferred != .chat {
+            setMode(preferred, for: sessionKey, hostID: hostID)
+        }
+        return preferred
+    }
+
+    /// Adopt `defaultMode` on a deliberate first open when no explicit choice exists
+    /// and the session is not running in another terminal window.
+    @discardableResult
+    func adoptDefaultModeIfUnset(
+        for sessionKey: String,
+        hostID: String,
+        runsElsewhere: Bool = false
+    ) -> SessionDetailMode {
+        guard !hostID.isEmpty, !sessionKey.isEmpty else { return .chat }
+        if let stored = mode(for: sessionKey, hostID: hostID) {
+            return stored
+        }
+        if runsElsewhere {
+            return .chat
+        }
+        let preferred = defaultMode
+        if preferred != .chat {
+            setMode(preferred, for: sessionKey, hostID: hostID)
+        }
+        return preferred
     }
 
     func setMode(_ mode: SessionDetailMode, for sessionKey: String, hostID: String) {
@@ -201,6 +268,16 @@ private final class ModeCell {
     var value: SessionDetailMode?
 
     init(_ value: SessionDetailMode?) {
+        self.value = value
+    }
+}
+
+@MainActor
+@Observable
+private final class DefaultModeCell {
+    var value: SessionDetailMode
+
+    init(_ value: SessionDetailMode) {
         self.value = value
     }
 }
